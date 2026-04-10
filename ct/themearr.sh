@@ -1,22 +1,21 @@
 #!/usr/bin/env bash
 # shellcheck source=/dev/null
 source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/build.func)
-# Copyright (c) 2021-2026 community-scripts ORG
-# Author: Devlin Cattermole
-# License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
-# Source: https://github.com/Themearr/themearr
 
 # ══════════════════════════════════════════════════════════════════════════════
 # ██ DEVELOPMENT / FORK-TESTING OVERRIDES — DELETE BEFORE OPENING A PR ██
 # ══════════════════════════════════════════════════════════════════════════════
 #
 #  These three exports redirect build.func to pull the install script from
-#  YOUR fork's main branch instead of community-scripts/ProxmoxVE/main.
+#  the Themearr/themearr application repo instead of community-scripts/ProxmoxVE.
+#  They are placed immediately after source so they are in scope before any
+#  framework function (variables, build_container) can evaluate them.
 #
 #  HOW TO TEST:
 #    1. Push both ct/themearr.sh and install/themearr-install.sh to your fork.
-#    2. Wait 10–30 seconds for GitHub's raw file cache to refresh.
-#    3. Run on your Proxmox host:
+#    2. Verify the install script is live:
+#         curl -I https://raw.githubusercontent.com/Themearr/themearr/main/install/themearr-install.sh
+#    3. Wait 30–60 s for GitHub's raw CDN cache to refresh, then run:
 #         bash -c "$(curl -fsSL https://raw.githubusercontent.com/Themearr/ProxmoxVE/main/ct/themearr.sh)"
 #
 #  BEFORE SUBMITTING THE PR — MANDATORY CHECKLIST:
@@ -32,6 +31,11 @@ export GITHUB_USER="Themearr"
 export GITHUB_REPO="themearr"
 export GITHUB_BRANCH="main"
 # ══════════════════════════════════════════════════════════════════════════════
+
+# Copyright (c) 2021-2026 community-scripts ORG
+# Author: Devlin Cattermole
+# License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
+# Source: https://github.com/Themearr/themearr
 
 APP="Themearr"
 var_tags="${var_tags:-media;plex;arr}"
