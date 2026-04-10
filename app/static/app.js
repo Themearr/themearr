@@ -48,6 +48,9 @@ const setupPlexLogin = document.getElementById('setup-plex-login');
 const setupStatus = document.getElementById('setup-status');
 const setupAccountName = document.getElementById('setup-account-name');
 const setupServerName = document.getElementById('setup-server-name');
+const setupUpdateBanner = document.getElementById('setup-update-banner');
+const setupUpdateText = document.getElementById('setup-update-text');
+const setupBtnUpdate = document.getElementById('setup-btn-update');
 
 /* ── Toast ───────────────────────────────────────────────────────────────── */
 let toastTimer = null;
@@ -152,10 +155,6 @@ async function enterApp() {
   setupReady = true;
   setAppVisible(true);
   await loadMovies();
-  await checkForUpdate();
-  if (!updatePollTimer) {
-    updatePollTimer = setInterval(checkForUpdate, 5 * 60 * 1000);
-  }
 }
 
 async function pollPlexLogin(pinId, code) {
@@ -354,6 +353,10 @@ async function refreshUpdateModal() {
     updateStatusTimer = null;
     btnUpdate.disabled = false;
     btnUpdate.textContent = 'Upgrade';
+    if (setupBtnUpdate) {
+      setupBtnUpdate.disabled = false;
+      setupBtnUpdate.textContent = 'Upgrade';
+    }
     if (!status.error) {
       setTimeout(() => window.location.reload(), 1500);
     }
@@ -386,11 +389,20 @@ async function checkForUpdate() {
 }
 
 function renderUpdateBanner() {
+  const inSetup = !setupReady;
+
   if (versionState.updating) {
     updateText.textContent = 'Updating app...';
     btnUpdate.disabled = true;
     btnUpdate.textContent = 'Upgrading';
     updateBanner.classList.remove('hidden');
+
+    if (setupUpdateBanner && setupUpdateText && setupBtnUpdate) {
+      setupUpdateText.textContent = 'Updating app...';
+      setupBtnUpdate.disabled = true;
+      setupBtnUpdate.textContent = 'Upgrading';
+      setupUpdateBanner.classList.toggle('hidden', !inSetup);
+    }
     return;
   }
 
@@ -398,6 +410,12 @@ function renderUpdateBanner() {
     updateBanner.classList.add('hidden');
     btnUpdate.disabled = false;
     btnUpdate.textContent = 'Upgrade';
+
+    if (setupUpdateBanner && setupBtnUpdate) {
+      setupBtnUpdate.disabled = false;
+      setupBtnUpdate.textContent = 'Upgrade';
+      setupUpdateBanner.classList.add('hidden');
+    }
     return;
   }
 
@@ -405,13 +423,24 @@ function renderUpdateBanner() {
   btnUpdate.disabled = false;
   btnUpdate.textContent = 'Upgrade';
   updateBanner.classList.remove('hidden');
+
+  if (setupUpdateBanner && setupUpdateText && setupBtnUpdate) {
+    setupUpdateText.textContent = `Update available: ${versionState.current} -> ${versionState.latest}`;
+    setupBtnUpdate.disabled = false;
+    setupBtnUpdate.textContent = 'Upgrade';
+    setupUpdateBanner.classList.toggle('hidden', !inSetup);
+  }
 }
 
-async function triggerUpdate() {
-  if (btnUpdate.disabled) return;
+async function triggerUpdate(button = null) {
+  if (button?.disabled) return;
 
   btnUpdate.disabled = true;
   btnUpdate.textContent = 'Starting...';
+  if (setupBtnUpdate) {
+    setupBtnUpdate.disabled = true;
+    setupBtnUpdate.textContent = 'Starting...';
+  }
   setUpdateModalVisible(true);
   updateModalStatus.textContent = 'Starting upgrade...';
   updateModalLogs.textContent = '';
@@ -434,11 +463,16 @@ async function triggerUpdate() {
     showToast(`Update failed to start: ${e.message}`, 'error');
     btnUpdate.disabled = false;
     btnUpdate.textContent = 'Upgrade';
+    if (setupBtnUpdate) {
+      setupBtnUpdate.disabled = false;
+      setupBtnUpdate.textContent = 'Upgrade';
+    }
     updateModalStatus.textContent = `Update failed to start: ${e.message}`;
   }
 }
 
-btnUpdate?.addEventListener('click', triggerUpdate);
+btnUpdate?.addEventListener('click', () => triggerUpdate(btnUpdate));
+setupBtnUpdate?.addEventListener('click', () => triggerUpdate(setupBtnUpdate));
 btnSettings?.addEventListener('click', resetAppToSetup);
 updateModalClose?.addEventListener('click', () => {
   if (updateStatusTimer) return;
@@ -750,6 +784,11 @@ async function bootstrap() {
   }
 
   const isReady = await loadSetupState();
+  await checkForUpdate();
+  if (!updatePollTimer) {
+    updatePollTimer = setInterval(checkForUpdate, 5 * 60 * 1000);
+  }
+
   if (!isReady) {
     if (pendingPlexLogin) {
       setupStatus.textContent = 'Finishing Plex sign-in...';
