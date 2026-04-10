@@ -14,7 +14,8 @@ apt-get install -y --no-install-recommends \
     python3-pip \
     sudo \
     ffmpeg \
-    curl
+    curl \
+    nodejs
 
 # Install yt-dlp as a standalone binary (kept outside the venv so it can self-update)
 echo "[2/5] Installing yt-dlp…"
