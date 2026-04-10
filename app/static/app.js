@@ -1060,6 +1060,17 @@ async function bootstrap() {
     clearReturnLoginParams();
   }
 
+  if (pendingPlexLogin) {
+    setupStatus.textContent = 'Finishing Plex sign-in...';
+    setupPlexLogin.disabled = true;
+    clearPlexLoginPolling();
+    plexLoginPollTimer = setInterval(() => {
+      if (!pendingPlexLogin) return;
+      pollPlexLogin(pendingPlexLogin.pinId, pendingPlexLogin.code);
+    }, 2000);
+    await pollPlexLogin(pendingPlexLogin.pinId, pendingPlexLogin.code);
+  }
+
   const isReady = await loadSetupState();
   await checkForUpdate();
   if (!updatePollTimer) {
@@ -1067,16 +1078,6 @@ async function bootstrap() {
   }
 
   if (!isReady) {
-    if (pendingPlexLogin) {
-      setupStatus.textContent = 'Finishing Plex sign-in...';
-      setupPlexLogin.disabled = true;
-      clearPlexLoginPolling();
-      plexLoginPollTimer = setInterval(() => {
-        if (!pendingPlexLogin) return;
-        pollPlexLogin(pendingPlexLogin.pinId, pendingPlexLogin.code);
-      }, 2000);
-      await pollPlexLogin(pendingPlexLogin.pinId, pendingPlexLogin.code);
-    }
     return;
   }
 
