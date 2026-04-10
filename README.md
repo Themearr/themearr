@@ -35,7 +35,7 @@ It provides a browser UI where you can:
 Run this on your Proxmox host:
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/Themearr/themearr/compliance/ct/themearr.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/Themearr/themearr/main/ct/themearr.sh)"
 ```
 
 After deployment, open the app in your browser and complete first-run setup.
