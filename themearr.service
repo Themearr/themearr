@@ -1,5 +1,5 @@
 [Unit]
-Description=Themearr – Radarr theme song downloader
+Description=Themearr – Plex theme song downloader
 After=network.target
 
 [Service]

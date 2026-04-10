@@ -71,6 +71,5 @@ echo "────────────────────────�
 echo "✔ Deployment Complete."
 echo "  Container ID: $CTID"
 echo "  Container IP:" $(pct exec $CTID -- ip -4 addr show eth0 | grep -oP '(?<=inet\s)\d+(\.\d+){3}')
-echo "  Action Required: Open the web UI to complete setup for Radarr, API key, and local library paths."
-echo "  Example local paths: /mnt/folder and /mnt/folder2"
+echo "  Action Required: Open the web UI and sign in with Plex to finish setup."
 echo "─────────────────────────────────────────────────────────────────"

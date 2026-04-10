@@ -96,7 +96,7 @@ systemctl enable themearr.service
 
 echo ""
 echo "✔  Installation complete."
-echo "   Open the web UI to complete the first-run setup for Radarr, API key, and local library paths."
+echo "   Open the web UI to complete the first-run setup by signing in with Plex."
 echo "   App updates can be triggered from the UI when a new GHCR package is published."
 echo "   Logs:                            journalctl -u themearr -f"
 

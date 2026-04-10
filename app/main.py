@@ -1,35 +1,33 @@
+import asyncio
+import logging
 import os
 import shutil
 import subprocess
-import logging
 import threading
-import asyncio
 from collections import deque
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import httpx
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 from youtube_search import YoutubeSearch
 
 from app.database import (
-    init_db,
-    upsert_movies,
     get_all_movies,
     get_movie,
-    set_status,
     get_setting,
-    set_setting,
-    get_library_paths,
-    set_library_paths,
+    init_db,
     is_setup_complete,
     mark_setup_complete,
     reset_app_state,
+    set_setting,
+    set_status,
+    upsert_movies,
 )
-from app.radarr import fetch_movies
+from app.plex import check_login_pin, create_login_pin, fetch_movies, get_client_identifier, resolve_plex_session
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("themearr")
@@ -40,7 +38,6 @@ STATIC_DIR = Path(__file__).parent / "static"
 VERSION_FILE = Path(os.getenv("THEMEARR_VERSION_FILE", "/opt/themearr/VERSION"))
 GITHUB_REPO = os.getenv("GITHUB_REPO", "Themearr/themearr")
 UPDATER_CMD = os.getenv("THEMEARR_UPDATER_CMD", "sudo /usr/local/bin/themearr-update")
-BROWSE_ROOTS = os.getenv("THEMEARR_BROWSE_ROOTS", "/mnt,/media,/movies,/tv")
 
 _update_lock = threading.Lock()
 _update_in_progress = False
@@ -79,34 +76,6 @@ def _sync_log_lines() -> list[str]:
         return list(_sync_logs)
 
 
-def _configured_browse_roots() -> list[Path]:
-    roots: list[Path] = []
-    seen: set[str] = set()
-    for raw in BROWSE_ROOTS.split(","):
-        value = raw.strip()
-        if not value:
-            continue
-        path = Path(value).expanduser().resolve()
-        key = str(path)
-        if key in seen:
-            continue
-        seen.add(key)
-        roots.append(path)
-    return roots
-
-
-def _path_under_root(candidate: Path, root: Path) -> bool:
-    try:
-        candidate.relative_to(root)
-        return True
-    except ValueError:
-        return False
-
-
-def _path_allowed(candidate: Path, roots: list[Path]) -> bool:
-    return any(_path_under_root(candidate, root) for root in roots)
-
-
 def _normalize_youtube_url(url: str) -> str:
     parsed = urlparse(url)
     host = parsed.netloc.lower()
@@ -127,27 +96,91 @@ def _normalize_youtube_url(url: str) -> str:
 
 
 @app.on_event("startup")
-def startup():
+def startup() -> None:
     init_db()
+    set_setting("app_version", _current_version())
+    get_client_identifier()
 
 
 def _setup_payload() -> dict:
+    plex_connected = bool(get_setting("plex_access_token", "").strip() and get_setting("plex_server_url", "").strip())
     return {
-        "setupComplete": is_setup_complete(),
-        "radarrUrl": get_setting("radarr_url", ""),
-        "radarrApiKeySet": bool(get_setting("radarr_api_key", "").strip()),
-        "libraryPaths": get_library_paths(),
+        "setupComplete": is_setup_complete() or plex_connected,
+        "plexConnected": plex_connected,
+        "plexAccountName": get_setting("plex_account_name", ""),
+        "plexServerName": get_setting("plex_server_name", ""),
+        "plexServerUrl": get_setting("plex_server_url", ""),
     }
 
 
 # ── API ──────────────────────────────────────────────────────────────────────
 
+@app.get("/api/setup/status")
+def setup_status():
+    return _setup_payload()
+
+
+@app.post("/api/setup/plex/login")
+def start_plex_login():
+    return create_login_pin()
+
+
+@app.get("/api/setup/plex/login/status")
+def plex_login_status(pin_id: int = Query(...), code: str = Query(...)):
+    client_identifier = get_setting("plex_client_identifier", "").strip() or get_client_identifier()
+
+    try:
+        pin_state = check_login_pin(pin_id, code, client_identifier)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    if not pin_state["claimed"]:
+        return {
+            "claimed": False,
+            "connected": False,
+            "accountName": get_setting("plex_account_name", ""),
+            "serverName": get_setting("plex_server_name", ""),
+            "serverUrl": get_setting("plex_server_url", ""),
+        }
+
+    try:
+        session = resolve_plex_session(pin_state["authToken"], client_identifier)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Plex sign-in completed, but server discovery failed: {exc}")
+
+    set_setting("plex_access_token", pin_state["authToken"])
+    set_setting("plex_account_name", session["accountName"])
+    set_setting("plex_server_name", session["serverName"])
+    set_setting("plex_server_url", session["serverUrl"])
+    set_setting("plex_server_token", session["serverToken"])
+    mark_setup_complete()
+
+    return {
+        "claimed": True,
+        "connected": True,
+        "accountName": session["accountName"],
+        "serverName": session["serverName"],
+        "serverUrl": session["serverUrl"],
+    }
+
+
+@app.post("/api/setup/reset")
+def reset_setup():
+    reset_app_state()
+    return _setup_payload()
+
+
+@app.get("/api/sync")
+def sync_status_redirect():
+    return {"detail": "Use POST /api/sync"}
+
+
 @app.post("/api/sync")
-async def sync_radarr():
+async def sync_plex():
     global _sync_in_progress, _sync_error, _sync_finished, _sync_synced
 
-    if not is_setup_complete():
-        raise HTTPException(status_code=400, detail="App setup is not complete")
+    if not (_setup_payload()["setupComplete"]):
+        raise HTTPException(status_code=400, detail="Plex sign-in is not complete")
 
     if _sync_in_progress:
         return {"started": False, "detail": "Sync already in progress"}
@@ -172,7 +205,7 @@ def _run_sync() -> None:
     global _sync_in_progress, _sync_error, _sync_finished, _sync_synced
 
     try:
-        _sync_log("Starting Radarr sync...")
+        _sync_log("Starting Plex sync...")
         movies = asyncio.run(fetch_movies(log_fn=_sync_log))
         _sync_log(f"Upserting {len(movies)} matched movies into the local database")
         upsert_movies(movies)
@@ -197,76 +230,6 @@ def sync_status():
     }
 
 
-@app.get("/api/setup/status")
-def setup_status():
-    return _setup_payload()
-
-
-class SetupRequest(BaseModel):
-    radarr_url: str = Field(min_length=1)
-    radarr_api_key: str = ""
-    library_paths: list[str] = Field(default_factory=list)
-
-
-@app.post("/api/setup")
-def save_setup(req: SetupRequest):
-    existing_key = get_setting("radarr_api_key", "").strip()
-    api_key = req.radarr_api_key.strip() or existing_key
-    if not api_key:
-        raise HTTPException(status_code=400, detail="Radarr API key is required")
-
-    library_paths = [p.strip().rstrip("/") for p in req.library_paths if p.strip()]
-    if not library_paths:
-        raise HTTPException(status_code=400, detail="At least one local library path is required")
-
-    set_setting("radarr_url", req.radarr_url.strip())
-    set_setting("radarr_api_key", api_key)
-    set_library_paths(library_paths)
-    mark_setup_complete()
-    return _setup_payload()
-
-
-@app.post("/api/setup/reset")
-def reset_setup():
-    reset_app_state()
-    return _setup_payload()
-
-
-@app.get("/api/fs/browse")
-def browse_filesystem(path: str | None = Query(default=None)):
-    roots = [root for root in _configured_browse_roots() if root.exists() and root.is_dir()]
-    if not roots:
-        raise HTTPException(status_code=500, detail="No browse roots are available")
-
-    current = Path(path).expanduser().resolve() if path else roots[0]
-    if not current.exists() or not current.is_dir():
-        raise HTTPException(status_code=404, detail="Directory not found")
-    if not _path_allowed(current, roots):
-        raise HTTPException(status_code=403, detail="Directory is outside allowed roots")
-
-    entries = []
-    for child in sorted(current.iterdir(), key=lambda p: p.name.lower()):
-        try:
-            resolved = child.resolve()
-        except OSError:
-            continue
-
-        if not resolved.is_dir() or not _path_allowed(resolved, roots):
-            continue
-
-        entries.append({"name": child.name, "path": str(resolved)})
-
-    parent = current.parent.resolve()
-    parent_path = str(parent) if parent != current and _path_allowed(parent, roots) else ""
-
-    return {
-        "path": str(current),
-        "parent": parent_path,
-        "roots": [str(root) for root in roots],
-        "entries": entries,
-    }
-
-
 @app.get("/api/movies")
 def list_movies():
     return get_all_movies()
@@ -287,18 +250,17 @@ def search_youtube(movie_id: int):
         raise HTTPException(status_code=502, detail=f"YouTube search error: {exc}")
 
     videos = []
-    for r in results:
-        vid_id = r.get("id", "")
-        # youtube-search returns ids prefixed with /watch?v= sometimes
-        if vid_id.startswith("/watch?v="):
-            vid_id = vid_id[len("/watch?v="):]
+    for result in results:
+        video_id = result.get("id", "")
+        if video_id.startswith("/watch?v="):
+            video_id = video_id[len("/watch?v="):]
         videos.append(
             {
-                "videoId": vid_id,
-                "title": r.get("title", ""),
-                "thumbnail": r.get("thumbnails", [None])[0],
-                "duration": r.get("duration", ""),
-                "channel": r.get("channel", ""),
+                "videoId": video_id,
+                "title": result.get("title", ""),
+                "thumbnail": result.get("thumbnails", [None])[0],
+                "duration": result.get("duration", ""),
+                "channel": result.get("channel", ""),
             }
         )
     return {"movie": movie, "results": videos}
@@ -329,9 +291,9 @@ def _current_version() -> str:
 def _latest_main_version() -> str:
     url = f"https://api.github.com/repos/{GITHUB_REPO}/commits/main"
     headers = {"Accept": "application/vnd.github+json", "User-Agent": "themearr"}
-    resp = httpx.get(url, timeout=10, headers=headers)
-    resp.raise_for_status()
-    return resp.json()["sha"][:12]
+    response = httpx.get(url, timeout=10, headers=headers)
+    response.raise_for_status()
+    return response.json()["sha"][:12]
 
 
 def _run_update() -> None:
@@ -439,10 +401,13 @@ def _download_theme_for_url(movie_id: int, url: str):
     cmd = [
         "yt-dlp",
         "-x",
-        "--audio-format", "mp3",
-        "--audio-quality", "0",
+        "--audio-format",
+        "mp3",
+        "--audio-quality",
+        "0",
         "--no-playlist",
-        "-o", output_template,
+        "-o",
+        output_template,
         normalized_url,
     ]
     log.info("Running: %s", " ".join(cmd))

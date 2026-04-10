@@ -9,7 +9,7 @@
 <h1 align="center">Themearr</h1>
 
 <p align="center">
-  Automatic movie theme song downloader for Radarr libraries.
+  Automatic movie theme song downloader for Plex libraries.
 </p>
 
 <p align="center">
@@ -19,10 +19,11 @@
 ## What It Does
 
 Themearr helps you add a `theme.mp3` file to each movie folder in your library.
+It signs in with Plex, reads your Plex movie library, and uses the media file paths Plex already knows about.
 
 It provides a browser UI where you can:
 
-- Sync matched movies from Radarr
+- Sync movies from Plex
 - Search YouTube for likely theme tracks
 - Download a selected result with one click
 - Open the movie query in YouTube directly
@@ -41,13 +42,9 @@ After deployment, open the app in your browser and complete first-run setup.
 
 ## First-Run Setup
 
-In the web UI, configure:
+In the web UI, sign in with Plex.
 
-- Radarr URL (example: `http://radarr:7878`)
-- Radarr API key
-- One or more local library paths mounted inside the container
-
-Then click sync to import matched movies.
+Then click sync to import your Plex movie library.
 
 ## Download Workflow
 

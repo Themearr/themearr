@@ -35,5 +35,5 @@ bash install.sh
 rm -rf "$SRC_DIR"
 
 echo ">>> Deployment Complete!"
-echo ">>> Open the web UI to finish setup for Radarr, API key, and local library paths."
+echo ">>> Open the web UI to finish setup by signing in with Plex."
 echo ">>> Then use the UI update flow whenever a new GHCR package is published."

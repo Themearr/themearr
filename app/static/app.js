@@ -1,58 +1,52 @@
 /* ── State ───────────────────────────────────────────────────────────────── */
 let allMovies = [];
 let activeMovieId = null;
+let statusFilter = 'all';
+let setupReady = false;
+let plexLoginPollTimer = null;
+let updatePollTimer = null;
+let updateStatusTimer = null;
+let syncStatusTimer = null;
+let versionState = { current: '', latest: '', updateAvailable: false, updating: false };
 
 /* ── DOM refs ────────────────────────────────────────────────────────────── */
-const movieList     = document.getElementById('movie-list');
-const searchInput   = document.getElementById('search-input');
-const btnFilter     = document.getElementById('btn-filter');
-const filterMenu    = document.getElementById('filter-menu');
-const btnSync       = document.getElementById('btn-sync');
-const btnSettings   = document.getElementById('btn-settings');
-const syncStatus    = document.getElementById('sync-status');
-const syncModal     = document.getElementById('sync-modal');
+const movieList = document.getElementById('movie-list');
+const searchInput = document.getElementById('search-input');
+const btnFilter = document.getElementById('btn-filter');
+const filterMenu = document.getElementById('filter-menu');
+const btnSync = document.getElementById('btn-sync');
+const btnSettings = document.getElementById('btn-settings');
+const syncStatus = document.getElementById('sync-status');
+const syncModal = document.getElementById('sync-modal');
 const syncModalLogs = document.getElementById('sync-modal-logs');
 const syncModalStatus = document.getElementById('sync-modal-status');
 const syncModalClose = document.getElementById('sync-modal-close');
-const rightEmpty    = document.getElementById('right-empty');
-const rightLoading  = document.getElementById('right-loading');
-const rightContent  = document.getElementById('right-content');
-const movieHeading  = document.getElementById('movie-heading');
-const resultsGrid   = document.getElementById('results-grid');
+const rightEmpty = document.getElementById('right-empty');
+const rightLoading = document.getElementById('right-loading');
+const rightContent = document.getElementById('right-content');
+const movieHeading = document.getElementById('movie-heading');
+const resultsGrid = document.getElementById('results-grid');
 const youtubeSearchLink = document.getElementById('youtube-search-link');
 const urlDownloadForm = document.getElementById('url-download-form');
 const urlDownloadInput = document.getElementById('url-download-input');
 const urlDownloadSubmit = document.getElementById('url-download-submit');
-const statTotal     = document.getElementById('stat-total');
-const statDone      = document.getElementById('stat-downloaded');
-const statPending   = document.getElementById('stat-pending');
-const toast         = document.getElementById('toast');
-const updateBanner  = document.getElementById('update-banner');
-const updateText    = document.getElementById('update-text');
-const btnUpdate     = document.getElementById('btn-update');
-const updateModal   = document.getElementById('update-modal');
+const statTotal = document.getElementById('stat-total');
+const statDone = document.getElementById('stat-downloaded');
+const statPending = document.getElementById('stat-pending');
+const toast = document.getElementById('toast');
+const updateBanner = document.getElementById('update-banner');
+const updateText = document.getElementById('update-text');
+const btnUpdate = document.getElementById('btn-update');
+const updateModal = document.getElementById('update-modal');
 const updateModalLogs = document.getElementById('update-modal-logs');
 const updateModalStatus = document.getElementById('update-modal-status');
 const updateModalClose = document.getElementById('update-modal-close');
-const pathModal     = document.getElementById('path-modal');
-const pathModalRows = document.getElementById('path-modal-rows');
-const pathModalStatus = document.getElementById('path-modal-status');
-const pathModalClose = document.getElementById('path-modal-close');
-const pathModalAdd = document.getElementById('path-modal-add');
-const pathModalSave = document.getElementById('path-modal-save');
-const pathBrowserRoot = document.getElementById('path-browser-root');
-const pathBrowserCurrent = document.getElementById('path-browser-current');
-const pathBrowserList = document.getElementById('path-browser-list');
-const pathBrowserUp = document.getElementById('path-browser-up');
-const pathBrowserRefresh = document.getElementById('path-browser-refresh');
-const pathBrowserUse = document.getElementById('path-browser-use');
-const setupScreen   = document.getElementById('setup-screen');
-const appShell      = document.getElementById('app-shell');
-const setupForm     = document.getElementById('setup-form');
-const setupStatus   = document.getElementById('setup-status');
-const setupRadarrUrl = document.getElementById('setup-radarr-url');
-const setupRadarrApiKey = document.getElementById('setup-radarr-api-key');
-const setupMappingsSummary = document.getElementById('setup-mappings-summary');
+const setupScreen = document.getElementById('setup-screen');
+const appShell = document.getElementById('app-shell');
+const setupPlexLogin = document.getElementById('setup-plex-login');
+const setupStatus = document.getElementById('setup-status');
+const setupAccountName = document.getElementById('setup-account-name');
+const setupServerName = document.getElementById('setup-server-name');
 
 /* ── Toast ───────────────────────────────────────────────────────────────── */
 let toastTimer = null;
@@ -60,12 +54,13 @@ function showToast(msg, type = 'success') {
   clearTimeout(toastTimer);
   toast.textContent = msg;
   toast.className = [
-    'fixed bottom-6 right-6 z-50 px-4 py-3 rounded-lg shadow-xl text-sm font-medium',
-    type === 'success'
-      ? 'bg-green-600 text-white'
-      : 'bg-red-600 text-white',
+    'fixed bottom-6 right-6 z-50 rounded-lg px-4 py-3 text-sm font-medium shadow-xl',
+    type === 'success' ? 'bg-green-600 text-white' : 'bg-red-600 text-white',
   ].join(' ');
-  toastTimer = setTimeout(() => { toast.classList.add('hidden'); }, 4000);
+  toast.classList.remove('hidden');
+  toastTimer = setTimeout(() => {
+    toast.classList.add('hidden');
+  }, 4000);
 }
 
 function setAppVisible(isVisible) {
@@ -78,133 +73,122 @@ function setAppVisible(isVisible) {
   }
 }
 
-let libraryPathsState = [];
-let pathBrowserState = { path: '', parent: '', roots: [], entries: [] };
-let statusFilter = 'all';
-
-function setPathModalVisible(isVisible) {
-  if (isVisible) {
-    pathModal.classList.remove('hidden');
-    pathModal.classList.add('flex');
-  } else {
-    pathModal.classList.add('hidden');
-    pathModal.classList.remove('flex');
-  }
-}
-
-function renderPathBrowser() {
-  pathBrowserCurrent.textContent = pathBrowserState.path || '/';
-
-  const currentRoot = pathBrowserRoot.value;
-  pathBrowserRoot.innerHTML = '';
-  (pathBrowserState.roots || []).forEach(root => {
-    const option = document.createElement('option');
-    option.value = root;
-    option.textContent = root;
-    pathBrowserRoot.appendChild(option);
-  });
-  if (currentRoot && (pathBrowserState.roots || []).includes(currentRoot)) {
-    pathBrowserRoot.value = currentRoot;
-  }
-
-  pathBrowserList.innerHTML = '';
-  if (!(pathBrowserState.entries || []).length) {
-    pathBrowserList.innerHTML = '<li class="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs text-gray-500">No subfolders found.</li>';
-    return;
-  }
-
-  pathBrowserState.entries.forEach(entry => {
-    const li = document.createElement('li');
-    li.innerHTML = `<button type="button" class="w-full truncate rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-left text-sm text-gray-100 transition hover:bg-black/40">${esc(entry.name)}</button>`;
-    li.querySelector('button').addEventListener('click', () => browseFilesystem(entry.path));
-    pathBrowserList.appendChild(li);
-  });
-}
-
-async function browseFilesystem(path = '') {
-  try {
-    const query = path ? `?path=${encodeURIComponent(path)}` : '';
-    pathBrowserState = await api('GET', `/api/fs/browse${query}`);
-    renderPathBrowser();
-    pathModalStatus.textContent = '';
-  } catch (e) {
-    pathModalStatus.textContent = `Browse failed: ${e.message}`;
-    pathBrowserList.innerHTML = '<li class="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-200">Unable to read folders.</li>';
-  }
-}
-
-function createMappingRow(path = '') {
-  const row = document.createElement('div');
-  row.className = 'mapping-row grid gap-3 sm:grid-cols-[1fr_auto]';
-  row.innerHTML = `
-    <input type="text" class="mapping-path rounded-xl border border-white/10 bg-gray-950 px-4 py-3 text-sm text-white placeholder-gray-500 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-400/40" placeholder="/mnt/movies" value="${esc(path)}" />
-    <button type="button" class="mapping-remove rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-gray-200 transition hover:bg-white/10">Remove</button>
-  `;
-  row.querySelector('.mapping-remove').addEventListener('click', () => {
-    row.remove();
-    if (!pathModalRows.children.length) {
-      pathModalRows.appendChild(createMappingRow());
+function api(method, path, body) {
+  const opts = { method, headers: { 'Content-Type': 'application/json' } };
+  if (body) opts.body = JSON.stringify(body);
+  return fetch(path, opts).then(async (res) => {
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(err.detail || res.statusText);
     }
+    return res.json();
   });
-  return row;
 }
 
-function renderMappingRows(mappings = []) {
-  pathModalRows.innerHTML = '';
-  if (!mappings.length) {
-    pathModalRows.appendChild(createMappingRow());
-    return;
+function esc(str) {
+  return String(str ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/* ── Setup / Plex sign-in ───────────────────────────────────────────────── */
+function setSetupConnection(status) {
+  setupAccountName.textContent = status.plexAccountName || 'Not connected';
+  setupServerName.textContent = status.plexServerName
+    ? `Server: ${status.plexServerName}`
+    : 'Sign in to select your Plex server';
+  setupPlexLogin.textContent = status.plexConnected ? 'Reconnect with Plex' : 'Sign in with Plex';
+}
+
+function clearPlexLoginPolling() {
+  if (plexLoginPollTimer) {
+    clearInterval(plexLoginPollTimer);
+    plexLoginPollTimer = null;
   }
-  mappings.forEach(path => pathModalRows.appendChild(createMappingRow(path)));
-}
-
-function collectMappings() {
-  return Array.from(pathModalRows.querySelectorAll('.mapping-row'))
-    .map(row => row.querySelector('.mapping-path').value.trim())
-    .filter(path => path);
-}
-
-function renderMappingSummary(mappings = []) {
-  setupMappingsSummary.innerHTML = '';
-  if (!mappings.length) {
-    setupMappingsSummary.innerHTML = '<p class="text-xs text-gray-500">No local library paths added yet.</p>';
-    return;
-  }
-
-  mappings.forEach(path => {
-    const pill = document.createElement('div');
-    pill.className = 'flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3';
-    pill.innerHTML = `
-      <div class="min-w-0">
-        <p class="truncate text-sm font-semibold text-white">${esc(path)}</p>
-        <p class="text-xs text-gray-500">Stored inside the app database</p>
-      </div>
-      <button type="button" class="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-semibold text-gray-100 transition hover:bg-white/10">Edit</button>
-    `;
-    pill.querySelector('button').addEventListener('click', () => {
-      renderMappingRows(libraryPathsState);
-      pathModalStatus.textContent = '';
-      setPathModalVisible(true);
-    });
-    setupMappingsSummary.appendChild(pill);
-  });
 }
 
 async function loadSetupState() {
   const state = await api('GET', '/api/setup/status');
-  libraryPathsState = state.libraryPaths || [];
-  if (!state.setupComplete) {
-    setupRadarrUrl.value = state.radarrUrl || 'http://radarr:7878';
-    setupRadarrApiKey.value = '';
-    setupRadarrApiKey.placeholder = state.radarrApiKeySet ? 'Leave blank to keep existing key' : 'Enter your Radarr API key';
-    renderMappingSummary(libraryPathsState);
+  setupReady = Boolean(state.setupComplete);
+  setSetupConnection(state);
+
+  if (!setupReady) {
     setAppVisible(false);
-    setupStatus.textContent = 'Complete the fields below to finish setup.';
+    setupStatus.textContent = state.plexConnected
+      ? 'Plex is connected. Finalizing setup...'
+      : 'Sign in with Plex to continue.';
+    setupPlexLogin.disabled = false;
     return false;
   }
 
   setAppVisible(true);
   return true;
+}
+
+async function enterApp() {
+  setupReady = true;
+  setAppVisible(true);
+  await loadMovies();
+  await checkForUpdate();
+  if (!updatePollTimer) {
+    updatePollTimer = setInterval(checkForUpdate, 5 * 60 * 1000);
+  }
+}
+
+async function pollPlexLogin(pinId, code) {
+  try {
+    const status = await api('GET', `/api/setup/plex/login/status?pin_id=${encodeURIComponent(pinId)}&code=${encodeURIComponent(code)}`);
+
+    if (!status.claimed) {
+      setupStatus.textContent = 'Waiting for Plex approval...';
+      return;
+    }
+
+    clearPlexLoginPolling();
+    setupStatus.textContent = `Connected to ${status.accountName || 'Plex'}${status.serverName ? ` on ${status.serverName}` : ''}.`;
+    setupPlexLogin.disabled = false;
+    showToast('Plex sign-in complete');
+    await loadSetupState();
+    await enterApp();
+  } catch (e) {
+    clearPlexLoginPolling();
+    setupPlexLogin.disabled = false;
+    setupStatus.textContent = '';
+    showToast(`Plex sign-in failed: ${e.message}`, 'error');
+  }
+}
+
+async function startPlexLogin() {
+  setupStatus.textContent = 'Requesting Plex sign-in...';
+  setupPlexLogin.disabled = true;
+
+  try {
+    const login = await api('POST', '/api/setup/plex/login');
+
+    if (!login.authUrl || !login.pinId || !login.code) {
+      throw new Error('Plex did not return a valid sign-in link');
+    }
+
+    const popup = window.open(login.authUrl, '_blank', 'noopener,noreferrer');
+    if (!popup) {
+      setupStatus.textContent = 'Please allow popups for Plex sign-in, then try again.';
+      setupPlexLogin.disabled = false;
+      return;
+    }
+
+    setupStatus.textContent = 'Plex sign-in opened in a new tab. Approve it there.';
+    clearPlexLoginPolling();
+    plexLoginPollTimer = setInterval(() => {
+      pollPlexLogin(login.pinId, login.code);
+    }, 2000);
+    await pollPlexLogin(login.pinId, login.code);
+  } catch (e) {
+    setupPlexLogin.disabled = false;
+    setupStatus.textContent = '';
+    showToast(`Plex sign-in failed: ${e.message}`, 'error');
+  }
 }
 
 async function resetAppToSetup() {
@@ -221,55 +205,48 @@ async function resetAppToSetup() {
     rightLoading.classList.add('hidden');
     rightEmpty.classList.remove('hidden');
     syncStatus.textContent = '';
+    setupStatus.textContent = '';
+    setupPlexLogin.disabled = false;
+    clearPlexLoginPolling();
     setAppVisible(false);
     await loadSetupState();
-    showToast('App reset. Complete setup to continue.');
+    showToast('App reset. Sign in with Plex to continue.');
   } catch (e) {
     showToast(`Reset failed: ${e.message}`, 'error');
   }
 }
 
-/* ── API helpers ─────────────────────────────────────────────────────────── */
-async function api(method, path, body) {
-  const opts = { method, headers: { 'Content-Type': 'application/json' } };
-  if (body) opts.body = JSON.stringify(body);
-  const res = await fetch(path, opts);
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail || res.statusText);
-  }
-  return res.json();
-}
+setupPlexLogin?.addEventListener('click', startPlexLogin);
 
 /* ── Render movie list ───────────────────────────────────────────────────── */
 function renderList(filter = '') {
   const q = filter.toLowerCase();
-  const filtered = allMovies.filter(m =>
-    (m.title.toLowerCase().includes(q) || String(m.year).includes(q)) &&
-    (statusFilter === 'all' || m.status === statusFilter)
-  );
+  const filtered = allMovies.filter((movie) => (
+    (movie.title.toLowerCase().includes(q) || String(movie.year).includes(q)) &&
+    (statusFilter === 'all' || movie.status === statusFilter)
+  ));
 
   movieList.innerHTML = '';
-  filtered.forEach(m => {
+  filtered.forEach((movie) => {
     const li = document.createElement('li');
-    li.dataset.id = m.id;
+    li.dataset.id = movie.id;
     li.className = [
-      'movie-item cursor-pointer px-4 py-3 hover:bg-gray-800 transition-colors',
-      m.id === activeMovieId ? 'active' : '',
+      'movie-item cursor-pointer px-4 py-3 transition-colors hover:bg-gray-800',
+      movie.id === activeMovieId ? 'active' : '',
     ].join(' ');
 
-    const badge = m.status === 'downloaded'
-      ? `<span class="status-downloaded text-xs px-1.5 py-0.5 rounded-full">done</span>`
-      : `<span class="status-pending text-xs px-1.5 py-0.5 rounded-full">pending</span>`;
+    const badge = movie.status === 'downloaded'
+      ? '<span class="status-downloaded rounded-full px-1.5 py-0.5 text-xs">done</span>'
+      : '<span class="status-pending rounded-full px-1.5 py-0.5 text-xs">pending</span>';
 
     li.innerHTML = `
       <div class="flex items-start justify-between gap-2">
-        <span class="text-sm font-medium leading-snug line-clamp-2">${esc(m.title)}</span>
+        <span class="line-clamp-2 text-sm font-medium leading-snug">${esc(movie.title)}</span>
         ${badge}
       </div>
-      <span class="text-xs text-gray-500 mt-0.5 block">${m.year ?? ''}</span>
+      <span class="mt-0.5 block text-xs text-gray-500">${movie.year ?? ''}</span>
     `;
-    li.addEventListener('click', () => selectMovie(m.id));
+    li.addEventListener('click', () => selectMovie(movie.id));
     movieList.appendChild(li);
   });
 }
@@ -282,10 +259,10 @@ function applyFilterSelection(value) {
 
 /* ── Stats bar ───────────────────────────────────────────────────────────── */
 function updateStats() {
-  const done    = allMovies.filter(m => m.status === 'downloaded').length;
-  const pending = allMovies.filter(m => m.status === 'pending').length;
-  statTotal.textContent   = `${allMovies.length} movies`;
-  statDone.textContent    = `${done} done`;
+  const done = allMovies.filter((movie) => movie.status === 'downloaded').length;
+  const pending = allMovies.filter((movie) => movie.status === 'pending').length;
+  statTotal.textContent = `${allMovies.length} movies`;
+  statDone.textContent = `${done} done`;
   statPending.textContent = `${pending} pending`;
 }
 
@@ -300,90 +277,7 @@ async function loadMovies() {
   }
 }
 
-document.getElementById('setup-open-mappings')?.addEventListener('click', () => {
-  renderMappingRows(libraryPathsState);
-  pathModalStatus.textContent = '';
-  setPathModalVisible(true);
-  browseFilesystem();
-});
-
-pathModalClose?.addEventListener('click', () => setPathModalVisible(false));
-
-pathModalAdd?.addEventListener('click', () => {
-  pathModalRows.appendChild(createMappingRow());
-});
-
-pathModalSave?.addEventListener('click', () => {
-  const paths = collectMappings();
-  libraryPathsState = paths;
-  renderMappingSummary(libraryPathsState);
-  pathModalStatus.textContent = 'Paths updated. Save setup to apply them.';
-  setPathModalVisible(false);
-});
-
-pathBrowserUp?.addEventListener('click', () => {
-  if (!pathBrowserState.parent) return;
-  browseFilesystem(pathBrowserState.parent);
-});
-
-pathBrowserRefresh?.addEventListener('click', () => {
-  browseFilesystem(pathBrowserState.path);
-});
-
-pathBrowserRoot?.addEventListener('change', () => {
-  const root = pathBrowserRoot.value;
-  if (root) browseFilesystem(root);
-});
-
-pathBrowserUse?.addEventListener('click', () => {
-  const selected = (pathBrowserState.path || '').trim();
-  if (!selected) return;
-
-  const exists = Array.from(pathModalRows.querySelectorAll('.mapping-path'))
-    .some(input => input.value.trim().replace(/\/$/, '') === selected.replace(/\/$/, ''));
-
-  if (!exists) {
-    pathModalRows.appendChild(createMappingRow(selected));
-    pathModalStatus.textContent = `Added ${selected}`;
-  } else {
-    pathModalStatus.textContent = 'That path is already in the list.';
-  }
-});
-
-setupForm?.addEventListener('submit', async (event) => {
-  event.preventDefault();
-  setupStatus.textContent = 'Saving setup...';
-
-  try {
-    const payload = {
-      radarr_url: setupRadarrUrl.value.trim(),
-      radarr_api_key: setupRadarrApiKey.value.trim(),
-      library_paths: libraryPathsState,
-    };
-    const state = await api('POST', '/api/setup', payload);
-    setupStatus.textContent = 'Setup saved. Loading app...';
-    setAppVisible(true);
-    versionState = { current: '', latest: '', updateAvailable: false, updating: false };
-    await loadMovies();
-    await checkForUpdate();
-    if (!updatePollTimer) {
-      updatePollTimer = setInterval(checkForUpdate, 5 * 60 * 1000);
-    }
-    if (state.setupComplete) {
-      showToast('Setup complete');
-    }
-  } catch (e) {
-    setupStatus.textContent = '';
-    showToast(`Setup failed: ${e.message}`, 'error');
-  }
-});
-
 /* ── Version / Update ───────────────────────────────────────────────────── */
-let versionState = { current: '', latest: '', updateAvailable: false, updating: false };
-let updatePollTimer = null;
-let updateStatusTimer = null;
-let syncStatusTimer = null;
-
 function setUpdateModalVisible(isVisible) {
   if (isVisible) {
     updateModal.classList.remove('hidden');
@@ -402,48 +296,6 @@ function setSyncModalVisible(isVisible) {
     syncModal.classList.add('hidden');
     syncModal.classList.remove('flex');
   }
-}
-
-function renderSyncModal(status) {
-  syncModalStatus.textContent = status.inProgress
-    ? 'Syncing movies and matching local folders...'
-    : status.error
-      ? `Sync failed: ${status.error}`
-      : `Sync finished. ${status.synced ?? 0} movies matched.`;
-  syncModalLogs.textContent = (status.logs || []).join('\n');
-  syncModalLogs.scrollTop = syncModalLogs.scrollHeight;
-}
-
-async function refreshSyncModal() {
-  const status = await api('GET', '/api/sync/status');
-  renderSyncModal(status);
-
-  if (!status.inProgress && syncStatusTimer) {
-    clearInterval(syncStatusTimer);
-    syncStatusTimer = null;
-    btnSync.disabled = false;
-    if (!status.error) {
-      syncStatus.textContent = `Synced ${status.synced ?? 0} movies`;
-      await loadMovies();
-      showToast(`Synced ${status.synced ?? 0} movies from Radarr`);
-    } else {
-      syncStatus.textContent = '';
-      showToast(`Sync failed: ${status.error}`, 'error');
-    }
-  }
-
-  return status;
-}
-
-function startSyncPolling() {
-  if (syncStatusTimer) return;
-  syncStatusTimer = setInterval(async () => {
-    try {
-      await refreshSyncModal();
-    } catch (e) {
-      console.warn('Failed to refresh sync status', e);
-    }
-  }, 1200);
 }
 
 function renderUpdateModal(status) {
@@ -556,12 +408,12 @@ updateModalClose?.addEventListener('click', () => {
   setUpdateModalVisible(false);
 });
 
-/* ── Sync Radarr ─────────────────────────────────────────────────────────── */
-btnSync.addEventListener('click', async () => {
+/* ── Sync Plex ─────────────────────────────────────────────────────────── */
+btnSync?.addEventListener('click', async () => {
   btnSync.disabled = true;
   syncStatus.textContent = 'Syncing…';
   setSyncModalVisible(true);
-  syncModalStatus.textContent = 'Starting sync...';
+  syncModalStatus.textContent = 'Starting Plex sync...';
   syncModalLogs.textContent = '';
 
   try {
@@ -583,6 +435,48 @@ btnSync.addEventListener('click', async () => {
   }
 });
 
+function renderSyncModal(status) {
+  syncModalStatus.textContent = status.inProgress
+    ? 'Syncing Plex libraries and matching local folders...'
+    : status.error
+      ? `Sync failed: ${status.error}`
+      : `Sync finished. ${status.synced ?? 0} movies matched.`;
+  syncModalLogs.textContent = (status.logs || []).join('\n');
+  syncModalLogs.scrollTop = syncModalLogs.scrollHeight;
+}
+
+async function refreshSyncModal() {
+  const status = await api('GET', '/api/sync/status');
+  renderSyncModal(status);
+
+  if (!status.inProgress && syncStatusTimer) {
+    clearInterval(syncStatusTimer);
+    syncStatusTimer = null;
+    btnSync.disabled = false;
+    if (!status.error) {
+      syncStatus.textContent = `Synced ${status.synced ?? 0} movies`;
+      await loadMovies();
+      showToast(`Synced ${status.synced ?? 0} movies from Plex`);
+    } else {
+      syncStatus.textContent = '';
+      showToast(`Sync failed: ${status.error}`, 'error');
+    }
+  }
+
+  return status;
+}
+
+function startSyncPolling() {
+  if (syncStatusTimer) return;
+  syncStatusTimer = setInterval(async () => {
+    try {
+      await refreshSyncModal();
+    } catch (e) {
+      console.warn('Failed to refresh sync status', e);
+    }
+  }, 1200);
+}
+
 syncModalClose?.addEventListener('click', () => {
   if (syncStatusTimer) return;
   setSyncModalVisible(false);
@@ -594,7 +488,7 @@ async function selectMovie(id) {
   if (urlDownloadInput) {
     urlDownloadInput.value = '';
   }
-  renderList(searchInput.value); // re-render to update active highlight
+  renderList(searchInput.value);
 
   rightEmpty.classList.add('hidden');
   rightContent.classList.add('hidden');
@@ -613,7 +507,7 @@ async function selectMovie(id) {
 function nextPendingMovieId(currentMovieId) {
   if (!allMovies.length) return null;
 
-  const startIdx = allMovies.findIndex(m => m.id === currentMovieId);
+  const startIdx = allMovies.findIndex((movie) => movie.id === currentMovieId);
   if (startIdx === -1) return null;
 
   for (let i = startIdx + 1; i < allMovies.length; i += 1) {
@@ -628,7 +522,7 @@ function nextPendingMovieId(currentMovieId) {
 }
 
 async function markDownloadedAndAdvance(movieId) {
-  const movie = allMovies.find(m => m.id === movieId);
+  const movie = allMovies.find((item) => item.id === movieId);
   if (movie) {
     movie.status = 'downloaded';
   }
@@ -644,11 +538,11 @@ async function markDownloadedAndAdvance(movieId) {
   }
 }
 
-/* ── Render YouTube results ──────────────────────────────────────────────── */
 function renderResults(movie, results) {
   rightLoading.classList.add('hidden');
   movieHeading.textContent = `${movie.title} (${movie.year ?? '?'})`;
   resultsGrid.innerHTML = '';
+
   const searchQuery = `${movie.title} ${movie.year ?? ''} theme song`;
   const searchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(searchQuery.trim())}`;
   if (youtubeSearchLink) {
@@ -657,43 +551,41 @@ function renderResults(movie, results) {
   }
 
   if (!results.length) {
-    resultsGrid.innerHTML = '<p class="text-gray-500 col-span-3">No results found.</p>';
+    resultsGrid.innerHTML = '<p class="col-span-3 text-gray-500">No results found.</p>';
   } else {
-    results.forEach(v => {
+    results.forEach((video) => {
       const card = document.createElement('div');
-      card.className = 'bg-gray-900 rounded-xl overflow-hidden border border-gray-800 flex flex-col';
+      card.className = 'flex flex-col overflow-hidden rounded-xl border border-gray-800 bg-gray-900';
       card.innerHTML = `
         <div class="aspect-video w-full bg-black">
           <iframe
-            class="w-full h-full"
-            src="https://www.youtube.com/embed/${esc(v.videoId)}"
-            title="${esc(v.title)}"
+            class="h-full w-full"
+            src="https://www.youtube.com/embed/${esc(video.videoId)}"
+            title="${esc(video.title)}"
             frameborder="0"
             referrerpolicy="strict-origin-when-cross-origin"
             allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
             allowfullscreen>
           </iframe>
         </div>
-        <div class="p-3 flex flex-col gap-2 flex-1">
-          <p class="text-sm font-medium text-white leading-snug line-clamp-2">${esc(v.title)}</p>
-          <div class="flex items-center justify-between text-xs text-gray-500 mt-auto">
-            <span>${esc(v.channel || '')}</span>
-            <span>${esc(v.duration || '')}</span>
+        <div class="flex flex-1 flex-col gap-2 p-3">
+          <p class="line-clamp-2 text-sm font-medium text-white leading-snug">${esc(video.title)}</p>
+          <div class="mt-auto flex items-center justify-between text-xs text-gray-500">
+            <span>${esc(video.channel || '')}</span>
+            <span>${esc(video.duration || '')}</span>
           </div>
           <button
-            class="btn-download mt-2 w-full py-2 rounded-lg bg-green-600 hover:bg-green-500
-                   text-sm font-semibold transition-colors flex items-center justify-center gap-2"
+            class="btn-download mt-2 flex w-full items-center justify-center gap-2 rounded-lg bg-green-600 py-2 text-sm font-semibold transition-colors hover:bg-green-500"
             data-movie-id="${movie.id}"
-            data-video-id="${esc(v.videoId)}">
-            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                    d="M5 13l4 4L19 7"/>
+            data-video-id="${esc(video.videoId)}">
+            <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
             </svg>
             Accept &amp; Download
           </button>
           <a
             class="btn-open-youtube mt-1 inline-flex w-full items-center justify-center rounded-lg border border-white/15 bg-white/5 py-2 text-xs font-semibold text-gray-200 transition hover:bg-white/10"
-            href="https://www.youtube.com/watch?v=${esc(v.videoId)}"
+            href="https://www.youtube.com/watch?v=${esc(video.videoId)}"
             target="_blank"
             rel="noopener noreferrer"
           >
@@ -707,12 +599,11 @@ function renderResults(movie, results) {
 
   rightContent.classList.remove('hidden');
 
-  // Attach download handlers
-  resultsGrid.querySelectorAll('.btn-download').forEach(btn => {
-    btn.addEventListener('click', () => handleDownload(btn));
+  resultsGrid.querySelectorAll('.btn-download').forEach((button) => {
+    button.addEventListener('click', () => handleDownload(button));
   });
 
-  resultsGrid.querySelectorAll('.btn-open-youtube').forEach(link => {
+  resultsGrid.querySelectorAll('.btn-open-youtube').forEach((link) => {
     link.addEventListener('click', (event) => {
       const href = link.getAttribute('href');
       if (!href) {
@@ -725,16 +616,16 @@ function renderResults(movie, results) {
   });
 }
 
-/* ── Download ────────────────────────────────────────────────────────────── */
-async function handleDownload(btn) {
-  const movieId = parseInt(btn.dataset.movieId, 10);
-  const videoId = btn.dataset.videoId;
+async function handleDownload(button) {
+  const movieId = parseInt(button.dataset.movieId, 10);
+  const videoId = button.dataset.videoId;
 
-  // Disable all download buttons in grid during operation
-  resultsGrid.querySelectorAll('.btn-download').forEach(b => { b.disabled = true; });
+  resultsGrid.querySelectorAll('.btn-download').forEach((downloadButton) => {
+    downloadButton.disabled = true;
+  });
 
-  btn.innerHTML = `
-    <svg class="spinner w-4 h-4" fill="none" viewBox="0 0 24 24">
+  button.innerHTML = `
+    <svg class="spinner h-4 w-4" fill="none" viewBox="0 0 24 24">
       <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
       <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"/>
     </svg>
@@ -747,18 +638,20 @@ async function handleDownload(btn) {
 
     await markDownloadedAndAdvance(movieId);
 
-    btn.innerHTML = `
-      <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+    button.innerHTML = `
+      <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
       </svg>
       Downloaded!
     `;
-    btn.classList.replace('bg-green-600', 'bg-gray-600');
-    btn.classList.replace('hover:bg-green-500', 'hover:bg-gray-600');
+    button.classList.replace('bg-green-600', 'bg-gray-600');
+    button.classList.replace('hover:bg-green-500', 'hover:bg-gray-600');
   } catch (e) {
     showToast(`Download failed: ${e.message}`, 'error');
-    btn.innerHTML = 'Accept &amp; Download';
-    resultsGrid.querySelectorAll('.btn-download').forEach(b => { b.disabled = false; });
+    button.innerHTML = 'Accept &amp; Download';
+    resultsGrid.querySelectorAll('.btn-download').forEach((downloadButton) => {
+      downloadButton.disabled = false;
+    });
   }
 }
 
@@ -790,14 +683,14 @@ urlDownloadForm?.addEventListener('submit', async (event) => {
 });
 
 /* ── Search filter ───────────────────────────────────────────────────────── */
-searchInput.addEventListener('input', () => renderList(searchInput.value));
+searchInput?.addEventListener('input', () => renderList(searchInput.value));
 
 btnFilter?.addEventListener('click', () => {
   filterMenu.classList.toggle('hidden');
 });
 
-filterMenu?.querySelectorAll('.filter-option').forEach(btn => {
-  btn.addEventListener('click', () => applyFilterSelection(btn.dataset.filter || 'all'));
+filterMenu?.querySelectorAll('.filter-option').forEach((button) => {
+  button.addEventListener('click', () => applyFilterSelection(button.dataset.filter || 'all'));
 });
 
 youtubeSearchLink?.addEventListener('click', (event) => {
@@ -811,26 +704,12 @@ youtubeSearchLink?.addEventListener('click', (event) => {
   window.open(url, '_blank', 'noopener,noreferrer');
 });
 
-/* ── Escape HTML ─────────────────────────────────────────────────────────── */
-function esc(str) {
-  return String(str ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
 /* ── Boot ────────────────────────────────────────────────────────────────── */
 async function bootstrap() {
   const isReady = await loadSetupState();
   if (!isReady) return;
 
-  await loadMovies();
-  await checkForUpdate();
-
-  if (!updatePollTimer) {
-    updatePollTimer = setInterval(checkForUpdate, 5 * 60 * 1000);
-  }
+  await enterApp();
 }
 
 bootstrap();
