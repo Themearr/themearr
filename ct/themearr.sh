@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck source=/dev/null
 source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/build.func)
 # Copyright (c) 2021-2026 community-scripts ORG
 # Author: Devlin Cattermole
@@ -41,8 +42,11 @@ function update_script() {
     CLEAN_INSTALL=1 fetch_and_deploy_gh_release "themearr" "Themearr/themearr" "tarball" "latest" "/opt/themearr"
 
     msg_info "Rebuilding Python Environment"
+    # shellcheck disable=SC2086
     $STD python3 -m venv /opt/themearr/venv
+    # shellcheck disable=SC2086
     $STD /opt/themearr/venv/bin/pip install --upgrade pip
+    # shellcheck disable=SC2086
     $STD /opt/themearr/venv/bin/pip install -r /opt/themearr/requirements.txt
     msg_ok "Rebuilt Python Environment"
 

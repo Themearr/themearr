@@ -5,6 +5,7 @@
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
 # Source: https://github.com/Themearr/themearr
 
+# shellcheck source=/dev/null
 source /dev/stdin <<<"$FUNCTIONS_FILE_PATH"
 color
 verb_ip6
@@ -14,6 +15,7 @@ network_check
 update_os
 
 msg_info "Installing Dependencies"
+# shellcheck disable=SC2086
 $STD apt-get install -y \
   python3-venv \
   python3-pip \
@@ -24,7 +26,9 @@ msg_ok "Installed Dependencies"
 setup_ffmpeg
 
 msg_info "Installing Deno"
-$STD curl -fsSL https://deno.land/install.sh | DENO_INSTALL=/usr/local sh
+# $STD cannot wrap a pipe directly (stdout redirect breaks pipe); wrap in bash -c to silence both sides
+# shellcheck disable=SC2086
+$STD bash -c "curl -fsSL https://deno.land/install.sh | DENO_INSTALL=/usr/local sh"
 msg_ok "Installed Deno"
 
 fetch_and_deploy_gh_release "yt-dlp" "yt-dlp/yt-dlp" "singlefile" "latest" "/usr/local/bin" "yt-dlp"
@@ -34,8 +38,11 @@ fetch_and_deploy_gh_release "themearr" "Themearr/themearr" "tarball" "latest" "/
 
 msg_info "Setting up Application"
 mkdir -p /opt/themearr/data
+# shellcheck disable=SC2086
 $STD python3 -m venv /opt/themearr/venv
+# shellcheck disable=SC2086
 $STD /opt/themearr/venv/bin/pip install --upgrade pip
+# shellcheck disable=SC2086
 $STD /opt/themearr/venv/bin/pip install -r /opt/themearr/requirements.txt
 msg_ok "Set up Application"
 
