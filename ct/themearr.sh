@@ -6,6 +6,33 @@ source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxV
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
 # Source: https://github.com/Themearr/themearr
 
+# ══════════════════════════════════════════════════════════════════════════════
+# ██ DEVELOPMENT / FORK-TESTING OVERRIDES — DELETE BEFORE OPENING A PR ██
+# ══════════════════════════════════════════════════════════════════════════════
+#
+#  These three exports redirect build.func to pull the install script from
+#  YOUR fork's main branch instead of community-scripts/ProxmoxVE/main.
+#
+#  HOW TO TEST:
+#    1. Push both ct/themearr.sh and install/themearr-install.sh to your fork.
+#    2. Wait 10–30 seconds for GitHub's raw file cache to refresh.
+#    3. Run on your Proxmox host:
+#         bash -c "$(curl -fsSL https://raw.githubusercontent.com/Themearr/ProxmoxVE/main/ct/themearr.sh)"
+#
+#  BEFORE SUBMITTING THE PR — MANDATORY CHECKLIST:
+#    [ ] Delete the three export lines below (GITHUB_USER, GITHUB_REPO, GITHUB_BRANCH)
+#    [ ] Delete this entire comment block
+#    [ ] Run: shellcheck ct/themearr.sh && shellcheck install/themearr-install.sh
+#    [ ] Cherry-pick ONLY ct/themearr.sh + install/themearr-install.sh into a
+#        clean branch based on upstream/main — NOT your fork's main branch.
+#        The setup-fork.sh script modifies 600+ files; none of those go in the PR.
+#
+# ══════════════════════════════════════════════════════════════════════════════
+export GITHUB_USER="Themearr"
+export GITHUB_REPO="themearr"
+export GITHUB_BRANCH="main"
+# ══════════════════════════════════════════════════════════════════════════════
+
 APP="Themearr"
 var_tags="${var_tags:-media;plex;arr}"
 var_cpu="${var_cpu:-2}"
