@@ -1,0 +1,23 @@
+[Unit]
+Description=Themearr – Radarr theme song downloader
+After=network.target
+
+[Service]
+Type=simple
+User=themearr
+Group=themearr
+
+WorkingDirectory=/opt/themearr
+
+ExecStart=/opt/themearr/venv/bin/python -m uvicorn app.main:app \
+    --host 0.0.0.0 \
+    --port 8080 \
+    --no-access-log
+
+Restart=on-failure
+RestartSec=5
+
+# Keep service options minimal for LXC compatibility.
+
+[Install]
+WantedBy=multi-user.target
