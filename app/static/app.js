@@ -669,6 +669,7 @@ function renderResults(movie, results) {
             src="https://www.youtube.com/embed/${esc(v.videoId)}"
             title="${esc(v.title)}"
             frameborder="0"
+            referrerpolicy="strict-origin-when-cross-origin"
             allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
             allowfullscreen>
           </iframe>

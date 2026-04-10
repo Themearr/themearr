@@ -40,7 +40,6 @@ VERSION_FILE = Path(os.getenv("THEMEARR_VERSION_FILE", "/opt/themearr/VERSION"))
 GITHUB_REPO = os.getenv("GITHUB_REPO", "Themearr/themearr")
 UPDATER_CMD = os.getenv("THEMEARR_UPDATER_CMD", "sudo /usr/local/bin/themearr-update")
 BROWSE_ROOTS = os.getenv("THEMEARR_BROWSE_ROOTS", "/mnt,/media,/movies,/tv")
-YTDLP_JS_RUNTIMES = os.getenv("THEMEARR_YTDLP_JS_RUNTIMES", "node,deno")
 
 _update_lock = threading.Lock()
 _update_in_progress = False
@@ -435,7 +434,6 @@ def _download_theme_for_url(movie_id: int, url: str):
         "-x",
         "--audio-format", "mp3",
         "--audio-quality", "0",
-        "--js-runtimes", YTDLP_JS_RUNTIMES,
         "--no-playlist",
         "--max-downloads", "1",
         "-o", output_template,
