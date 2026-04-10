@@ -15,7 +15,13 @@ apt-get install -y --no-install-recommends \
     sudo \
     ffmpeg \
     curl \
-    nodejs
+    nodejs \
+    unzip
+
+# Install deno (needed for yt-dlp JavaScript extraction)
+echo "[1b/5] Installing deno…"
+curl -fsSL https://deno.land/install.sh | sh
+export PATH="/root/.deno/bin:$PATH"
 
 # Install yt-dlp as a standalone binary (kept outside the venv so it can self-update)
 echo "[2/5] Installing yt-dlp…"

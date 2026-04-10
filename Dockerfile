@@ -9,6 +9,8 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg curl nodejs \
     && rm -rf /var/lib/apt/lists/*
 
+RUN curl -fsSL https://deno.land/install.sh | sh
+
 RUN curl -sSL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp \
     -o /usr/local/bin/yt-dlp \
     && chmod +x /usr/local/bin/yt-dlp
