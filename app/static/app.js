@@ -110,6 +110,26 @@ function clearPlexLoginPolling() {
   }
 }
 
+function getReturnLoginParams() {
+  const params = new URLSearchParams(window.location.search);
+  const pinIdRaw = (params.get('plexPinId') || '').trim();
+  const code = (params.get('plexCode') || '').trim();
+
+  if (!/^\d+$/.test(pinIdRaw) || !code) {
+    return null;
+  }
+
+  return { pinId: Number(pinIdRaw), code };
+}
+
+function clearReturnLoginParams() {
+  const params = new URLSearchParams(window.location.search);
+  params.delete('plexPinId');
+  params.delete('plexCode');
+  const next = `${window.location.pathname}${params.toString() ? `?${params}` : ''}${window.location.hash || ''}`;
+  window.history.replaceState({}, '', next);
+}
+
 async function loadSetupState() {
   const state = await api('GET', '/api/setup/status');
   setupReady = Boolean(state.setupComplete);
@@ -723,8 +743,26 @@ youtubeSearchLink?.addEventListener('click', (event) => {
 
 /* ── Boot ────────────────────────────────────────────────────────────────── */
 async function bootstrap() {
+  const returnedLogin = getReturnLoginParams();
+  if (returnedLogin) {
+    pendingPlexLogin = returnedLogin;
+    clearReturnLoginParams();
+  }
+
   const isReady = await loadSetupState();
-  if (!isReady) return;
+  if (!isReady) {
+    if (pendingPlexLogin) {
+      setupStatus.textContent = 'Finishing Plex sign-in...';
+      setupPlexLogin.disabled = true;
+      clearPlexLoginPolling();
+      plexLoginPollTimer = setInterval(() => {
+        if (!pendingPlexLogin) return;
+        pollPlexLogin(pendingPlexLogin.pinId, pendingPlexLogin.code);
+      }, 2000);
+      await pollPlexLogin(pendingPlexLogin.pinId, pendingPlexLogin.code);
+    }
+    return;
+  }
 
   await enterApp();
 }

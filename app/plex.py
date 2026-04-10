@@ -3,7 +3,7 @@ import uuid
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Callable
-from urllib.parse import quote, urlencode
+from urllib.parse import parse_qsl, quote, urlencode, urlparse, urlunparse
 
 import httpx
 
@@ -37,6 +37,18 @@ def _plex_client_values(client_identifier: str) -> dict[str, str]:
         "X-Plex-Client-Identifier": client_identifier,
         "X-Plex-Version": get_setting("app_version", "dev"),
     }
+
+
+def _augment_forward_url(forward_url: str, pin_id: int, code: str) -> str:
+    value = forward_url.strip()
+    if not value:
+        return ""
+
+    parsed = urlparse(value)
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    query["plexPinId"] = str(pin_id)
+    query["plexCode"] = code
+    return urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, urlencode(query), parsed.fragment))
 
 
 def _create_client() -> httpx.Client:
@@ -74,11 +86,13 @@ def create_login_pin(forward_url: str = "") -> dict:
     if not pin_id or not code:
         raise RuntimeError("Plex did not return a valid login PIN")
 
+    effective_forward_url = _augment_forward_url(forward_url, pin_id, code)
+
     return {
         "pinId": pin_id,
         "code": code,
         "clientIdentifier": client_identifier,
-        "authUrl": build_auth_url(code, client_identifier, forward_url),
+        "authUrl": build_auth_url(code, client_identifier, effective_forward_url),
     }
 
 
