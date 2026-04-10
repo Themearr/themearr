@@ -1,5 +1,9 @@
 <p align="center">
-  <img src="app/static/logo.png" alt="Themearr logo" width="420" />
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="app/static/logo-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="app/static/logo.png">
+    <img src="app/static/logo.png" alt="Themearr logo" width="420" />
+  </picture>
 </p>
 
 <h1 align="center">Themearr</h1>

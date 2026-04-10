@@ -5,6 +5,7 @@ import threading
 import asyncio
 from collections import deque
 from pathlib import Path
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import httpx
 from fastapi import FastAPI, HTTPException, Query
@@ -103,6 +104,25 @@ def _path_under_root(candidate: Path, root: Path) -> bool:
 
 def _path_allowed(candidate: Path, roots: list[Path]) -> bool:
     return any(_path_under_root(candidate, root) for root in roots)
+
+
+def _normalize_youtube_url(url: str) -> str:
+    parsed = urlparse(url)
+    host = parsed.netloc.lower()
+
+    if host in {"youtube.com", "www.youtube.com", "m.youtube.com"}:
+        query = parse_qs(parsed.query)
+        video_id = query.get("v", [""])[0].strip()
+        if video_id:
+            clean_query = urlencode({"v": video_id})
+            return urlunparse((parsed.scheme, parsed.netloc, "/watch", "", clean_query, ""))
+
+    if host == "youtu.be":
+        video_id = parsed.path.strip("/")
+        if video_id:
+            return f"https://youtu.be/{video_id}"
+
+    return url
 
 
 @app.on_event("startup")
@@ -407,18 +427,25 @@ def _download_theme_for_url(movie_id: int, url: str):
         raise HTTPException(status_code=400, detail="Movie has no folder path")
 
     output_template = os.path.join(folder, "theme.%(ext)s")
+    normalized_url = _normalize_youtube_url(url)
 
     cmd = [
         "yt-dlp",
         "-x",
         "--audio-format", "mp3",
         "--audio-quality", "0",
+        "--no-playlist",
+        "--max-downloads", "1",
         "-o", output_template,
-        url,
+        normalized_url,
     ]
     log.info("Running: %s", " ".join(cmd))
 
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=504, detail="Download timed out after 15 minutes")
+
     if proc.returncode != 0:
         log.error("yt-dlp stderr: %s", proc.stderr)
         raise HTTPException(
