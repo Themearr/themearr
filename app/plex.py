@@ -7,7 +7,14 @@ from urllib.parse import parse_qsl, quote, urlencode, urlparse, urlunparse
 
 import httpx
 
-from app.database import get_setting, set_setting
+from app.database import (
+    get_library_paths,
+    get_path_mappings,
+    get_plex_servers,
+    get_selected_libraries,
+    get_setting,
+    set_setting,
+)
 
 PLEX_API_BASE = "https://plex.tv/api/v2"
 PLEX_AUTH_BASE = "https://app.plex.tv/auth#?"
@@ -246,9 +253,11 @@ def _parse_resources(response: httpx.Response) -> list[dict]:
     return devices
 
 
-def resolve_plex_session(access_token: str, client_identifier: str) -> dict:
-    user_info = get_user_info(access_token, client_identifier)
+def _coerce_bool(value: str) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
+
+def discover_plex_servers(access_token: str, client_identifier: str) -> list[dict]:
     with _create_client() as client:
         response = client.get(
             "https://plex.tv/api/resources",
@@ -263,26 +272,45 @@ def resolve_plex_session(access_token: str, client_identifier: str) -> dict:
         response.raise_for_status()
         resources = _parse_resources(response)
 
-    servers = [
-        resource
-        for resource in resources
-        if "server" in str(resource.get("provides", "")).lower()
-    ]
+    servers: list[dict] = []
+    for resource in resources:
+        if "server" not in str(resource.get("provides", "")).lower():
+            continue
+
+        server_id = str(resource.get("clientIdentifier", "") or "").strip()
+        if not server_id:
+            continue
+
+        server_url = _pick_server_connection(resource)
+        if not server_url:
+            continue
+
+        servers.append(
+            {
+                "id": server_id,
+                "name": str(resource.get("name", "") or "").strip() or server_url,
+                "url": server_url,
+                "token": str(resource.get("accessToken", "") or access_token).strip(),
+                "owned": _coerce_bool(resource.get("owned", "")),
+                "presence": _coerce_bool(resource.get("presence", "")),
+            }
+        )
+
+    servers.sort(key=lambda s: (not s.get("owned", False), not s.get("presence", False), s.get("name", "")))
+    return servers
+
+
+def resolve_plex_session(access_token: str, client_identifier: str) -> dict:
+    user_info = get_user_info(access_token, client_identifier)
+    servers = discover_plex_servers(access_token, client_identifier)
 
     if not servers:
         raise RuntimeError("No Plex Media Server was found for this account")
 
-    servers.sort(
-        key=lambda resource: (
-            str(resource.get("owned", "")).lower() not in {"1", "true"},
-            str(resource.get("presence", "")).lower() not in {"1", "true"},
-        )
-    )
-
     selected = servers[0]
-    server_url = _pick_server_connection(selected)
-    server_token = str(selected.get("accessToken", "") or access_token).strip()
-    server_name = str(selected.get("name", "") or "").strip()
+    server_url = str(selected["url"]).strip()
+    server_token = str(selected["token"]).strip()
+    server_name = str(selected["name"]).strip()
 
     if not server_url:
         raise RuntimeError("Unable to determine a usable Plex server URL")
@@ -373,29 +401,83 @@ def _first_media_file(item: dict) -> str:
     return ""
 
 
-async def fetch_movies(log_fn: Callable[[str], None] | None = None) -> list[dict]:
-    access_token = get_setting("plex_access_token", "").strip()
-    client_identifier = get_setting("plex_client_identifier", "").strip()
-    server_url = get_setting("plex_server_url", "").strip()
-    server_token = get_setting("plex_server_token", "").strip()
-    server_name = get_setting("plex_server_name", "").strip()
+def _normalize_path(value: str) -> str:
+    return str(value or "").strip().rstrip("/")
 
-    if not access_token or not client_identifier:
-        raise RuntimeError("Plex sign-in has not been completed")
 
-    if not server_url or not server_token:
-        session = resolve_plex_session(access_token, client_identifier)
-        server_url = session["serverUrl"]
-        server_token = session["serverToken"]
-        server_name = session["serverName"]
-        set_setting("plex_server_url", server_url)
-        set_setting("plex_server_token", server_token)
-        set_setting("plex_server_name", server_name)
-        set_setting("plex_account_name", session["accountName"])
+def _apply_path_mappings(source_file_path: str) -> str:
+    source_value = _normalize_path(source_file_path)
+    if not source_value:
+        return ""
 
-    if log_fn:
-        log_fn(f"Using Plex server: {server_name or server_url}")
+    source_parent = _normalize_path(str(Path(source_value).expanduser().parent))
+    for mapping in get_path_mappings():
+        source_prefix = _normalize_path(mapping.get("source", ""))
+        target_prefix = _normalize_path(mapping.get("target", ""))
+        if not source_prefix or not target_prefix:
+            continue
 
+        if source_parent == source_prefix:
+            return target_prefix
+
+        prefixed = f"{source_prefix}/"
+        if source_parent.startswith(prefixed):
+            suffix = source_parent[len(source_prefix):].lstrip("/")
+            return _normalize_path(os.path.join(target_prefix, suffix))
+
+    return source_parent
+
+
+def _find_path_by_search(title: str, year: int | None) -> str:
+    roots = [root for root in get_library_paths() if os.path.isdir(root)]
+    if not roots:
+        return ""
+
+    normalized_title = "".join(ch.lower() for ch in title if ch.isalnum())
+    expected_year = str(year) if year else ""
+    if not normalized_title:
+        return ""
+
+    max_dirs = int(get_setting("max_search_dirs", "20000") or "20000")
+    max_depth = int(get_setting("search_depth", "4") or "4")
+    visited = 0
+    for root in roots:
+        for current, dirs, _files in os.walk(root):
+            visited += 1
+            if visited > max_dirs:
+                return ""
+
+            folder_name = os.path.basename(current)
+            normalized_folder = "".join(ch.lower() for ch in folder_name if ch.isalnum())
+            if normalized_title and normalized_title in normalized_folder:
+                if expected_year and expected_year not in folder_name:
+                    continue
+                return current.rstrip("/")
+
+            rel = os.path.relpath(current, root)
+            depth = 0 if rel == "." else rel.count(os.sep) + 1
+            if depth >= max_depth:
+                dirs[:] = []
+    return ""
+
+
+def resolve_local_folder(source_file_path: str, title: str, year: int | None) -> tuple[str, str]:
+    mapped_folder = _apply_path_mappings(source_file_path)
+    if mapped_folder and os.path.isdir(mapped_folder):
+        return mapped_folder, "mapping"
+
+    fallback = _find_path_by_search(title, year)
+    if fallback and os.path.isdir(fallback):
+        return fallback, "search"
+
+    return "", "unresolved"
+
+
+def _movie_record_id(server_id: str, rating_key: str) -> str:
+    return f"{server_id}:{rating_key}"
+
+
+async def list_server_libraries(server_url: str, server_token: str, client_identifier: str) -> list[dict]:
     async with _create_async_client() as client:
         sections_response = await _get_xml(
             client,
@@ -404,67 +486,135 @@ async def fetch_movies(log_fn: Callable[[str], None] | None = None) -> list[dict
             server_token,
         )
         sections = _parse_library_sections(sections_response)
-        movie_sections = [section for section in sections if str(section.get("type", "")).lower() == "movie"]
 
-        if log_fn:
-            log_fn(f"Found {len(movie_sections)} Plex movie libraries")
+    libraries: list[dict] = []
+    for section in sections:
+        if str(section.get("type", "")).lower() != "movie":
+            continue
+        section_key = str(section.get("key", "")).strip()
+        if not section_key:
+            continue
+        libraries.append(
+            {
+                "key": section_key,
+                "title": str(section.get("title", "Movies") or "Movies"),
+                "type": "movie",
+            }
+        )
+    return libraries
 
+
+async def fetch_movies(log_fn: Callable[[str], None] | None = None) -> list[dict]:
+    access_token = get_setting("plex_access_token", "").strip()
+    client_identifier = get_setting("plex_client_identifier", "").strip()
+
+    if not access_token or not client_identifier:
+        raise RuntimeError("Plex sign-in has not been completed")
+
+    selected_servers = get_plex_servers()
+    selected_libraries = get_selected_libraries()
+    if not selected_servers:
+        session = resolve_plex_session(access_token, client_identifier)
+        selected_servers = [
+            {
+                "id": "legacy",
+                "name": session["serverName"],
+                "url": session["serverUrl"],
+                "token": session["serverToken"],
+                "owned": True,
+                "presence": True,
+            }
+        ]
+
+    if not selected_servers:
+        raise RuntimeError("No Plex servers are selected")
+
+    async with _create_async_client() as client:
         result: list[dict] = []
-        seen_ids: set[int] = set()
+        seen_ids: set[str] = set()
 
-        for section in movie_sections:
-            section_title = str(section.get("title", "Movies") or "Movies")
-            section_key = str(section.get("key", "") or "").strip()
-            if not section_key:
+        for server in selected_servers:
+            server_id = str(server.get("id", "")).strip()
+            server_name = str(server.get("name", "")).strip()
+            server_url = str(server.get("url", "")).strip()
+            server_token = str(server.get("token", "")).strip()
+            if not server_id or not server_url or not server_token:
                 continue
 
             if log_fn:
-                log_fn(f"Scanning library: {section_title}")
+                log_fn(f"Using Plex server: {server_name or server_url}")
 
-            items = await _fetch_movie_items_for_section(
+            sections_response = await _get_xml(
                 client,
-                server_url,
-                section_key,
+                f"{server_url.rstrip('/')}/library/sections",
                 client_identifier,
                 server_token,
             )
+            sections = _parse_library_sections(sections_response)
+            movie_sections = [section for section in sections if str(section.get("type", "")).lower() == "movie"]
+            selected_keys = set(selected_libraries.get(server_id, []))
+            if selected_keys:
+                movie_sections = [section for section in movie_sections if str(section.get("key", "")).strip() in selected_keys]
 
-            for item in items:
-                rating_key_raw = str(item.get("ratingKey", "") or "").strip()
-                if not rating_key_raw.isdigit():
+            if log_fn:
+                log_fn(f"Found {len(movie_sections)} selected movie libraries on {server_name or server_id}")
+
+            for section in movie_sections:
+                section_title = str(section.get("title", "Movies") or "Movies")
+                section_key = str(section.get("key", "") or "").strip()
+                if not section_key:
                     continue
-
-                movie_id = int(rating_key_raw)
-                if movie_id in seen_ids:
-                    continue
-
-                file_path = _first_media_file(item)
-                if not file_path:
-                    if log_fn:
-                        log_fn(f"Skipping {item.get('title', 'Unknown title')} - no media file path available")
-                    continue
-
-                folder = str(Path(file_path).expanduser().resolve().parent)
-                if not os.path.isdir(folder):
-                    if log_fn:
-                        log_fn(f"Skipping {item.get('title', 'Unknown title')} - folder not found: {folder}")
-                    continue
-
-                title = str(item.get("title", "") or "").strip()
-                year_value = item.get("year")
-                year = int(year_value) if str(year_value or "").isdigit() else None
 
                 if log_fn:
-                    log_fn(f"Matched: {title} ({year or '?'}) -> {folder}")
+                    log_fn(f"Scanning library: {section_title}")
 
-                seen_ids.add(movie_id)
-                result.append(
-                    {
-                        "id": movie_id,
-                        "title": title,
-                        "year": year,
-                        "folderName": folder,
-                    }
+                items = await _fetch_movie_items_for_section(
+                    client,
+                    server_url,
+                    section_key,
+                    client_identifier,
+                    server_token,
                 )
+
+                for item in items:
+                    rating_key = str(item.get("ratingKey", "") or "").strip()
+                    if not rating_key:
+                        continue
+
+                    movie_id = _movie_record_id(server_id, rating_key)
+                    if movie_id in seen_ids:
+                        continue
+
+                    file_path = _first_media_file(item)
+                    if not file_path:
+                        if log_fn:
+                            log_fn(f"Skipping {item.get('title', 'Unknown title')} - no media file path available")
+                        continue
+
+                    title = str(item.get("title", "") or "").strip()
+                    year_value = item.get("year")
+                    year = int(year_value) if str(year_value or "").isdigit() else None
+
+                    resolved_folder, resolution_mode = resolve_local_folder(file_path, title, year)
+                    if not resolved_folder:
+                        if log_fn:
+                            log_fn(f"Skipping {title or 'Unknown title'} - unresolved path from Plex metadata: {file_path}")
+                        continue
+
+                    if log_fn:
+                        log_fn(f"Matched: {title} ({year or '?'}) -> {resolved_folder} [{resolution_mode}]")
+
+                    seen_ids.add(movie_id)
+                    result.append(
+                        {
+                            "id": movie_id,
+                            "plex_server_id": server_id,
+                            "plex_rating_key": rating_key,
+                            "title": title,
+                            "year": year,
+                            "sourcePath": file_path,
+                            "folderName": resolved_folder,
+                        }
+                    )
 
     return result

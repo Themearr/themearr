@@ -17,17 +17,33 @@ from youtube_search import YoutubeSearch
 
 from app.database import (
     get_all_movies,
+    get_library_paths,
     get_movie,
+    get_path_mappings,
+    get_plex_servers,
+    get_selected_libraries,
     get_setting,
     init_db,
     is_setup_complete,
     mark_setup_complete,
     reset_app_state,
+    set_library_paths,
+    set_path_mappings,
+    set_plex_servers,
+    set_selected_libraries,
     set_setting,
     set_status,
     upsert_movies,
 )
-from app.plex import check_login_pin, create_login_pin, fetch_movies, get_client_identifier, resolve_plex_session
+from app.plex import (
+    check_login_pin,
+    create_login_pin,
+    discover_plex_servers,
+    fetch_movies,
+    get_client_identifier,
+    get_user_info,
+    list_server_libraries,
+)
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("themearr")
@@ -103,13 +119,18 @@ def startup() -> None:
 
 
 def _setup_payload() -> dict:
-    plex_connected = bool(get_setting("plex_access_token", "").strip() and get_setting("plex_server_url", "").strip())
+    plex_connected = bool(get_setting("plex_access_token", "").strip())
+    selected_servers = get_plex_servers()
+    selected_libraries = get_selected_libraries()
+    libraries_count = sum(len(v) for v in selected_libraries.values())
     return {
-        "setupComplete": is_setup_complete() or plex_connected,
+        "setupComplete": is_setup_complete() and libraries_count > 0,
         "plexConnected": plex_connected,
         "plexAccountName": get_setting("plex_account_name", ""),
-        "plexServerName": get_setting("plex_server_name", ""),
-        "plexServerUrl": get_setting("plex_server_url", ""),
+        "plexServerName": ", ".join([s.get("name", "") for s in selected_servers if s.get("name")]),
+        "plexServerUrl": ", ".join([s.get("url", "") for s in selected_servers if s.get("url")]),
+        "selectedServers": selected_servers,
+        "selectedLibraries": selected_libraries,
     }
 
 
@@ -147,25 +168,133 @@ def plex_login_status(pin_id: int = Query(...), code: str = Query(...)):
             "serverUrl": get_setting("plex_server_url", ""),
         }
 
-    try:
-        session = resolve_plex_session(pin_state["authToken"], client_identifier)
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Plex sign-in completed, but server discovery failed: {exc}")
-
     set_setting("plex_access_token", pin_state["authToken"])
-    set_setting("plex_account_name", session["accountName"])
-    set_setting("plex_server_name", session["serverName"])
-    set_setting("plex_server_url", session["serverUrl"])
-    set_setting("plex_server_token", session["serverToken"])
-    mark_setup_complete()
+    try:
+        user_info = get_user_info(pin_state["authToken"], client_identifier)
+        account_name = str(user_info.get("username") or user_info.get("title") or user_info.get("email") or "Plex user").strip()
+    except Exception:
+        account_name = "Plex user"
+    set_setting("plex_account_name", account_name)
 
     return {
         "claimed": True,
         "connected": True,
-        "accountName": session["accountName"],
-        "serverName": session["serverName"],
-        "serverUrl": session["serverUrl"],
+        "needsSelection": True,
+        "accountName": account_name,
     }
+
+
+@app.get("/api/setup/plex/servers")
+def plex_servers():
+    access_token = get_setting("plex_access_token", "").strip()
+    client_identifier = get_setting("plex_client_identifier", "").strip() or get_client_identifier()
+    if not access_token:
+        raise HTTPException(status_code=400, detail="Plex sign-in is required first")
+
+    try:
+        servers = discover_plex_servers(access_token, client_identifier)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Plex server discovery failed: {exc}")
+
+    return {"servers": servers}
+
+
+class PlexLibrariesRequest(BaseModel):
+    servers: list[dict]
+
+
+@app.post("/api/setup/plex/libraries")
+async def plex_libraries(req: PlexLibrariesRequest):
+    client_identifier = get_setting("plex_client_identifier", "").strip() or get_client_identifier()
+    payload: dict[str, list[dict]] = {}
+
+    for server in req.servers:
+        server_id = str(server.get("id", "")).strip()
+        server_url = str(server.get("url", "")).strip()
+        server_token = str(server.get("token", "")).strip()
+        if not server_id or not server_url or not server_token:
+            continue
+        try:
+            payload[server_id] = await list_server_libraries(server_url, server_token, client_identifier)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Failed to list libraries for {server_id}: {exc}")
+
+    return {"libraries": payload}
+
+
+class PlexSelectionRequest(BaseModel):
+    servers: list[dict]
+    selected_libraries: dict[str, list[str]]
+
+
+@app.post("/api/setup/plex/selection")
+def save_plex_selection(req: PlexSelectionRequest):
+    if not req.servers:
+        raise HTTPException(status_code=400, detail="Select at least one Plex server")
+
+    total = 0
+    for keys in req.selected_libraries.values():
+        total += len(keys)
+    if total == 0:
+        raise HTTPException(status_code=400, detail="Select at least one movie library")
+
+    set_plex_servers(req.servers)
+    set_selected_libraries(req.selected_libraries)
+
+    # Compatibility keys for older code paths and status display.
+    primary = req.servers[0]
+    set_setting("plex_server_name", str(primary.get("name", "")).strip())
+    set_setting("plex_server_url", str(primary.get("url", "")).strip())
+    set_setting("plex_server_token", str(primary.get("token", "")).strip())
+
+    mark_setup_complete()
+    return _setup_payload()
+
+
+@app.get("/api/settings")
+def get_settings_payload():
+    return {
+        "selectedServers": get_plex_servers(),
+        "selectedLibraries": get_selected_libraries(),
+        "pathMappings": get_path_mappings(),
+        "libraryPaths": get_library_paths(),
+        "advanced": {
+            "maxSearchDirs": int(get_setting("max_search_dirs", "20000") or "20000"),
+            "searchDepth": int(get_setting("search_depth", "4") or "4"),
+        },
+    }
+
+
+class SettingsPayload(BaseModel):
+    selectedServers: list[dict]
+    selectedLibraries: dict[str, list[str]]
+    pathMappings: list[dict]
+    libraryPaths: list[str]
+    advanced: dict = {}
+
+
+@app.post("/api/settings")
+def save_settings_payload(req: SettingsPayload):
+    set_plex_servers(req.selectedServers)
+    set_selected_libraries(req.selectedLibraries)
+    set_path_mappings(req.pathMappings)
+    set_library_paths(req.libraryPaths)
+
+    max_search_dirs = int(req.advanced.get("maxSearchDirs", 20000) or 20000)
+    search_depth = int(req.advanced.get("searchDepth", 4) or 4)
+    set_setting("max_search_dirs", str(max(500, min(max_search_dirs, 100000))))
+    set_setting("search_depth", str(max(1, min(search_depth, 10))))
+
+    if req.selectedServers:
+        primary = req.selectedServers[0]
+        set_setting("plex_server_name", str(primary.get("name", "")).strip())
+        set_setting("plex_server_url", str(primary.get("url", "")).strip())
+        set_setting("plex_server_token", str(primary.get("token", "")).strip())
+
+    if req.selectedServers and sum(len(v) for v in req.selectedLibraries.values()) > 0:
+        mark_setup_complete()
+
+    return get_settings_payload()
 
 
 @app.post("/api/setup/reset")
@@ -240,7 +369,7 @@ def list_movies():
 
 
 @app.get("/api/search/{movie_id}")
-def search_youtube(movie_id: int):
+def search_youtube(movie_id: str):
     movie = get_movie(movie_id)
     if not movie:
         raise HTTPException(status_code=404, detail="Movie not found")
@@ -271,12 +400,12 @@ def search_youtube(movie_id: int):
 
 
 class DownloadRequest(BaseModel):
-    movie_id: int
+    movie_id: str
     video_id: str
 
 
 class DownloadUrlRequest(BaseModel):
-    movie_id: int
+    movie_id: str
     url: str
 
 
@@ -384,7 +513,7 @@ def update_status():
     }
 
 
-def _download_theme_for_url(movie_id: int, url: str):
+def _download_theme_for_url(movie_id: str, url: str):
     movie = get_movie(movie_id)
     if not movie:
         raise HTTPException(status_code=404, detail="Movie not found")

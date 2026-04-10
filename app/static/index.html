@@ -32,7 +32,7 @@
           <h1 class="mt-4 text-4xl font-black tracking-tight text-white sm:text-5xl">Sign in with Plex</h1>
           <p class="mt-4 max-w-2xl text-sm leading-6 text-gray-300 sm:text-base">
             Themearr connects to your Plex account, reads your movie library, and uses the Plex media paths directly.
-            No extra setup fields are required.
+            You can choose the servers and libraries to include, then add path mappings if your container mount differs.
           </p>
 
           <div class="mt-8 grid gap-4 sm:grid-cols-2">
@@ -67,6 +67,19 @@
             </div>
 
             <p id="setup-status" class="text-sm text-gray-400"></p>
+            <div id="setup-selection" class="hidden space-y-3 rounded-xl border border-white/10 bg-white/5 p-4">
+              <div>
+                <p class="text-xs uppercase tracking-[0.18em] text-gray-400">Select servers</p>
+                <div id="setup-servers" class="mt-2 space-y-2"></div>
+              </div>
+              <div>
+                <p class="text-xs uppercase tracking-[0.18em] text-gray-400">Select movie libraries</p>
+                <div id="setup-libraries" class="mt-2 space-y-2"></div>
+              </div>
+              <button id="setup-save-selection" type="button" class="w-full rounded-xl bg-emerald-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-emerald-500">
+                Save server and library selection
+              </button>
+            </div>
             <p class="text-xs text-gray-500">
               Plex opens in a new tab. Come back here after approving the sign-in.
             </p>
@@ -197,6 +210,58 @@
       </div>
       <div class="bg-black px-5 py-4">
         <pre id="sync-modal-logs" class="max-h-[60vh] overflow-y-auto whitespace-pre-wrap break-words rounded-2xl border border-white/10 bg-gray-900 p-4 text-xs leading-5 text-cyan-200"></pre>
+      </div>
+    </div>
+  </div>
+
+  <div id="settings-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/70 px-4 py-6">
+    <div class="w-full max-w-4xl overflow-hidden rounded-3xl border border-white/10 bg-gray-950 shadow-2xl shadow-black/60">
+      <div class="flex items-center justify-between border-b border-white/10 px-5 py-4">
+        <div>
+          <h3 class="text-lg font-bold text-white">Settings</h3>
+          <p class="mt-1 text-sm text-gray-400">Configure Plex selection, path mappings, and fallback search.</p>
+        </div>
+        <button id="settings-modal-close" type="button" class="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm font-semibold text-gray-100 transition hover:bg-white/10">
+          Close
+        </button>
+      </div>
+      <div class="max-h-[70vh] overflow-y-auto px-5 py-4 space-y-4">
+        <section class="rounded-xl border border-white/10 bg-white/5 p-4">
+          <p class="text-xs uppercase tracking-[0.18em] text-gray-400">Servers</p>
+          <div id="settings-servers" class="mt-2 space-y-2"></div>
+        </section>
+        <section class="rounded-xl border border-white/10 bg-white/5 p-4">
+          <p class="text-xs uppercase tracking-[0.18em] text-gray-400">Libraries</p>
+          <div id="settings-libraries" class="mt-2 space-y-2"></div>
+        </section>
+        <section class="rounded-xl border border-white/10 bg-white/5 p-4">
+          <p class="text-xs uppercase tracking-[0.18em] text-gray-400">Path mappings (one per line)</p>
+          <p class="mt-1 text-xs text-gray-500">Format: /plex/source => /local/target</p>
+          <textarea id="settings-path-mappings" rows="5" class="mt-2 w-full rounded-lg border border-white/10 bg-gray-950 px-3 py-2 text-sm text-white"></textarea>
+        </section>
+        <section class="rounded-xl border border-white/10 bg-white/5 p-4">
+          <p class="text-xs uppercase tracking-[0.18em] text-gray-400">Library search roots (one path per line)</p>
+          <textarea id="settings-library-paths" rows="5" class="mt-2 w-full rounded-lg border border-white/10 bg-gray-950 px-3 py-2 text-sm text-white"></textarea>
+        </section>
+        <section class="rounded-xl border border-white/10 bg-white/5 p-4">
+          <p class="text-xs uppercase tracking-[0.18em] text-gray-400">Advanced</p>
+          <div class="mt-2 grid gap-3 sm:grid-cols-2">
+            <label class="text-sm text-gray-200">Search depth
+              <input id="settings-advanced-search-depth" type="number" min="1" max="10" class="mt-1 w-full rounded-lg border border-white/10 bg-gray-950 px-3 py-2 text-sm text-white" />
+            </label>
+            <label class="text-sm text-gray-200">Max scanned directories
+              <input id="settings-advanced-max-dirs" type="number" min="500" max="100000" class="mt-1 w-full rounded-lg border border-white/10 bg-gray-950 px-3 py-2 text-sm text-white" />
+            </label>
+          </div>
+        </section>
+      </div>
+      <div class="flex items-center justify-between border-t border-white/10 px-5 py-4">
+        <button id="settings-reset" type="button" class="rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-2 text-sm font-semibold text-red-200 transition hover:bg-red-500/20">
+          Reset setup and data
+        </button>
+        <button id="settings-save" type="button" class="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-500">
+          Save settings
+        </button>
       </div>
     </div>
   </div>

@@ -9,6 +9,11 @@ let updatePollTimer = null;
 let updateStatusTimer = null;
 let syncStatusTimer = null;
 let versionState = { current: '', latest: '', updateAvailable: false, updating: false };
+let availableServers = [];
+let availableLibrariesByServer = {};
+let setupSelectedServerIds = new Set();
+let setupSelectedLibraries = {};
+let settingsState = null;
 
 /* ── DOM refs ────────────────────────────────────────────────────────────── */
 const movieList = document.getElementById('movie-list');
@@ -48,9 +53,23 @@ const setupPlexLogin = document.getElementById('setup-plex-login');
 const setupStatus = document.getElementById('setup-status');
 const setupAccountName = document.getElementById('setup-account-name');
 const setupServerName = document.getElementById('setup-server-name');
+const setupSelection = document.getElementById('setup-selection');
+const setupServers = document.getElementById('setup-servers');
+const setupLibraries = document.getElementById('setup-libraries');
+const setupSaveSelection = document.getElementById('setup-save-selection');
 const setupUpdateBanner = document.getElementById('setup-update-banner');
 const setupUpdateText = document.getElementById('setup-update-text');
 const setupBtnUpdate = document.getElementById('setup-btn-update');
+const settingsModal = document.getElementById('settings-modal');
+const settingsModalClose = document.getElementById('settings-modal-close');
+const settingsServers = document.getElementById('settings-servers');
+const settingsLibraries = document.getElementById('settings-libraries');
+const settingsPathMappings = document.getElementById('settings-path-mappings');
+const settingsLibraryPaths = document.getElementById('settings-library-paths');
+const settingsAdvancedSearchDepth = document.getElementById('settings-advanced-search-depth');
+const settingsAdvancedMaxDirs = document.getElementById('settings-advanced-max-dirs');
+const settingsSave = document.getElementById('settings-save');
+const settingsReset = document.getElementById('settings-reset');
 
 /* ── Toast ───────────────────────────────────────────────────────────────── */
 let toastTimer = null;
@@ -101,9 +120,118 @@ function esc(str) {
 function setSetupConnection(status) {
   setupAccountName.textContent = status.plexAccountName || 'Not connected';
   setupServerName.textContent = status.plexServerName
-    ? `Server: ${status.plexServerName}`
-    : 'Sign in to select your Plex server';
+    ? `Servers: ${status.plexServerName}`
+    : 'Sign in, then choose your Plex servers and libraries';
   setupPlexLogin.textContent = status.plexConnected ? 'Reconnect with Plex' : 'Sign in with Plex';
+}
+
+function renderServerCheckboxes(container, servers, selectedIds, onChange) {
+  if (!container) return;
+  container.innerHTML = '';
+  if (!servers.length) {
+    container.innerHTML = '<p class="text-xs text-gray-500">No servers found.</p>';
+    return;
+  }
+
+  servers.forEach((server) => {
+    const row = document.createElement('label');
+    row.className = 'flex items-center gap-2 rounded border border-white/10 bg-white/5 px-3 py-2 text-sm';
+    const checked = selectedIds.has(server.id) ? 'checked' : '';
+    row.innerHTML = `
+      <input type="checkbox" class="server-select" data-server-id="${esc(server.id)}" ${checked} />
+      <span class="font-medium text-white">${esc(server.name || server.url)}</span>
+      <span class="text-xs text-gray-400">${esc(server.url)}</span>
+    `;
+    container.appendChild(row);
+  });
+
+  container.querySelectorAll('.server-select').forEach((input) => {
+    input.addEventListener('change', () => onChange());
+  });
+}
+
+function collectSelectedServerIds(container) {
+  const result = new Set();
+  container?.querySelectorAll('.server-select:checked').forEach((input) => {
+    if (input.dataset.serverId) result.add(input.dataset.serverId);
+  });
+  return result;
+}
+
+function renderLibraryCheckboxes(container, librariesByServer, selectedServerIds, selectedLibraries, onChange) {
+  if (!container) return;
+  container.innerHTML = '';
+  if (!selectedServerIds.size) {
+    container.innerHTML = '<p class="text-xs text-gray-500">Select at least one server first.</p>';
+    return;
+  }
+
+  Array.from(selectedServerIds).forEach((serverId) => {
+    const libs = librariesByServer[serverId] || [];
+    const section = document.createElement('div');
+    section.className = 'rounded border border-white/10 bg-white/5 p-3';
+    section.innerHTML = `<p class="mb-2 text-xs uppercase tracking-wide text-gray-400">${esc(serverId)}</p>`;
+
+    if (!libs.length) {
+      const empty = document.createElement('p');
+      empty.className = 'text-xs text-gray-500';
+      empty.textContent = 'No movie libraries found on this server.';
+      section.appendChild(empty);
+    } else {
+      libs.forEach((lib) => {
+        const row = document.createElement('label');
+        row.className = 'mb-1 flex items-center gap-2 text-sm text-gray-200';
+        const checked = (selectedLibraries[serverId] || []).includes(lib.key) ? 'checked' : '';
+        row.innerHTML = `<input type="checkbox" class="library-select" data-server-id="${esc(serverId)}" data-library-key="${esc(lib.key)}" ${checked} /><span>${esc(lib.title)}</span>`;
+        section.appendChild(row);
+      });
+    }
+
+    container.appendChild(section);
+  });
+
+  container.querySelectorAll('.library-select').forEach((input) => {
+    input.addEventListener('change', () => onChange());
+  });
+}
+
+function collectSelectedLibraries(container) {
+  const result = {};
+  container?.querySelectorAll('.library-select:checked').forEach((input) => {
+    const serverId = input.dataset.serverId;
+    const libraryKey = input.dataset.libraryKey;
+    if (!serverId || !libraryKey) return;
+    if (!result[serverId]) result[serverId] = [];
+    result[serverId].push(libraryKey);
+  });
+  return result;
+}
+
+async function loadSetupSelectionOptions(prefill = null) {
+  const serversPayload = await api('GET', '/api/setup/plex/servers');
+  availableServers = serversPayload.servers || [];
+
+  const selectedFromPrefill = new Set((prefill?.selectedServers || []).map((s) => s.id));
+  setupSelectedServerIds = selectedFromPrefill.size ? selectedFromPrefill : new Set(availableServers.map((s) => s.id));
+
+  const selectedServersForLibraryQuery = availableServers.filter((s) => setupSelectedServerIds.has(s.id));
+  const libsPayload = await api('POST', '/api/setup/plex/libraries', { servers: selectedServersForLibraryQuery });
+  availableLibrariesByServer = libsPayload.libraries || {};
+  setupSelectedLibraries = prefill?.selectedLibraries || {};
+
+  setupSelection.classList.remove('hidden');
+  renderServerCheckboxes(setupServers, availableServers, setupSelectedServerIds, async () => {
+    setupSelectedServerIds = collectSelectedServerIds(setupServers);
+    const selectedServers = availableServers.filter((s) => setupSelectedServerIds.has(s.id));
+    const libs = await api('POST', '/api/setup/plex/libraries', { servers: selectedServers });
+    availableLibrariesByServer = libs.libraries || {};
+    renderLibraryCheckboxes(setupLibraries, availableLibrariesByServer, setupSelectedServerIds, setupSelectedLibraries, () => {
+      setupSelectedLibraries = collectSelectedLibraries(setupLibraries);
+    });
+  });
+  renderLibraryCheckboxes(setupLibraries, availableLibrariesByServer, setupSelectedServerIds, setupSelectedLibraries, () => {
+    setupSelectedLibraries = collectSelectedLibraries(setupLibraries);
+  });
 }
 
 function clearPlexLoginPolling() {
@@ -141,9 +269,18 @@ async function loadSetupState() {
   if (!setupReady) {
     setAppVisible(false);
     setupStatus.textContent = state.plexConnected
-      ? 'Plex is connected. Finalizing setup...'
+      ? 'Plex is connected. Select servers and libraries to complete setup.'
       : 'Sign in with Plex to continue.';
     setupPlexLogin.disabled = false;
+    if (state.plexConnected) {
+      try {
+        await loadSetupSelectionOptions(state);
+      } catch (e) {
+        setupStatus.textContent = `Failed to load server selection: ${e.message}`;
+      }
+    } else {
+      setupSelection.classList.add('hidden');
+    }
     return false;
   }
 
@@ -168,11 +305,10 @@ async function pollPlexLogin(pinId, code) {
 
     clearPlexLoginPolling();
     pendingPlexLogin = null;
-    setupStatus.textContent = `Connected to ${status.accountName || 'Plex'}${status.serverName ? ` on ${status.serverName}` : ''}.`;
+    setupStatus.textContent = `Connected to ${status.accountName || 'Plex'}. Select servers and libraries below.`;
     setupPlexLogin.disabled = false;
     showToast('Plex sign-in complete');
     await loadSetupState();
-    await enterApp();
   } catch (e) {
     clearPlexLoginPolling();
     setupPlexLogin.disabled = false;
@@ -238,6 +374,7 @@ async function resetAppToSetup() {
     setupPlexLogin.disabled = false;
     clearPlexLoginPolling();
     pendingPlexLogin = null;
+    setupSelection.classList.add('hidden');
     setAppVisible(false);
     await loadSetupState();
     showToast('App reset. Sign in with Plex to continue.');
@@ -245,6 +382,29 @@ async function resetAppToSetup() {
     showToast(`Reset failed: ${e.message}`, 'error');
   }
 }
+
+setupSaveSelection?.addEventListener('click', async () => {
+  setupSelectedServerIds = collectSelectedServerIds(setupServers);
+  setupSelectedLibraries = collectSelectedLibraries(setupLibraries);
+  const selectedServers = availableServers.filter((server) => setupSelectedServerIds.has(server.id));
+
+  setupSaveSelection.disabled = true;
+  setupSaveSelection.textContent = 'Saving...';
+  try {
+    await api('POST', '/api/setup/plex/selection', {
+      servers: selectedServers,
+      selected_libraries: setupSelectedLibraries,
+    });
+    showToast('Setup saved');
+    await loadSetupState();
+    await enterApp();
+  } catch (e) {
+    showToast(`Setup save failed: ${e.message}`, 'error');
+  } finally {
+    setupSaveSelection.disabled = false;
+    setupSaveSelection.textContent = 'Save server and library selection';
+  }
+});
 
 setupPlexLogin?.addEventListener('click', startPlexLogin);
 window.addEventListener('focus', checkPendingPlexLoginSoon);
@@ -332,6 +492,99 @@ function setSyncModalVisible(isVisible) {
     syncModal.classList.add('hidden');
     syncModal.classList.remove('flex');
   }
+}
+
+function setSettingsModalVisible(isVisible) {
+  if (isVisible) {
+    settingsModal.classList.remove('hidden');
+    settingsModal.classList.add('flex');
+  } else {
+    settingsModal.classList.add('hidden');
+    settingsModal.classList.remove('flex');
+  }
+}
+
+function mappingsToText(mappings) {
+  return (mappings || []).map((m) => `${m.source} => ${m.target}`).join('\n');
+}
+
+function textToMappings(value) {
+  const rows = String(value || '').split('\n').map((line) => line.trim()).filter(Boolean);
+  const result = [];
+  rows.forEach((row) => {
+    const parts = row.split('=>');
+    if (parts.length !== 2) return;
+    result.push({ source: parts[0].trim(), target: parts[1].trim() });
+  });
+  return result;
+}
+
+function pathsToText(paths) {
+  return (paths || []).join('\n');
+}
+
+function textToPaths(value) {
+  return String(value || '').split('\n').map((line) => line.trim()).filter(Boolean);
+}
+
+async function loadSettingsModal() {
+  const [settingsPayload, serversPayload] = await Promise.all([
+    api('GET', '/api/settings'),
+    api('GET', '/api/setup/plex/servers'),
+  ]);
+
+  settingsState = settingsPayload;
+  availableServers = serversPayload.servers || [];
+  const selectedIds = new Set((settingsPayload.selectedServers || []).map((s) => s.id));
+
+  renderServerCheckboxes(settingsServers, availableServers, selectedIds, async () => {
+    const serverIds = collectSelectedServerIds(settingsServers);
+    const selectedServers = availableServers.filter((s) => serverIds.has(s.id));
+    const librariesPayload = await api('POST', '/api/setup/plex/libraries', { servers: selectedServers });
+    availableLibrariesByServer = librariesPayload.libraries || {};
+    renderLibraryCheckboxes(
+      settingsLibraries,
+      availableLibrariesByServer,
+      serverIds,
+      settingsState.selectedLibraries || {},
+      () => {},
+    );
+  });
+
+  const initialServers = availableServers.filter((s) => selectedIds.has(s.id));
+  const librariesPayload = await api('POST', '/api/setup/plex/libraries', { servers: initialServers });
+  availableLibrariesByServer = librariesPayload.libraries || {};
+  renderLibraryCheckboxes(
+    settingsLibraries,
+    availableLibrariesByServer,
+    selectedIds,
+    settingsPayload.selectedLibraries || {},
+    () => {},
+  );
+
+  settingsPathMappings.value = mappingsToText(settingsPayload.pathMappings || []);
+  settingsLibraryPaths.value = pathsToText(settingsPayload.libraryPaths || []);
+  settingsAdvancedSearchDepth.value = settingsPayload.advanced?.searchDepth ?? 4;
+  settingsAdvancedMaxDirs.value = settingsPayload.advanced?.maxSearchDirs ?? 20000;
+}
+
+async function saveSettingsModal() {
+  const selectedServerIds = collectSelectedServerIds(settingsServers);
+  const selectedServers = availableServers.filter((s) => selectedServerIds.has(s.id));
+  const selectedLibraries = collectSelectedLibraries(settingsLibraries);
+
+  const payload = {
+    selectedServers,
+    selectedLibraries,
+    pathMappings: textToMappings(settingsPathMappings.value),
+    libraryPaths: textToPaths(settingsLibraryPaths.value),
+    advanced: {
+      searchDepth: Number(settingsAdvancedSearchDepth.value || 4),
+      maxSearchDirs: Number(settingsAdvancedMaxDirs.value || 20000),
+    },
+  };
+
+  await api('POST', '/api/settings', payload);
 }
 
 function renderUpdateModal(status) {
@@ -473,11 +726,35 @@ async function triggerUpdate(button = null) {
 
 btnUpdate?.addEventListener('click', () => triggerUpdate(btnUpdate));
 setupBtnUpdate?.addEventListener('click', () => triggerUpdate(setupBtnUpdate));
-btnSettings?.addEventListener('click', resetAppToSetup);
+btnSettings?.addEventListener('click', async () => {
+  try {
+    await loadSettingsModal();
+    setSettingsModalVisible(true);
+  } catch (e) {
+    showToast(`Failed to open settings: ${e.message}`, 'error');
+  }
+});
 updateModalClose?.addEventListener('click', () => {
   if (updateStatusTimer) return;
   setUpdateModalVisible(false);
 });
+settingsModalClose?.addEventListener('click', () => setSettingsModalVisible(false));
+settingsSave?.addEventListener('click', async () => {
+  settingsSave.disabled = true;
+  settingsSave.textContent = 'Saving...';
+  try {
+    await saveSettingsModal();
+    await loadSetupState();
+    showToast('Settings saved');
+    setSettingsModalVisible(false);
+  } catch (e) {
+    showToast(`Settings save failed: ${e.message}`, 'error');
+  } finally {
+    settingsSave.disabled = false;
+    settingsSave.textContent = 'Save settings';
+  }
+});
+settingsReset?.addEventListener('click', resetAppToSetup);
 
 /* ── Sync Plex ─────────────────────────────────────────────────────────── */
 btnSync?.addEventListener('click', async () => {
@@ -688,7 +965,7 @@ function renderResults(movie, results) {
 }
 
 async function handleDownload(button) {
-  const movieId = parseInt(button.dataset.movieId, 10);
+  const movieId = String(button.dataset.movieId || '');
   const videoId = button.dataset.videoId;
 
   resultsGrid.querySelectorAll('.btn-download').forEach((downloadButton) => {
