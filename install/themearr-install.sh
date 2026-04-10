@@ -32,7 +32,6 @@ $STD bash -c "curl -fsSL https://deno.land/install.sh | DENO_INSTALL=/usr/local 
 msg_ok "Installed Deno"
 
 fetch_and_deploy_gh_release "yt-dlp" "yt-dlp/yt-dlp" "singlefile" "latest" "/usr/local/bin" "yt-dlp"
-chmod +x /usr/local/bin/yt-dlp
 
 fetch_and_deploy_gh_release "themearr" "Themearr/themearr" "tarball" "latest" "/opt/themearr"
 
