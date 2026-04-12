@@ -1,106 +1,98 @@
 #!/usr/bin/env bash
+# Themearr fresh-install script
+# Called by the ProxmoxVE install script after system deps are in place.
+# Also suitable for any fresh Linux install where .NET runtime, ffmpeg,
+# and yt-dlp are already available.
+#
+# Usage: bash install.sh [version]  (defaults to latest GitHub release)
 set -euo pipefail
 
-APP_DIR="/opt/themearr"
-APP_USER="themearr"
-APP_UID=1000
-APP_GID=1000
+GITHUB_REPO="Themearr/themearr"
+INSTALL_DIR="/opt/themearr"
+DATA_DIR="$INSTALL_DIR/data"
+SERVICE="themearr"
+UPDATER="/usr/local/bin/themearr-update"
 
-# ── System dependencies ───────────────────────────────────────────────────────
-echo "[1/5] Installing system packages…"
-apt-get update -qq
-apt-get install -y --no-install-recommends \
-    python3-venv \
-    python3-pip \
-    sudo \
-    ffmpeg \
-    curl \
-    nodejs \
-    unzip
+info()  { echo "  [INFO]  $*"; }
+ok()    { echo "  [OK]    $*"; }
+error() { echo "  [ERROR] $*" >&2; exit 1; }
 
-# Install deno (needed for yt-dlp JavaScript extraction)
-echo "[1b/5] Installing deno…"
-curl -fsSL https://deno.land/install.sh | DENO_INSTALL=/usr/local sh
-export PATH="/usr/local/bin:$PATH"
+# ── Resolve release asset ─────────────────────────────────────────────────────
 
-# Install yt-dlp as a standalone binary (kept outside the venv so it can self-update)
-echo "[2/5] Installing yt-dlp…"
-curl -sSL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp \
-    -o /usr/local/bin/yt-dlp
-chmod +x /usr/local/bin/yt-dlp
-
-# ── System user & group ───────────────────────────────────────────────────────
-echo "[3/5] Creating system user '${APP_USER}' (UID=${APP_UID}, GID=${APP_GID})…"
-
-if ! getent group "${APP_USER}" > /dev/null 2>&1; then
-    groupadd --gid "${APP_GID}" "${APP_USER}"
-fi
-
-if ! id -u "${APP_USER}" > /dev/null 2>&1; then
-    useradd \
-        --uid "${APP_UID}" \
-        --gid "${APP_GID}" \
-        --no-create-home \
-        --shell /usr/sbin/nologin \
-        "${APP_USER}"
+TARGET="${1:-latest}"
+if [[ "$TARGET" == "latest" ]]; then
+  RELEASE_JSON=$(curl -fsSL "https://api.github.com/repos/$GITHUB_REPO/releases/latest")
 else
-    # User exists — enforce the correct UID/GID
-    usermod --uid "${APP_UID}" "${APP_USER}"
-    groupmod --gid "${APP_GID}" "${APP_USER}"
+  RELEASE_JSON=$(curl -fsSL "https://api.github.com/repos/$GITHUB_REPO/releases/tags/$TARGET")
 fi
 
-# ── App directory & Python venv ───────────────────────────────────────────────
-echo "[4/5] Setting up application in ${APP_DIR}…"
+TAG=$(echo "$RELEASE_JSON" | grep '"tag_name"' | head -1 | cut -d'"' -f4)
+[[ -z "$TAG" ]] && error "Could not determine release tag from GitHub API"
 
-mkdir -p "${APP_DIR}/data"
+ARCH=$(uname -m)
+case "$ARCH" in
+  x86_64)  ARCH_SUFFIX="linux-x64" ;;
+  aarch64) ARCH_SUFFIX="linux-arm64" ;;
+  *)       error "Unsupported architecture: $ARCH" ;;
+esac
 
-# Copy application source
-cp -r app/         "${APP_DIR}/app"
-cp    requirements.txt "${APP_DIR}/requirements.txt"
-if [ -f VERSION ]; then
-    cp VERSION "${APP_DIR}/VERSION"
-fi
+ASSET_URL=$(echo "$RELEASE_JSON" \
+  | grep '"browser_download_url"' \
+  | grep "$ARCH_SUFFIX" \
+  | head -1 \
+  | cut -d'"' -f4)
 
-# Install helper updater command used by the web UI update action.
-cat > /usr/local/bin/themearr-update <<'EOF'
+[[ -z "$ASSET_URL" ]] && error "No release asset found for $ARCH_SUFFIX in $TAG. Check that the GitHub release includes a $ARCH_SUFFIX.tar.gz artifact."
+
+info "Installing Themearr $TAG ($ARCH_SUFFIX)"
+
+# ── Download and extract ──────────────────────────────────────────────────────
+
+mkdir -p "$INSTALL_DIR"
+mkdir -p "$DATA_DIR"
+
+TMP=$(mktemp /tmp/themearr-XXXXXX.tar.gz)
+info "Downloading release..."
+curl -fsSL "$ASSET_URL" -o "$TMP"
+tar -xzf "$TMP" -C "$INSTALL_DIR" --strip-components=1
+rm -f "$TMP"
+ok "Extracted to $INSTALL_DIR"
+
+echo "$TAG" > "$INSTALL_DIR/VERSION"
+
+# ── Systemd service ───────────────────────────────────────────────────────────
+
+cat > /etc/systemd/system/themearr.service << EOF
+[Unit]
+Description=Themearr Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=$INSTALL_DIR
+Environment="HOME=$DATA_DIR"
+Environment="XDG_CACHE_HOME=$DATA_DIR/.cache"
+Environment="DB_PATH=$DATA_DIR/themearr.db"
+Environment="THEMEARR_VERSION_FILE=$INSTALL_DIR/VERSION"
+Environment="ASPNETCORE_URLS=http://0.0.0.0:8080"
+ExecStart=/usr/bin/dotnet $INSTALL_DIR/Themearr.API.dll
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# ── Updater helper ─────────────────────────────────────────────────────────────
+# Fixed path so the in-app updater (UpdateService.cs) can always find it.
+
+cat > "$UPDATER" << 'UPDATER_EOF'
 #!/usr/bin/env bash
-set -euo pipefail
+curl -fsSL https://raw.githubusercontent.com/Themearr/themearr/main/deploy.sh | bash
+UPDATER_EOF
+chmod +x "$UPDATER"
 
-TMP_DEPLOY="/tmp/themearr-deploy.sh"
-curl -fsSL https://raw.githubusercontent.com/Themearr/themearr/main/deploy.sh -o "$TMP_DEPLOY"
-bash "$TMP_DEPLOY"
-systemctl restart themearr
-EOF
-chmod 755 /usr/local/bin/themearr-update
-
-# Allow the service user to run only the dedicated updater command without a password.
-mkdir -p /etc/sudoers.d
-cat > /etc/sudoers.d/themearr-update <<'EOF'
-themearr ALL=(root) NOPASSWD: /usr/local/bin/themearr-update
-EOF
-chmod 440 /etc/sudoers.d/themearr-update
-
-# Python virtual environment
-python3 -m venv "${APP_DIR}/venv"
-"${APP_DIR}/venv/bin/pip" install --quiet --upgrade pip
-# Some environments may temporarily build Rust-backed deps from source.
-# This allows PyO3-based builds to proceed on newer Python versions when needed.
-PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 "${APP_DIR}/venv/bin/pip" install --quiet -r "${APP_DIR}/requirements.txt"
-
-# Ownership
-chown -R "${APP_USER}:${APP_USER}" "${APP_DIR}"
-
-# ── systemd service ───────────────────────────────────────────────────────────
-echo "[5/5] Installing systemd service…"
-cp themearr.service /etc/systemd/system/themearr.service
 systemctl daemon-reload
-systemctl enable themearr.service
-
-echo ""
-echo "✔  Installation complete."
-echo "   Open the web UI to complete the first-run setup by signing in with Plex."
-echo "   App updates can be triggered from the UI when a new GitHub release is published."
-echo "   Logs:                            journalctl -u themearr -f"
-
-# Start the service immediately so the UI is available after deployment.
-systemctl restart themearr
+systemctl enable --now "$SERVICE"
+ok "Service started — Themearr $TAG is running on port 8080"

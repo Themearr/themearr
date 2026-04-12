@@ -1,0 +1,89 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write   # needed to create the GitHub release and upload assets
+
+jobs:
+  build:
+    name: Build & release
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── Checkout ────────────────────────────────────────────────────────────
+      - uses: actions/checkout@v4
+
+      # ── Build Next.js frontend ───────────────────────────────────────────────
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: src/Themearr.Web/package-lock.json
+
+      - name: Build frontend
+        working-directory: src/Themearr.Web
+        run: |
+          npm ci
+          npm run build
+        # Output is in src/Themearr.Web/out/ (static export)
+
+      # ── Build .NET API ────────────────────────────────────────────────────────
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Publish linux-x64
+        run: |
+          dotnet publish src/Themearr.API/Themearr.API.csproj \
+            -c Release \
+            -r linux-x64 \
+            --no-self-contained \
+            -o _publish/linux-x64
+
+      - name: Publish linux-arm64
+        run: |
+          dotnet publish src/Themearr.API/Themearr.API.csproj \
+            -c Release \
+            -r linux-arm64 \
+            --no-self-contained \
+            -o _publish/linux-arm64
+
+      # ── Inject frontend into each publish output ──────────────────────────────
+      - name: Inject frontend into publish outputs
+        run: |
+          cp -r src/Themearr.Web/out _publish/linux-x64/wwwroot
+          cp -r src/Themearr.Web/out _publish/linux-arm64/wwwroot
+
+      # ── Create tarballs ───────────────────────────────────────────────────────
+      # --strip-components=1 is used by install.sh / deploy.sh, so we wrap
+      # everything in a single top-level directory inside the archive.
+      - name: Create tarballs
+        run: |
+          TAG=${GITHUB_REF_NAME}
+
+          mkdir -p _dist
+
+          # x64
+          mv _publish/linux-x64 _publish/themearr-${TAG}-linux-x64
+          tar -czf _dist/themearr-linux-x64.tar.gz \
+            -C _publish \
+            themearr-${TAG}-linux-x64
+
+          # arm64
+          mv _publish/linux-arm64 _publish/themearr-${TAG}-linux-arm64
+          tar -czf _dist/themearr-linux-arm64.tar.gz \
+            -C _publish \
+            themearr-${TAG}-linux-arm64
+
+      # ── Create GitHub release & upload assets ─────────────────────────────────
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            _dist/themearr-linux-x64.tar.gz
+            _dist/themearr-linux-arm64.tar.gz

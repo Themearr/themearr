@@ -1,0 +1,22 @@
+services:
+  themearr:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APP_VERSION: dev
+    container_name: themearr
+    ports:
+      - "8080:8080"
+    volumes:
+      # Persist database and config
+      - themearr-data:/opt/themearr/data
+      # Mount your movie library (adjust to your local path)
+      - /path/to/your/movies:/movies:ro
+    environment:
+      - DB_PATH=/opt/themearr/data/themearr.db
+      - ASPNETCORE_ENVIRONMENT=Production
+    restart: unless-stopped
+
+volumes:
+  themearr-data:
