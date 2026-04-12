@@ -2,8 +2,8 @@ name: Release App
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches:
+      - main
 
 permissions:
   contents: write   # needed to create the GitHub release and upload assets
@@ -21,8 +21,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: 'npm'
-          cache-dependency-path: src/Themearr.Web/package-lock.json
 
       - name: Build frontend
         working-directory: src/Themearr.Web
@@ -79,11 +77,13 @@ jobs:
             -C _publish \
             themearr-${TAG}-linux-arm64
 
-      # ── Create GitHub release & upload assets ─────────────────────────────────
-      - name: Create GitHub release
+      # ── Create/update rolling latest release ──────────────────────────────────
+      - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: true
+          tag_name: latest
+          name: Latest
+          prerelease: true
           files: |
             _dist/themearr-linux-x64.tar.gz
             _dist/themearr-linux-arm64.tar.gz
