@@ -88,7 +88,7 @@ echo "$TAG" > "$INSTALL_DIR/VERSION"
 ok "Themearr $TAG deployed — scheduling service restart"
 systemctl daemon-reload
 if command -v systemd-run &>/dev/null; then
-  systemd-run --no-block --unit=themearr-restart \
+  systemd-run --no-block --unit="themearr-restart-$$" \
     --description="Restart Themearr after update" \
     /bin/systemctl restart "$SERVICE"
 else
