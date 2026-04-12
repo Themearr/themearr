@@ -4,18 +4,62 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 permissions:
-  contents: write   # needed to create the GitHub release and upload assets
+  contents: write
 
 jobs:
-  build:
-    name: Build & release
+  release:
     runs-on: ubuntu-latest
 
     steps:
-      # ── Checkout ────────────────────────────────────────────────────────────
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ── Determine next semver tag ────────────────────────────────────────────
+      - name: Determine bump and next version
+        id: semver
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --tags --force
+
+          latest_tag="$(git tag --list 'v*' --sort=-v:refname | head -n1)"
+          [[ -z "${latest_tag}" ]] && latest_tag="v0.0.0"
+
+          range=""
+          if [[ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]]; then
+            range="${{ github.event.before }}..${{ github.sha }}"
+          fi
+
+          commit_messages=""
+          if [[ -n "${range}" ]]; then
+            commit_messages="$(git log --format=%s "${range}")"
+          else
+            commit_messages="$(git log --format=%s -n 1 "${{ github.sha }}")"
+          fi
+
+          bump="patch"
+          if echo "${commit_messages}" | grep -Eqi '(^major:)|(#major)|BREAKING CHANGE|!:'; then
+            bump="major"
+          elif echo "${commit_messages}" | grep -Eqi '(^minor:)|(^feat(\(.+\))?:)|(#minor)'; then
+            bump="minor"
+          fi
+
+          current="${latest_tag#v}"
+          IFS='.' read -r major minor patch <<< "${current}"
+          case "${bump}" in
+            major) major=$((major + 1)); minor=0; patch=0 ;;
+            minor) minor=$((minor + 1)); patch=0 ;;
+            *)     patch=$((patch + 1)) ;;
+          esac
+
+          next_tag="v${major}.${minor}.${patch}"
+          echo "latest_tag=${latest_tag}" >> "$GITHUB_OUTPUT"
+          echo "bump=${bump}"             >> "$GITHUB_OUTPUT"
+          echo "next_tag=${next_tag}"     >> "$GITHUB_OUTPUT"
 
       # ── Build Next.js frontend ───────────────────────────────────────────────
       - uses: actions/setup-node@v4
@@ -27,7 +71,6 @@ jobs:
         run: |
           npm ci
           npm run build
-        # Output is in src/Themearr.Web/out/ (static export)
 
       # ── Build .NET API ────────────────────────────────────────────────────────
       - uses: actions/setup-dotnet@v4
@@ -37,53 +80,42 @@ jobs:
       - name: Publish linux-x64
         run: |
           dotnet publish src/Themearr.API/Themearr.API.csproj \
-            -c Release \
-            -r linux-x64 \
-            --no-self-contained \
+            -c Release -r linux-x64 --no-self-contained \
             -o _publish/linux-x64
 
       - name: Publish linux-arm64
         run: |
           dotnet publish src/Themearr.API/Themearr.API.csproj \
-            -c Release \
-            -r linux-arm64 \
-            --no-self-contained \
+            -c Release -r linux-arm64 --no-self-contained \
             -o _publish/linux-arm64
 
-      # ── Inject frontend into each publish output ──────────────────────────────
-      - name: Inject frontend into publish outputs
+      # ── Inject frontend into publish outputs ──────────────────────────────────
+      - name: Inject frontend
         run: |
           cp -r src/Themearr.Web/out _publish/linux-x64/wwwroot
           cp -r src/Themearr.Web/out _publish/linux-arm64/wwwroot
 
       # ── Create tarballs ───────────────────────────────────────────────────────
-      # --strip-components=1 is used by install.sh / deploy.sh, so we wrap
-      # everything in a single top-level directory inside the archive.
       - name: Create tarballs
         run: |
-          TAG=${GITHUB_REF_NAME}
-
+          TAG=${{ steps.semver.outputs.next_tag }}
           mkdir -p _dist
-
-          # x64
-          mv _publish/linux-x64 _publish/themearr-${TAG}-linux-x64
-          tar -czf _dist/themearr-linux-x64.tar.gz \
-            -C _publish \
-            themearr-${TAG}-linux-x64
-
-          # arm64
+          mv _publish/linux-x64   _publish/themearr-${TAG}-linux-x64
           mv _publish/linux-arm64 _publish/themearr-${TAG}-linux-arm64
-          tar -czf _dist/themearr-linux-arm64.tar.gz \
-            -C _publish \
-            themearr-${TAG}-linux-arm64
+          tar -czf _dist/themearr-linux-x64.tar.gz   -C _publish themearr-${TAG}-linux-x64
+          tar -czf _dist/themearr-linux-arm64.tar.gz -C _publish themearr-${TAG}-linux-arm64
 
-      # ── Create/update rolling latest release ──────────────────────────────────
-      - name: Publish release
+      # ── Create GitHub release with binary assets ──────────────────────────────
+      - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: latest
-          name: Latest
-          prerelease: true
+          tag_name: ${{ steps.semver.outputs.next_tag }}
+          target_commitish: ${{ github.sha }}
+          name: ${{ steps.semver.outputs.next_tag }}
+          generate_release_notes: true
+          body: |
+            Version bump: `${{ steps.semver.outputs.bump }}`
+            Previous tag: `${{ steps.semver.outputs.latest_tag }}`
           files: |
             _dist/themearr-linux-x64.tar.gz
             _dist/themearr-linux-arm64.tar.gz
