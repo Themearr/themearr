@@ -1,11 +1,17 @@
 .git
 .github
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
+.gitignore
+
+# .NET
+src/Themearr.API/bin/
+src/Themearr.API/obj/
+
+# Next.js
+src/Themearr.Web/node_modules/
+src/Themearr.Web/.next/
+src/Themearr.Web/out/
+
+# Data / secrets
 *.db
 .env
-venv/
-.venv/
 data/
