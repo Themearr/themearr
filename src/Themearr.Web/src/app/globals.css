@@ -15,15 +15,15 @@
   --color-gray-100: #F2F4F7;
   --color-gray-50:  #F9FAFB;
 
-  /* Brand — Violet (UntitledUI primary) */
-  --color-brand-900: #3E1C96;
-  --color-brand-700: #6941C6;
-  --color-brand-600: #7F56D9;
-  --color-brand-500: #9E77ED;
-  --color-brand-400: #B692F6;
-  --color-brand-300: #D6BBFB;
-  --color-brand-100: #F4EBFF;
-  --color-brand-50:  #F9F5FF;
+  /* Brand — Red */
+  --color-brand-900: #660000;
+  --color-brand-700: #990000;
+  --color-brand-600: #BB0000;
+  --color-brand-500: #CC3333;
+  --color-brand-400: #E07777;
+  --color-brand-300: #F4AAAA;
+  --color-brand-100: #FDE8E8;
+  --color-brand-50:  #FFF5F5;
 
   /* Success */
   --color-success-700: #027A48;

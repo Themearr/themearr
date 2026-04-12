@@ -1,118 +1,98 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="app/static/logo-dark.png">
-    <source media="(prefers-color-scheme: light)" srcset="app/static/logo.png">
-    <img src="app/static/logo.png" alt="Themearr logo" width="420" />
+    <source media="(prefers-color-scheme: dark)" srcset="src/Themearr.Web/public/logo.svg">
+    <source media="(prefers-color-scheme: light)" srcset="src/Themearr.Web/public/logo-dark.svg">
+    <img src="src/Themearr.Web/public/logo.svg" alt="Themearr" height="48" />
   </picture>
 </p>
-
-<h1 align="center">Themearr</h1>
 
 <p align="center">
   Automatic movie theme song downloader for Plex libraries.
 </p>
 
 <p align="center">
-  <a href="https://github.com/Themearr/themearr">GitHub</a>
+  <a href="https://github.com/Themearr/themearr/releases">Releases</a> ·
+  <a href="https://github.com/Themearr/ProxmoxVE">Proxmox Scripts</a>
 </p>
 
-## What It Does
+---
 
-Themearr helps you add a `theme.mp3` file to each movie folder in your library.
-It signs in with Plex, reads your Plex movie library, and uses the media file paths Plex already knows about.
+## What it does
 
-It provides a browser UI where you can:
+Themearr signs in with your Plex account, reads your movie libraries, and helps you add a `theme.mp3` to every movie folder — the file Plex uses to play background music while browsing.
 
-- Sync movies from Plex
-- Search YouTube for likely theme tracks
-- Download a selected result with one click
-- Open the movie query in YouTube directly
-- Paste any video URL and download it
-- Auto-advance to the next pending movie after each completed download
+- Browse your full Plex library as a poster grid
+- Auto-search YouTube for each movie's theme
+- One-click download via `yt-dlp`
+- Paste any video URL to use a custom source
+- Downloaded status tracked per movie
 
-## One-Line Proxmox LXC Install
+## One-line Proxmox LXC install
 
 Run this on your Proxmox host:
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/Themearr/themearr/main/create_lxc.sh?nocache=$(date +%s))"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/Themearr/ProxmoxVE/main/ct/themearr.sh)"
 ```
 
-After deployment, open the app in your browser and complete first-run setup.
+After the container is created, open `http://<container-ip>:8080` and sign in with Plex.
 
-## First-Run Setup
+## Tech stack
 
-In the web UI, sign in with Plex.
+| Layer | Technology |
+|---|---|
+| API | .NET 9 Web API (ASP.NET Core) |
+| Frontend | Next.js 16 (static export, served by .NET) |
+| Database | SQLite via `Microsoft.Data.Sqlite` |
+| YouTube | `YoutubeExplode` + `yt-dlp` |
+| Audio | `ffmpeg` |
 
-Then click sync to import your Plex movie library.
-
-## Download Workflow
-
-1. Select a movie from the left list.
-2. Review up to 3 YouTube matches.
-3. Click `Accept & Download` for the best result, or paste a URL and submit.
-4. Themearr saves audio as `theme.mp3` in the movie folder.
-5. The UI automatically moves to the next pending movie.
-
-## Tech Stack
-
-- FastAPI + Uvicorn
-- `yt-dlp` + `ffmpeg`
-- Lightweight frontend (HTML + Tailwind + vanilla JS)
-- SQLite-backed app state
-
-## Local Development
+## Local development
 
 ### Requirements
 
-- Python 3.12+
-- `ffmpeg`
-- `yt-dlp`
+- [.NET 9 SDK](https://dotnet.microsoft.com/download)
+- [Node.js 22+](https://nodejs.org/)
+- `yt-dlp` and `ffmpeg` in `PATH`
 
 ### Run
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8080
+# Terminal 1 — API
+dotnet run --project src/Themearr.API
+
+# Terminal 2 — Frontend (dev server with proxy to API)
+cd src/Themearr.Web
+npm install
+NEXT_PUBLIC_API_URL=http://localhost:5000 npm run dev
 ```
 
-Open `http://localhost:8080`.
+Open `http://localhost:3000`.
 
-## Docker
+## Building a release
 
-Build and run:
+Push to `main` — GitHub Actions will automatically:
 
-```bash
-docker build -t themearr .
-docker run --rm -p 8080:8080 themearr
-```
-
-Note: you still need accessible movie library paths inside the container for downloads to land in the correct folders.
-
-## Service Install (Debian/LXC)
-
-Project scripts include native deployment helpers:
-
-- `create_lxc.sh` for Proxmox container creation
-- `deploy.sh` for pulling and deploying latest code
-- `install.sh` for service + dependency setup
-- `themearr.service` systemd unit
+1. Detect the semver bump from commit messages (`feat:` → minor, `major:` → major, else patch)
+2. Build the Next.js frontend (`npm run build`)
+3. Publish .NET for `linux-x64` and `linux-arm64`
+4. Bundle the frontend into each publish output
+5. Create a GitHub release with both tarballs attached
 
 ## Updating
 
-Themearr includes an in-app update flow that runs the server-side updater command and restarts the service.
-Updates are now based on GitHub Releases using semantic version tags (for example `v1.2.3`).
+Themearr includes an in-app updater (Settings → Updates). It downloads the latest release tarball, preserves your data, and restarts the service. You can also update from the Proxmox web UI.
 
 ## Versioning
 
-Releases use semantic versioning:
+Releases follow semantic versioning driven by commit message prefixes:
 
-- `major`: breaking or large changes (`v2.0.0`)
-- `minor`: backward-compatible features (`v1.1.0`)
-- `patch`: fixes and small changes (`v1.1.1`)
+| Prefix | Bump |
+|---|---|
+| `feat:` | minor |
+| `major:` / `BREAKING CHANGE` | major |
+| anything else | patch |
 
 ## License
 
-No license file is currently included in this repository.
+MIT

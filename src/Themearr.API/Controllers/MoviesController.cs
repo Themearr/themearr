@@ -9,7 +9,20 @@ namespace Themearr.API.Controllers;
 public class MoviesController(Database db, YoutubeService youtube, DownloadService download) : ControllerBase
 {
     [HttpGet("movies")]
-    public IActionResult ListMovies() => Ok(db.GetAllMovies());
+    public IActionResult ListMovies()
+    {
+        var movies = db.GetAllMovies();
+        var serverMap = db.GetPlexServersDict();
+        foreach (var movie in movies)
+        {
+            var sid = movie.GetValueOrDefault("plexServerId")?.ToString() ?? "";
+            var rk  = movie.GetValueOrDefault("plexRatingKey")?.ToString() ?? "";
+            movie["posterUrl"] = (!string.IsNullOrEmpty(sid) && !string.IsNullOrEmpty(rk) && serverMap.TryGetValue(sid, out var srv))
+                ? $"{srv.Url}/library/metadata/{rk}/thumb?X-Plex-Token={srv.Token}"
+                : null;
+        }
+        return Ok(movies);
+    }
 
     [HttpGet("search/{movieId}")]
     public async Task<IActionResult> SearchYoutube(string movieId)

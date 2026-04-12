@@ -1,9 +1,11 @@
 'use client'
 
+import Image from 'next/image'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import { versionApi } from '@/lib/api'
+import { useAuth } from '@/lib/auth'
 import type { VersionInfo } from '@/lib/types'
 
 const NAV = [
@@ -31,6 +33,7 @@ const NAV = [
 
 export function Sidebar() {
   const pathname = usePathname()
+  const { accountName, logout } = useAuth()
   const [version, setVersion] = useState<VersionInfo | null>(null)
 
   useEffect(() => {
@@ -43,15 +46,8 @@ export function Sidebar() {
       style={{ width: 'var(--sidebar-w)', background: '#101828', borderRight: '1px solid #1D2939' }}
     >
       {/* Logo */}
-      <div className="flex items-center gap-2.5 px-5 py-5 border-b border-[#1D2939]">
-        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#7F56D9]">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="white">
-            <path d="M12 3v18M3 12h18M6.3 6.3l11.4 11.4M17.7 6.3 6.3 17.7" strokeWidth="0" />
-            <circle cx="12" cy="12" r="9" fill="none" stroke="white" strokeWidth="1.5" />
-            <path d="M9 9l6 3-6 3V9z" fill="white" />
-          </svg>
-        </div>
-        <span className="text-sm font-bold tracking-tight text-[#F9FAFB]">Themearr</span>
+      <div className="px-4 py-4 border-b border-[#1D2939]">
+        <Image src="/logo.svg" alt="Themearr" width={138} height={36} style={{ height: 36, width: 'auto' }} />
       </div>
 
       {/* Nav */}
@@ -65,11 +61,11 @@ export function Sidebar() {
               className={`
                 flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all
                 ${active
-                  ? 'bg-[#7F56D9]/15 text-[#B692F6]'
+                  ? 'bg-[#BB0000]/15 text-[#E07777]'
                   : 'text-[#667085] hover:bg-[#1D2939] hover:text-[#D0D5DD]'}
               `}
             >
-              <span className={active ? 'text-[#9E77ED]' : 'text-[#475467]'}>{icon}</span>
+              <span className={active ? 'text-[#CC3333]' : 'text-[#475467]'}>{icon}</span>
               {label}
             </Link>
           )
@@ -77,19 +73,40 @@ export function Sidebar() {
       </nav>
 
       {/* Footer */}
-      <div className="border-t border-[#1D2939] px-5 py-4 space-y-1">
+      <div className="border-t border-[#1D2939] px-3 py-3 space-y-1">
         {version?.updateAvailable && (
           <Link
             href="/settings"
-            className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-xs text-[#FEC84B] hover:bg-[#1D2939] transition-colors"
+            className="flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs text-[#FEC84B] hover:bg-[#1D2939] transition-colors"
           >
             <span className="h-1.5 w-1.5 rounded-full bg-[#F79009] animate-pulse" />
             Update available
           </Link>
         )}
-        <p className="px-2 text-xs text-[#475467]">
+
+        {/* Version */}
+        <p className="px-3 text-xs text-[#475467]">
           {version?.current ? `v${version.current.replace(/^v/, '')}` : '—'}
         </p>
+
+        {/* User + logout */}
+        {accountName && (
+          <div className="flex items-center gap-2.5 px-3 py-2">
+            <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-[#BB0000]/20 text-xs font-semibold text-[#E07777]">
+              {accountName[0]?.toUpperCase()}
+            </div>
+            <span className="min-w-0 flex-1 truncate text-xs text-[#D0D5DD]">{accountName}</span>
+          </div>
+        )}
+        <button
+          onClick={logout}
+          className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-[#667085] hover:bg-[#1D2939] hover:text-[#FDA29B] transition-all"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" />
+          </svg>
+          Sign out
+        </button>
       </div>
     </aside>
   )

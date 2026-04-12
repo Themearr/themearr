@@ -7,6 +7,7 @@ export interface Movie {
   sourcePath: string | null
   folderName: string
   status: 'pending' | 'downloaded'
+  posterUrl: string | null
 }
 
 export interface YoutubeResult {

@@ -65,7 +65,7 @@ export function MovieTable({ movies, onMovieUpdated }: MovieTableProps) {
             value={search}
             onChange={e => setSearch(e.target.value)}
             placeholder="Search movies…"
-            className="rounded-lg border border-[#344054] bg-[#101828] py-2 pl-9 pr-3.5 text-sm text-[#F9FAFB] placeholder:text-[#475467] outline-none focus:border-[#7F56D9] focus:ring-1 focus:ring-[#7F56D9]/40 w-56"
+            className="rounded-lg border border-[#344054] bg-[#101828] py-2 pl-9 pr-3.5 text-sm text-[#F9FAFB] placeholder:text-[#475467] outline-none focus:border-[#BB0000] focus:ring-1 focus:ring-[#BB0000]/40 w-56"
           />
         </div>
       </div>

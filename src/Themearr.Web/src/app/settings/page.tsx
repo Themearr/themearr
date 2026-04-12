@@ -68,7 +68,7 @@ export default function SettingsPage() {
     return (
       <AppShell title="Settings">
         <div className="flex justify-center py-24">
-          <Spinner size={28} className="text-[#7F56D9]" />
+          <Spinner size={28} className="text-[#BB0000]" />
         </div>
       </AppShell>
     )

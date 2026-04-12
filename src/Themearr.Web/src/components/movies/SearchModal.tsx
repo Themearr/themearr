@@ -97,7 +97,7 @@ export function SearchModal({ movie, onClose, onDownloaded }: SearchModalProps) 
                     href={`https://www.youtube.com/watch?v=${r.videoId}`}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-xs text-[#9E77ED] hover:underline"
+                    className="text-xs text-[#CC3333] hover:underline"
                   >
                     Preview ↗
                   </a>

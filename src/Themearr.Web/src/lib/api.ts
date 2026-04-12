@@ -41,6 +41,9 @@ export const setupApi = {
       body: JSON.stringify({ servers }),
     }),
 
+  logout: () =>
+    request<{ success: boolean }>('/api/setup/plex/logout', { method: 'POST' }),
+
   saveSelection: (body: {
     servers: PlexServer[]
     selectedLibraries: Record<string, string[]>

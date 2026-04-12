@@ -37,7 +37,7 @@ type ButtonSize    = 'sm' | 'md' | 'lg'
 const BTN_BASE = 'inline-flex items-center justify-center gap-2 rounded-lg font-semibold transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0C111D] disabled:opacity-50 disabled:cursor-not-allowed select-none'
 
 const BTN_VARIANTS: Record<ButtonVariant, string> = {
-  primary:   'bg-[#7F56D9] hover:bg-[#6941C6] text-white shadow-sm focus-visible:ring-[#7F56D9]',
+  primary:   'bg-[#BB0000] hover:bg-[#990000] text-white shadow-sm focus-visible:ring-[#BB0000]',
   secondary: 'bg-[#1D2939] hover:bg-[#344054] text-[#D0D5DD] border border-[#344054] hover:border-[#475467] focus-visible:ring-[#475467]',
   ghost:     'bg-transparent hover:bg-[#1D2939] text-[#98A2B3] hover:text-[#F9FAFB] focus-visible:ring-[#475467]',
   danger:    'bg-[#D92D20] hover:bg-[#B42318] text-white shadow-sm focus-visible:ring-[#F04438]',
@@ -87,7 +87,7 @@ export function Input({ label, hint, error, className = '', ...rest }: InputProp
         className={`
           w-full rounded-lg border bg-[#101828] px-3.5 py-2.5 text-sm text-[#F9FAFB]
           placeholder:text-[#475467] outline-none transition-all
-          border-[#344054] focus:border-[#7F56D9] focus:ring-1 focus:ring-[#7F56D9]/40
+          border-[#344054] focus:border-[#BB0000] focus:ring-1 focus:ring-[#BB0000]/40
           disabled:opacity-50 disabled:cursor-not-allowed
           ${error ? 'border-[#F04438] focus:border-[#F04438] focus:ring-[#F04438]/40' : ''}
           ${className}

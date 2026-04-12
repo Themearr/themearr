@@ -4,19 +4,17 @@ import { useCallback, useEffect, useState } from 'react'
 import { moviesApi, syncApi } from '@/lib/api'
 import type { Movie, SyncStatus } from '@/lib/types'
 import { AppShell } from '@/components/layout/AppShell'
-import { MovieTable } from '@/components/movies/MovieTable'
+import { MovieGrid } from '@/components/movies/MovieGrid'
 import { Button, Spinner } from '@/components/ui'
 
 export default function MoviesPage() {
-  const [movies, setMovies]     = useState<Movie[]>([])
-  const [loading, setLoading]   = useState(true)
-  const [sync, setSync]         = useState<SyncStatus | null>(null)
-  const [syncing, setSyncing]   = useState(false)
+  const [movies, setMovies]   = useState<Movie[]>([])
+  const [loading, setLoading] = useState(true)
+  const [sync, setSync]       = useState<SyncStatus | null>(null)
+  const [syncing, setSyncing] = useState(false)
 
   const loadMovies = useCallback(async () => {
-    try {
-      setMovies(await moviesApi.list())
-    } catch { /* ignore */ }
+    try { setMovies(await moviesApi.list()) } catch { /* ignore */ }
   }, [])
 
   useEffect(() => {
@@ -32,10 +30,7 @@ export default function MoviesPage() {
       try {
         const status = await syncApi.status()
         setSync(status)
-        if (status.finished) {
-          setSyncing(false)
-          loadMovies()
-        }
+        if (status.finished) { setSyncing(false); loadMovies() }
       } catch { /* ignore */ }
     }, 1500)
     return () => clearInterval(id)
@@ -67,9 +62,9 @@ export default function MoviesPage() {
       {movies.length > 0 && (
         <div className="mb-5 flex gap-4">
           {[
-            { label: 'Total',      value: movies.length,    color: '#98A2B3' },
-            { label: 'Downloaded', value: downloaded,       color: '#12B76A' },
-            { label: 'Pending',    value: pending,          color: '#F79009' },
+            { label: 'Total',      value: movies.length, color: '#98A2B3' },
+            { label: 'Downloaded', value: downloaded,    color: '#12B76A' },
+            { label: 'Pending',    value: pending,       color: '#F79009' },
           ].map(({ label, value, color }) => (
             <div key={label} className="rounded-lg border border-[#1D2939] bg-[#101828] px-4 py-3">
               <p className="text-xs text-[#667085]">{label}</p>
@@ -99,10 +94,10 @@ export default function MoviesPage() {
       {/* Content */}
       {loading ? (
         <div className="flex items-center justify-center py-24">
-          <Spinner size={28} className="text-[#7F56D9]" />
+          <Spinner size={28} className="text-[#BB0000]" />
         </div>
       ) : (
-        <MovieTable movies={movies} onMovieUpdated={handleMovieUpdated} />
+        <MovieGrid movies={movies} onMovieUpdated={handleMovieUpdated} />
       )}
     </AppShell>
   )

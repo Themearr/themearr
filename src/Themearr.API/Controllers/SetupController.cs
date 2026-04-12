@@ -130,6 +130,17 @@ public class SetupController(Database db, PlexService plex) : ControllerBase
         return Ok(SetupPayload());
     }
 
+    // ── Logout ───────────────────────────────────────────────────────────────
+
+    [HttpPost("plex/logout")]
+    public IActionResult PlexLogout()
+    {
+        db.SetSetting("plex_access_token", "");
+        db.SetSetting("plex_account_name", "");
+        db.SetSetting("setup_complete", "");
+        return Ok(new { success = true });
+    }
+
     // ── Reset ─────────────────────────────────────────────────────────────────
 
     [HttpPost("reset")]

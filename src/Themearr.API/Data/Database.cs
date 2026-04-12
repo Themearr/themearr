@@ -139,6 +139,20 @@ public class Database(string dbPath)
     public void SetPathMappings(List<Dictionary<string, string>> mappings) =>
         SetJsonSetting("path_mappings", mappings);
 
+    public Dictionary<string, (string Url, string Token)> GetPlexServersDict()
+    {
+        var dict = new Dictionary<string, (string, string)>();
+        foreach (var srv in GetPlexServers())
+        {
+            var id    = srv.GetValueOrDefault("id")?.ToString()    ?? "";
+            var url   = srv.GetValueOrDefault("url")?.ToString()   ?? "";
+            var token = srv.GetValueOrDefault("token")?.ToString() ?? "";
+            if (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(url))
+                dict[id] = (url, token);
+        }
+        return dict;
+    }
+
     public List<string> GetLibraryPaths()
     {
         var paths = GetJsonSetting("library_paths", new List<string>());
