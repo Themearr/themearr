@@ -142,7 +142,12 @@ public class UpdateService(Database db, IConfiguration config, ILogger<UpdateSer
         if (string.IsNullOrEmpty(current) || current.ToLower() is "dev" or "unknown") return false;
         var cv = ParseSemver(current);
         var lv = ParseSemver(latest);
-        if (cv.HasValue && lv.HasValue) return lv.Value > cv.Value;
+        if (cv.HasValue && lv.HasValue)
+        {
+            var (cm, cmi, cp) = cv.Value;
+            var (lm, lmi, lp) = lv.Value;
+            return lm > cm || (lm == cm && lmi > cmi) || (lm == cm && lmi == cmi && lp > cp);
+        }
         return !string.IsNullOrEmpty(latest) && current != latest;
     }
 
