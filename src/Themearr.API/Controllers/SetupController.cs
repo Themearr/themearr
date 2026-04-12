@@ -137,7 +137,6 @@ public class SetupController(Database db, PlexService plex) : ControllerBase
     {
         db.SetSetting("plex_access_token", "");
         db.SetSetting("plex_account_name", "");
-        db.SetSetting("setup_complete", "");
         return Ok(new { success = true });
     }
 

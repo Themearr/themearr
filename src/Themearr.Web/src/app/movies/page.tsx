@@ -19,7 +19,14 @@ export default function MoviesPage() {
 
   useEffect(() => {
     moviesApi.list()
-      .then(setMovies)
+      .then(movies => {
+        setMovies(movies)
+        // Auto-sync on first load if no movies have been synced yet
+        if (movies.length === 0) {
+          setSyncing(true)
+          syncApi.start().catch(() => setSyncing(false))
+        }
+      })
       .finally(() => setLoading(false))
   }, [])
 
