@@ -56,6 +56,8 @@ const setupServerName = document.getElementById('setup-server-name');
 const setupSelection = document.getElementById('setup-selection');
 const setupServers = document.getElementById('setup-servers');
 const setupLibraries = document.getElementById('setup-libraries');
+const setupPathMappings = document.getElementById('setup-path-mappings');
+const setupLibraryPaths = document.getElementById('setup-library-paths');
 const setupSaveSelection = document.getElementById('setup-save-selection');
 const setupUpdateBanner = document.getElementById('setup-update-banner');
 const setupUpdateText = document.getElementById('setup-update-text');
@@ -218,6 +220,12 @@ async function loadSetupSelectionOptions(prefill = null) {
   const libsPayload = await api('POST', '/api/setup/plex/libraries', { servers: selectedServersForLibraryQuery });
   availableLibrariesByServer = libsPayload.libraries || {};
   setupSelectedLibraries = prefill?.selectedLibraries || {};
+  if (setupPathMappings) {
+    setupPathMappings.value = mappingsToText(prefill?.pathMappings || []);
+  }
+  if (setupLibraryPaths) {
+    setupLibraryPaths.value = pathsToText(prefill?.libraryPaths || []);
+  }
 
   setupSelection.classList.remove('hidden');
   renderServerCheckboxes(setupServers, availableServers, setupSelectedServerIds, async () => {
@@ -394,6 +402,8 @@ setupSaveSelection?.addEventListener('click', async () => {
     await api('POST', '/api/setup/plex/selection', {
       servers: selectedServers,
       selected_libraries: setupSelectedLibraries,
+      path_mappings: textToMappings(setupPathMappings?.value || ''),
+      library_paths: textToPaths(setupLibraryPaths?.value || ''),
     });
     showToast('Setup saved');
     await loadSetupState();

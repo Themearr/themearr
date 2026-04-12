@@ -432,47 +432,79 @@ def _apply_path_mappings(source_file_path: str) -> str:
     return source_parent
 
 
-def _find_path_by_search(title: str, year: int | None) -> str:
+def _source_parent(source_file_path: str) -> str:
+    source_value = _normalize_path(source_file_path)
+    if not source_value:
+        return ""
+    return _normalize_path(str(Path(source_value).expanduser().parent))
+
+
+def _path_parts(path: str) -> list[str]:
+    cleaned = _normalize_path(path)
+    if not cleaned:
+        return []
+    return [part for part in cleaned.split("/") if part]
+
+
+def _find_path_by_source_suffix(source_file_path: str) -> str:
     roots = [root for root in get_library_paths() if os.path.isdir(root)]
     if not roots:
         return ""
 
-    normalized_title = "".join(ch.lower() for ch in title if ch.isalnum())
-    expected_year = str(year) if year else ""
-    if not normalized_title:
+    source_parent = _source_parent(source_file_path)
+    source_parts = _path_parts(source_parent)
+    if not source_parts:
+        return ""
+
+    # Try deterministic suffix joins first (fast path).
+    max_suffix_parts = min(6, len(source_parts))
+    for root in roots:
+        normalized_root = _normalize_path(root)
+        for size in range(max_suffix_parts, 0, -1):
+            suffix = source_parts[-size:]
+            candidate = _normalize_path(os.path.join(normalized_root, *suffix))
+            if candidate and os.path.isdir(candidate):
+                return candidate
+
+    # Bounded scan fallback using folder basename from Plex source path.
+    target_basename = source_parts[-1].lower()
+    if not target_basename:
         return ""
 
     max_dirs = int(get_setting("max_search_dirs", "20000") or "20000")
     max_depth = int(get_setting("search_depth", "4") or "4")
     visited = 0
+
     for root in roots:
         for current, dirs, _files in os.walk(root):
             visited += 1
             if visited > max_dirs:
                 return ""
 
-            folder_name = os.path.basename(current)
-            normalized_folder = "".join(ch.lower() for ch in folder_name if ch.isalnum())
-            if normalized_title and normalized_title in normalized_folder:
-                if expected_year and expected_year not in folder_name:
-                    continue
-                return current.rstrip("/")
+            current_basename = os.path.basename(current).strip().lower()
+            if current_basename == target_basename:
+                return _normalize_path(current)
 
             rel = os.path.relpath(current, root)
             depth = 0 if rel == "." else rel.count(os.sep) + 1
             if depth >= max_depth:
                 dirs[:] = []
+
     return ""
 
 
-def resolve_local_folder(source_file_path: str, title: str, year: int | None) -> tuple[str, str]:
+def resolve_local_folder(source_file_path: str) -> tuple[str, str]:
+    direct_source_parent = _source_parent(source_file_path)
+    if direct_source_parent and os.path.isdir(direct_source_parent):
+        return direct_source_parent, "direct"
+
     mapped_folder = _apply_path_mappings(source_file_path)
     if mapped_folder and os.path.isdir(mapped_folder):
         return mapped_folder, "mapping"
 
-    fallback = _find_path_by_search(title, year)
-    if fallback and os.path.isdir(fallback):
-        return fallback, "search"
+    suffix_match = _find_path_by_source_suffix(source_file_path)
+    if suffix_match and os.path.isdir(suffix_match):
+        return suffix_match, "suffix"
 
     return "", "unresolved"
 
@@ -653,7 +685,7 @@ async def fetch_movies(log_fn: Callable[[str], None] | None = None) -> list[dict
                     year_value = item.get("year")
                     year = int(year_value) if str(year_value or "").isdigit() else None
 
-                    resolved_folder, resolution_mode = resolve_local_folder(file_path, title, year)
+                    resolved_folder, resolution_mode = resolve_local_folder(file_path)
                     if not resolved_folder:
                         if log_fn:
                             log_fn(f"Skipping {title or 'Unknown title'} - unresolved path from Plex metadata: {file_path}")

@@ -76,6 +76,16 @@
                 <p class="text-xs uppercase tracking-[0.18em] text-gray-400">Select movie libraries</p>
                 <div id="setup-libraries" class="mt-2 space-y-2"></div>
               </div>
+              <div>
+                <p class="text-xs uppercase tracking-[0.18em] text-gray-400">Path mappings (optional)</p>
+                <p class="mt-1 text-xs text-gray-500">Format: /plex/source => /local/target</p>
+                <textarea id="setup-path-mappings" rows="3" class="mt-2 w-full rounded-lg border border-white/10 bg-gray-950 px-3 py-2 text-sm text-white"></textarea>
+              </div>
+              <div>
+                <p class="text-xs uppercase tracking-[0.18em] text-gray-400">Local library roots (optional)</p>
+                <p class="mt-1 text-xs text-gray-500">One local path per line. Used for source-path fallback matching.</p>
+                <textarea id="setup-library-paths" rows="3" class="mt-2 w-full rounded-lg border border-white/10 bg-gray-950 px-3 py-2 text-sm text-white"></textarea>
+              </div>
               <button id="setup-save-selection" type="button" class="w-full rounded-xl bg-emerald-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-emerald-500">
                 Save server and library selection
               </button>

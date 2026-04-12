@@ -54,7 +54,38 @@ app = FastAPI(title="Themearr")
 STATIC_DIR = Path(__file__).parent / "static"
 VERSION_FILE = Path(os.getenv("THEMEARR_VERSION_FILE", "/opt/themearr/VERSION"))
 GITHUB_REPO = os.getenv("GITHUB_REPO", "Themearr/themearr")
-UPDATER_CMD = os.getenv("THEMEARR_UPDATER_CMD", "sudo /usr/local/bin/themearr-update")
+
+
+def _default_updater_cmd() -> str:
+    configured = os.getenv("THEMEARR_UPDATER_CMD", "").strip()
+    if configured:
+        return configured
+
+    helper = Path("/usr/local/bin/themearr-update")
+    if helper.exists():
+        if os.geteuid() == 0:
+            return str(helper)
+        return f"sudo {helper}"
+
+    # Fallback for install paths that do not provide /usr/local/bin/themearr-update.
+    deploy_url = "https://raw.githubusercontent.com/Themearr/themearr/main/deploy.sh"
+    if os.geteuid() == 0:
+        return (
+            "TMP_DEPLOY=/tmp/themearr-deploy.sh && "
+            f"curl -fsSL {deploy_url} -o \"$TMP_DEPLOY\" && "
+            "bash \"$TMP_DEPLOY\" && "
+            "systemctl restart themearr"
+        )
+
+    return (
+        "TMP_DEPLOY=/tmp/themearr-deploy.sh && "
+        f"curl -fsSL {deploy_url} -o \"$TMP_DEPLOY\" && "
+        "sudo bash \"$TMP_DEPLOY\" && "
+        "sudo systemctl restart themearr"
+    )
+
+
+UPDATER_CMD = _default_updater_cmd()
 
 _update_lock = threading.Lock()
 _update_in_progress = False
@@ -132,6 +163,8 @@ def _setup_payload() -> dict:
         "plexServerUrl": ", ".join([s.get("url", "") for s in selected_servers if s.get("url")]),
         "selectedServers": selected_servers,
         "selectedLibraries": selected_libraries,
+        "pathMappings": get_path_mappings(),
+        "libraryPaths": get_library_paths(),
     }
 
 
@@ -232,6 +265,8 @@ async def plex_libraries(req: PlexLibrariesRequest):
 class PlexSelectionRequest(BaseModel):
     servers: list[dict]
     selected_libraries: dict[str, list[str]]
+    path_mappings: list[dict] = []
+    library_paths: list[str] = []
 
 
 @app.post("/api/setup/plex/selection")
@@ -247,6 +282,8 @@ def save_plex_selection(req: PlexSelectionRequest):
 
     set_plex_servers(req.servers)
     set_selected_libraries(req.selected_libraries)
+    set_path_mappings(req.path_mappings)
+    set_library_paths(req.library_paths)
 
     # Compatibility keys for older code paths and status display.
     primary = req.servers[0]
@@ -436,6 +473,15 @@ def _latest_release_version() -> str:
     return str(response.json().get("tag_name", "")).strip()
 
 
+def _normalize_semver_display(value: str) -> str:
+    raw = str(value or "").strip()
+    parsed = _parse_semver(raw)
+    if not parsed:
+        return raw
+    major, minor, patch = parsed
+    return f"v{major}.{minor}.{patch}"
+
+
 def _parse_semver(value: str) -> tuple[int, int, int] | None:
     match = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)", str(value or "").strip())
     if not match:
@@ -444,6 +490,9 @@ def _parse_semver(value: str) -> tuple[int, int, int] | None:
 
 
 def _is_update_available(current: str, latest: str) -> bool:
+    if str(current or "").strip().lower() in {"", "dev", "unknown"}:
+        return False
+
     current_semver = _parse_semver(current)
     latest_semver = _parse_semver(latest)
     if current_semver and latest_semver:
@@ -480,12 +529,12 @@ def _run_update() -> None:
 
 @app.get("/api/version")
 def app_version():
-    current = _current_version()
+    current = _normalize_semver_display(_current_version())
     latest = ""
     check_error = ""
 
     try:
-        latest = _latest_release_version()
+        latest = _normalize_semver_display(_latest_release_version())
     except Exception as exc:
         log.warning("Version check failed: %s", exc)
         check_error = str(exc)
