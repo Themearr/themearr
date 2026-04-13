@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { cookiesApi, settingsApi, setupApi, versionApi } from '@/lib/api'
+import { rapidApiApi, settingsApi, setupApi, versionApi } from '@/lib/api'
 import type { Settings, VersionInfo } from '@/lib/types'
 import { AppShell } from '@/components/layout/AppShell'
 import { Button, Input, Spinner } from '@/components/ui'
@@ -12,9 +12,10 @@ export default function SettingsPage() {
   const [saving,         setSaving]         = useState(false)
   const [saved,          setSaved]          = useState(false)
   const [error,          setError]          = useState('')
-  const [cookiesOk,   setCookiesOk]   = useState<boolean | null>(null)
-  const [cookiesUploading, setCookiesUploading] = useState(false)
-  const [cookiesError, setCookiesError] = useState('')
+  const [rapidApiOk,      setRapidApiOk]      = useState<boolean | null>(null)
+  const [rapidApiKey,     setRapidApiKey]     = useState('')
+  const [rapidApiSaving,  setRapidApiSaving]  = useState(false)
+  const [rapidApiError,   setRapidApiError]   = useState('')
 
   // Update modal state
   const [updateOpen,    setUpdateOpen]    = useState(false)
@@ -28,7 +29,7 @@ export default function SettingsPage() {
   useEffect(() => {
     settingsApi.get().then(setSettings).catch(() => null)
     versionApi.get().then(setVersion).catch(() => null)
-    cookiesApi.status().then(s => setCookiesOk(s.configured)).catch(() => null)
+    rapidApiApi.status().then(s => setRapidApiOk(s.configured)).catch(() => null)
   }, [])
 
   // Auto-scroll logs
@@ -101,22 +102,24 @@ export default function SettingsPage() {
     }
   }
 
-  async function uploadCookies(file: File) {
-    setCookiesUploading(true)
-    setCookiesError('')
+  async function saveRapidApiKey() {
+    if (!rapidApiKey.trim()) return
+    setRapidApiSaving(true)
+    setRapidApiError('')
     try {
-      await cookiesApi.upload(file)
-      setCookiesOk(true)
+      await rapidApiApi.save(rapidApiKey.trim())
+      setRapidApiOk(true)
+      setRapidApiKey('')
     } catch (e) {
-      setCookiesError((e as Error).message)
+      setRapidApiError((e as Error).message)
     } finally {
-      setCookiesUploading(false)
+      setRapidApiSaving(false)
     }
   }
 
-  async function removeCookies() {
-    await cookiesApi.remove().catch(() => null)
-    setCookiesOk(false)
+  async function removeRapidApiKey() {
+    await rapidApiApi.remove().catch(() => null)
+    setRapidApiOk(false)
   }
 
   async function resetSetup() {
@@ -245,60 +248,61 @@ export default function SettingsPage() {
           </div>
         </Section>
 
-        {/* YouTube authentication */}
-        <Section title="YouTube Authentication" hint="Required if downloads fail with 'Sign in to confirm you're not a bot'.">
+        {/* RapidAPI key */}
+        <Section title="RapidAPI Key" hint="Used to download audio from YouTube. Free tier includes 500 requests/month.">
 
-          {/* Account warning */}
-          <div className="flex gap-2.5 rounded-lg border border-[#F79009]/30 bg-[#F79009]/5 px-3.5 py-3">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#F79009" strokeWidth="2" strokeLinecap="round" className="flex-shrink-0 mt-0.5">
-              <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" />
-            </svg>
-            <p className="text-xs text-[#D0D5DD] leading-relaxed">
-              This involves a Google/YouTube account. There is a small risk of the account being flagged for ToS violations.
-              <span className="font-semibold text-[#FEC84B]"> Use a secondary Google account</span>, not your main one.
-            </p>
+          {/* How to get a key */}
+          <div className="rounded-lg border border-[#1D2939] bg-[#0C111D] px-3.5 py-3 space-y-1">
+            <p className="text-xs font-medium text-[#D0D5DD]">How to get a free API key</p>
+            <ol className="text-xs text-[#667085] space-y-0.5 list-decimal list-inside">
+              <li>Go to <span className="text-[#D0D5DD]">rapidapi.com</span> and create a free account</li>
+              <li>Search for <span className="text-[#D0D5DD]">YouTube MP3</span> and open the <span className="text-[#D0D5DD]">youtube-mp36</span> API</li>
+              <li>Subscribe to the <span className="text-[#D0D5DD]">Basic (free)</span> plan</li>
+              <li>Copy your key from the <span className="text-[#D0D5DD]">X-RapidAPI-Key</span> header in the code snippets</li>
+              <li>Paste it below and click Save</li>
+            </ol>
           </div>
 
-          {cookiesOk === null ? (
+          {rapidApiOk === null ? (
             <div className="flex items-center gap-2 text-sm text-[#475467]"><Spinner size={13} className="text-[#BB0000]" /> Checking…</div>
-          ) : cookiesOk ? (
-            <div className="flex items-center justify-between rounded-lg border border-[#12B76A]/30 bg-[#12B76A]/5 px-3.5 py-2.5">
-              <div className="flex items-center gap-2">
-                <svg width="13" height="13" viewBox="0 0 12 12" fill="none" stroke="#12B76A" strokeWidth="2.5" strokeLinecap="round"><path d="M2 6l3 3 5-5" /></svg>
-                <p className="text-sm text-[#D0D5DD]">Cookies configured</p>
+          ) : rapidApiOk ? (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between rounded-lg border border-[#12B76A]/30 bg-[#12B76A]/5 px-3.5 py-2.5">
+                <div className="flex items-center gap-2">
+                  <svg width="13" height="13" viewBox="0 0 12 12" fill="none" stroke="#12B76A" strokeWidth="2.5" strokeLinecap="round"><path d="M2 6l3 3 5-5" /></svg>
+                  <p className="text-sm text-[#D0D5DD]">API key configured</p>
+                </div>
+                <Button variant="ghost" size="sm" onClick={removeRapidApiKey}>Remove</Button>
               </div>
               <div className="flex gap-2">
-                <label className="cursor-pointer">
-                  <span className="rounded-md border border-[#344054] bg-[#1D2939] px-2.5 py-1.5 text-xs font-medium text-[#D0D5DD] hover:border-[#475467] transition-colors">Replace</span>
-                  <input type="file" accept=".txt" className="sr-only"
-                    onChange={e => { const f = e.target.files?.[0]; if (f) uploadCookies(f); e.target.value = '' }} />
-                </label>
-                <Button variant="ghost" size="sm" onClick={removeCookies}>Remove</Button>
+                <Input
+                  placeholder="Replace with a new key…"
+                  value={rapidApiKey}
+                  onChange={e => setRapidApiKey(e.target.value)}
+                  className="flex-1 font-mono text-xs"
+                />
+                <Button onClick={saveRapidApiKey} loading={rapidApiSaving} size="sm" disabled={!rapidApiKey.trim()}>
+                  Replace
+                </Button>
               </div>
             </div>
           ) : (
             <div className="space-y-2">
-              <div className="rounded-lg border border-[#1D2939] bg-[#0C111D] px-3.5 py-3 space-y-1">
-                <p className="text-xs font-medium text-[#D0D5DD]">How to get cookies.txt</p>
-                <ol className="text-xs text-[#667085] space-y-0.5 list-decimal list-inside">
-                  <li>Install the <span className="text-[#D0D5DD]">Get cookies.txt LOCALLY</span> browser extension</li>
-                  <li>Log into YouTube with a secondary account</li>
-                  <li>On youtube.com, click the extension and export</li>
-                  <li>Upload the file below</li>
-                </ol>
+              <div className="flex gap-2">
+                <Input
+                  placeholder="Paste your RapidAPI key…"
+                  value={rapidApiKey}
+                  onChange={e => setRapidApiKey(e.target.value)}
+                  className="flex-1 font-mono text-xs"
+                />
+                <Button onClick={saveRapidApiKey} loading={rapidApiSaving} size="sm" disabled={!rapidApiKey.trim()}>
+                  Save
+                </Button>
               </div>
-              <label className="cursor-pointer inline-block">
-                <span className={`inline-flex items-center gap-2 rounded-lg border border-[#344054] bg-[#1D2939] px-4 py-2 text-sm font-medium text-[#D0D5DD] hover:border-[#475467] transition-colors ${cookiesUploading ? 'opacity-50 pointer-events-none' : ''}`}>
-                  {cookiesUploading
-                    ? <><Spinner size={13} className="text-[#BB0000]" /> Uploading…</>
-                    : <><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" y1="3" x2="12" y2="15" /></svg>Upload cookies.txt</>}
-                </span>
-                <input type="file" accept=".txt" className="sr-only"
-                  onChange={e => { const f = e.target.files?.[0]; if (f) uploadCookies(f); e.target.value = '' }} />
-              </label>
-              {cookiesError && <p className="text-xs text-[#FDA29B]">{cookiesError}</p>}
             </div>
           )}
+
+          {rapidApiError && <p className="text-xs text-[#FDA29B]">{rapidApiError}</p>}
 
         </Section>
 

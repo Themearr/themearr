@@ -53,32 +53,33 @@ public class SettingsController(Database db) : ControllerBase
         return Get();
     }
 
-    // ── YouTube cookies ───────────────────────────────────────────────────────
+    // ── RapidAPI key ──────────────────────────────────────────────────────────
 
-    [HttpGet("cookies")]
-    public IActionResult GetCookies() =>
-        Ok(new { configured = db.HasCookiesFile });
-
-    [HttpPost("cookies")]
-    [RequestSizeLimit(20 * 1024 * 1024)]
-    public async Task<IActionResult> UploadCookies(IFormFile? file)
+    [HttpGet("rapidapi")]
+    public IActionResult GetRapidApiKey()
     {
-        if (file == null || file.Length == 0)
-            return BadRequest(new { detail = "No file provided." });
-        Directory.CreateDirectory(db.DataDir);
-        await using var stream = System.IO.File.Create(db.CookiesFilePath);
-        await file.CopyToAsync(stream);
+        var key = db.GetSetting("rapidapi_key", "");
+        return Ok(new { configured = !string.IsNullOrWhiteSpace(key) });
+    }
+
+    [HttpPost("rapidapi")]
+    public IActionResult SaveRapidApiKey([FromBody] RapidApiKeyPayload payload)
+    {
+        if (string.IsNullOrWhiteSpace(payload.Key))
+            return BadRequest(new { detail = "API key cannot be empty." });
+        db.SetSetting("rapidapi_key", payload.Key.Trim());
         return Ok(new { configured = true });
     }
 
-    [HttpDelete("cookies")]
-    public IActionResult DeleteCookies()
+    [HttpDelete("rapidapi")]
+    public IActionResult DeleteRapidApiKey()
     {
-        if (System.IO.File.Exists(db.CookiesFilePath))
-            System.IO.File.Delete(db.CookiesFilePath);
+        db.SetSetting("rapidapi_key", "");
         return Ok(new { configured = false });
     }
 }
+
+public record RapidApiKeyPayload(string Key);
 
 public class SettingsPayload
 {

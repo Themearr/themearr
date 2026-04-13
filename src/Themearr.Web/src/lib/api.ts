@@ -125,21 +125,18 @@ export const historyApi = {
   get: () => request<HistoryEntry[]>('/api/history'),
 }
 
-// ── YouTube cookies ───────────────────────────────────────────────────────────
+// ── RapidAPI key ──────────────────────────────────────────────────────────────
 
-export const cookiesApi = {
-  status: () => request<{ configured: boolean }>('/api/settings/cookies'),
+export const rapidApiApi = {
+  status: () => request<{ configured: boolean }>('/api/settings/rapidapi'),
 
-  upload: async (file: File): Promise<{ configured: boolean }> => {
-    const form = new FormData()
-    form.append('file', file)
-    const res = await fetch(`${BASE}/api/settings/cookies`, { method: 'POST', body: form })
-    const body = await res.json().catch(() => ({ detail: res.statusText }))
-    if (!res.ok) throw new Error(body.detail ?? res.statusText)
-    return body
-  },
+  save: (key: string) =>
+    request<{ configured: boolean }>('/api/settings/rapidapi', {
+      method: 'POST',
+      body: JSON.stringify({ key }),
+    }),
 
-  remove: () => request<{ configured: boolean }>('/api/settings/cookies', { method: 'DELETE' }),
+  remove: () => request<{ configured: boolean }>('/api/settings/rapidapi', { method: 'DELETE' }),
 }
 
 // ── Stats ─────────────────────────────────────────────────────────────────────

@@ -1,11 +1,10 @@
 using System.Collections.Concurrent;
-using System.Diagnostics;
-using System.Text.RegularExpressions;
+using System.Text.Json;
 using Themearr.API.Data;
 
 namespace Themearr.API.Services;
 
-public class DownloadService(Database db, ILogger<DownloadService> log)
+public class DownloadService(Database db, IHttpClientFactory httpClientFactory, ILogger<DownloadService> log)
 {
     private sealed record JobState(bool InProgress, bool Finished, string? Error);
     private readonly ConcurrentDictionary<string, JobState>          _jobs    = new();
@@ -39,6 +38,14 @@ public class DownloadService(Database db, ILogger<DownloadService> log)
         return new { inProgress = state.InProgress, finished = state.Finished, error = state.Error, logs = lines };
     }
 
+    private void AddLog(string movieId, string message)
+    {
+        if (!_jobLogs.TryGetValue(movieId, out var logQueue)) return;
+        logQueue.Enqueue(message);
+        while (logQueue.Count > MaxLogLines)
+            logQueue.TryDequeue(out _);
+    }
+
     private async Task RunAsync(string movieId, string url)
     {
         try
@@ -52,85 +59,78 @@ public class DownloadService(Database db, ILogger<DownloadService> log)
             if (!url.StartsWith("http://") && !url.StartsWith("https://"))
                 throw new ArgumentException("Invalid URL");
 
-            if (!IsCommandAvailable("yt-dlp"))
-                throw new InvalidOperationException("yt-dlp is not installed or not in PATH");
+            var videoId = ExtractVideoId(url);
 
-            var outputTemplate = Path.Combine(folder, "theme.%(ext)s");
-            var psi = new ProcessStartInfo
+            string downloadUrl;
+            string? themeTitle = null;
+
+            if (videoId != null)
             {
-                FileName               = "yt-dlp",
-                Arguments              = BuildArgs(outputTemplate, url),
-                RedirectStandardOutput = true,
-                RedirectStandardError  = true,
-                UseShellExecute        = false,
-            };
+                // YouTube URL — use RapidAPI
+                var apiKey = db.GetSetting("rapidapi_key", "");
+                if (string.IsNullOrWhiteSpace(apiKey))
+                    throw new InvalidOperationException("RapidAPI key is not configured. Please add it in Settings.");
 
-            log.LogInformation("Running yt-dlp for {MovieId}: {Url}", movieId, url);
+                AddLog(movieId, $"[themearr] Fetching download link via RapidAPI for video {videoId}…");
+                log.LogInformation("Fetching RapidAPI download link for {MovieId}: {VideoId}", movieId, videoId);
 
-            _jobLogs.TryGetValue(movieId, out var logQueue);
+                var http = httpClientFactory.CreateClient();
+                http.Timeout = TimeSpan.FromSeconds(30);
+                using var req = new HttpRequestMessage(HttpMethod.Get, $"https://youtube-mp36.p.rapidapi.com/dl?id={videoId}");
+                req.Headers.Add("X-RapidAPI-Key", apiKey);
+                req.Headers.Add("X-RapidAPI-Host", "youtube-mp36.p.rapidapi.com");
 
-            using var proc = Process.Start(psi)!;
+                using var resp = await http.SendAsync(req);
+                var body = await resp.Content.ReadAsStringAsync();
 
-            var stdoutLines = new List<string>();
-            var stderrLines = new List<string>();
+                if (!resp.IsSuccessStatusCode)
+                    throw new InvalidOperationException($"RapidAPI error ({(int)resp.StatusCode}): {body}");
 
-            var stdoutTask = Task.Run(async () => {
-                string? line;
-                while ((line = await proc.StandardOutput.ReadLineAsync()) != null)
-                    stdoutLines.Add(line);
-            });
+                using var doc = JsonDocument.Parse(body);
+                var root = doc.RootElement;
 
-            var stderrTask = Task.Run(async () => {
-                string? line;
-                while ((line = await proc.StandardError.ReadLineAsync()) != null)
+                var status = root.TryGetProperty("status", out var st) ? st.GetString() : null;
+                if (status != "ok")
                 {
-                    stderrLines.Add(line);
-                    if (logQueue != null)
-                    {
-                        logQueue.Enqueue(line);
-                        // Trim to prevent unbounded growth
-                        while (logQueue.Count > MaxLogLines)
-                            logQueue.TryDequeue(out _);
-                    }
+                    var msg = root.TryGetProperty("msg", out var m) ? m.GetString() : body;
+                    throw new InvalidOperationException($"RapidAPI returned status '{status}': {msg}");
                 }
-            });
 
-            await Task.WhenAny(
-                Task.Run(() => proc.WaitForExit()),
-                Task.Delay(TimeSpan.FromMinutes(15)));
+                downloadUrl = root.TryGetProperty("link", out var lnk) ? lnk.GetString()! :
+                              root.TryGetProperty("downloadUrl", out var dl) ? dl.GetString()! :
+                              throw new InvalidOperationException($"RapidAPI response missing download link: {body}");
 
-            if (!proc.HasExited)
+                themeTitle = root.TryGetProperty("title", out var t) ? t.GetString() : null;
+                AddLog(movieId, $"[themearr] Got download link. Downloading…");
+            }
+            else
             {
-                proc.Kill(true);
-                throw new TimeoutException("Download timed out after 15 minutes");
+                // Non-YouTube URL — download directly
+                downloadUrl = url;
+                AddLog(movieId, $"[themearr] Downloading from URL…");
             }
 
-            await Task.WhenAll(stdoutTask, stderrTask);
+            var outputPath = Path.Combine(folder, "theme.mp3");
 
-            var stdout = string.Join("\n", stdoutLines);
-            var stderr = string.Join("\n", stderrLines);
+            // Remove any existing theme files before writing
+            foreach (var f in Directory.EnumerateFiles(folder, "theme.*"))
+                File.Delete(f);
 
-            if (proc.ExitCode != 0)
-            {
-                var tail = (stderr + "\n" + stdout).Trim();
-                if (tail.Length > 1200) tail = tail[^1200..];
-                throw new InvalidOperationException($"yt-dlp failed (exit {proc.ExitCode}): {tail}");
-            }
+            var http2 = httpClientFactory.CreateClient();
+            http2.Timeout = TimeSpan.FromMinutes(15);
+            using var dlResp = await http2.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead);
 
-            // Verify a theme file was actually produced (yt-dlp can exit 0 if
-            // the download succeeds but ffmpeg post-processing fails silently)
-            var themeFile = Directory.EnumerateFiles(folder, "theme.*")
-                                     .FirstOrDefault(f => Path.GetExtension(f) is not (".part" or ".ytdl"));
-            if (themeFile == null)
-                throw new InvalidOperationException(
-                    "yt-dlp exited successfully but no theme file was written — " +
-                    "ffmpeg may not be installed or the conversion failed");
+            if (!dlResp.IsSuccessStatusCode)
+                throw new InvalidOperationException($"Download failed ({(int)dlResp.StatusCode}): {dlResp.ReasonPhrase}");
 
-            var title      = movie["title"]?.ToString() ?? "";
-            var year       = movie["year"] is int y ? y : (int?)null;
-            var themeTitle = stdout.Split('\n')
-                                   .Select(l => l.Trim())
-                                   .FirstOrDefault(l => l.Length > 0);
+            await using var fileStream = File.Create(outputPath);
+            await dlResp.Content.CopyToAsync(fileStream);
+            await fileStream.FlushAsync();
+
+            AddLog(movieId, "[themearr] Download complete.");
+
+            var title = movie["title"]?.ToString() ?? "";
+            var year  = movie["year"] is int y ? y : (int?)null;
             db.SetMovieStatus(movieId, "downloaded");
             db.AddThemeHistory(movieId, title, year, themeTitle, url);
             _jobs[movieId] = new JobState(false, true, null);
@@ -142,10 +142,22 @@ public class DownloadService(Database db, ILogger<DownloadService> log)
         }
     }
 
-    private string BuildArgs(string outputTemplate, string url)
+    private static string? ExtractVideoId(string url)
     {
-        var cookies = db.HasCookiesFile ? $"--cookies \"{db.CookiesFilePath}\" " : "";
-        return $"-x --audio-format mp3 --audio-quality 0 --no-playlist --no-simulate --js-runtimes node {cookies}--print \"%(title)s\" -o \"{outputTemplate}\" \"{url}\"";
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return null;
+        var host = uri.Host.ToLower().TrimStart('w').TrimStart('w').TrimStart('w').TrimStart('.');
+        if (host is "youtube.com" or "m.youtube.com")
+        {
+            var q = System.Web.HttpUtility.ParseQueryString(uri.Query);
+            var v = q["v"]?.Trim();
+            return string.IsNullOrEmpty(v) ? null : v;
+        }
+        if (host is "youtu.be")
+        {
+            var videoId = uri.AbsolutePath.Trim('/');
+            return string.IsNullOrEmpty(videoId) ? null : videoId;
+        }
+        return null;
     }
 
     private static string NormaliseYoutubeUrl(string url)
@@ -165,22 +177,5 @@ public class DownloadService(Database db, ILogger<DownloadService> log)
             if (!string.IsNullOrEmpty(videoId)) return $"https://youtu.be/{videoId}";
         }
         return url;
-    }
-
-    private static bool IsCommandAvailable(string cmd)
-    {
-        try
-        {
-            var psi = new ProcessStartInfo(cmd, "--version")
-            {
-                RedirectStandardOutput = true,
-                RedirectStandardError  = true,
-                UseShellExecute        = false,
-            };
-            using var p = Process.Start(psi)!;
-            p.WaitForExit(3000);
-            return true;
-        }
-        catch { return false; }
     }
 }
