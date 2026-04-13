@@ -64,8 +64,10 @@ export const setupApi = {
 export const moviesApi = {
   list: () => request<Movie[]>('/api/movies'),
 
-  search: (movieId: string) =>
-    request<{ movie: Movie; results: YoutubeResult[] }>(`/api/search/${encodeURIComponent(movieId)}`),
+  search: (movieId: string, q?: string) =>
+    request<{ movie: Movie; results: YoutubeResult[] }>(
+      `/api/search/${encodeURIComponent(movieId)}${q ? `?q=${encodeURIComponent(q)}` : ''}`
+    ),
 
   download: (movieId: string, videoId: string) =>
     request<{ started: boolean; movieId: string }>('/api/download', {
@@ -84,6 +86,18 @@ export const moviesApi = {
 
   autoDownload: (movieId: string) =>
     request<{ started: boolean; movieId: string; videoId: string; videoTitle: string }>(`/api/auto-download/${encodeURIComponent(movieId)}`, { method: 'POST' }),
+
+  deleteTheme: (movieId: string) =>
+    request<{ deleted: boolean }>(`/api/movies/${encodeURIComponent(movieId)}/theme`, { method: 'DELETE' }),
+
+  ignoreMovie: (movieId: string) =>
+    request<{ ignored: boolean }>(`/api/movies/${encodeURIComponent(movieId)}/ignore`, { method: 'POST' }),
+
+  unignoreMovie: (movieId: string) =>
+    request<{ ignored: boolean }>(`/api/movies/${encodeURIComponent(movieId)}/unignore`, { method: 'POST' }),
+
+  themeAudioUrl: (movieId: string) =>
+    `${BASE}/api/movies/${encodeURIComponent(movieId)}/theme/audio`,
 }
 
 // ── Settings ──────────────────────────────────────────────────────────────────

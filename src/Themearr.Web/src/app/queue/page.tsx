@@ -12,10 +12,12 @@ export default function QueuePage() {
   const [currentIdx,   setCurrentIdx]   = useState(0)
   const [results,      setResults]      = useState<YoutubeResult[]>([])
   const [searching,    setSearching]    = useState(false)
+  const [searchQuery,  setSearchQuery]  = useState('')
   const [manualUrl,    setManualUrl]    = useState('')
   const [error,        setError]        = useState('')
   const [downloading,  setDownloading]  = useState(false)
   const [autoMode,     setAutoMode]     = useState(false)
+  const [upNextOpen,   setUpNextOpen]   = useState(false)
 
   // Holds the movieId being downloaded so the polling closure keeps the right id
   const downloadingMovieId = useRef<string | null>(null)
@@ -52,12 +54,30 @@ export default function QueuePage() {
     setResults([])
     setError('')
     setManualUrl('')
+    setSearchQuery('')
     setSearching(true)
     moviesApi.search(current.id)
       .then(data => setResults(data.results))
       .catch((e: Error) => setError(e.message))
       .finally(() => setSearching(false))
   }, [current])
+
+  function reSearch(q?: string) {
+    if (!current) return
+    setResults([])
+    setError('')
+    setSearching(true)
+    moviesApi.search(current.id, q || undefined)
+      .then(data => setResults(data.results))
+      .catch((e: Error) => setError(e.message))
+      .finally(() => setSearching(false))
+  }
+
+  async function skipForever() {
+    if (!current) return
+    try { await moviesApi.ignoreMovie(current.id) } catch { /* ignore */ }
+    advanceQueue()
+  }
 
   // ── Auto-download in auto mode ─────────────────────────────────────────────
   // Calls the server-side auto-download endpoint directly rather than waiting
@@ -199,6 +219,9 @@ export default function QueuePage() {
             </span>
             Auto
           </button>
+          <Button variant="ghost" size="sm" onClick={skipForever} disabled={downloading} title="Never show this movie in the queue again">
+            Ignore
+          </Button>
           <Button variant="ghost" size="sm" onClick={advanceQueue} disabled={downloading}>
             Skip
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
@@ -222,6 +245,36 @@ export default function QueuePage() {
           </div>
         </div>
 
+        {/* Up next collapsible */}
+        {pending && pending.length > currentIdx + 1 && (
+          <div className="rounded-xl border border-[#1D2939] bg-[#101828] overflow-hidden">
+            <button
+              className="w-full flex items-center justify-between px-4 py-3 text-xs font-semibold text-[#667085] uppercase tracking-wider hover:bg-[#1D2939]/50 transition-colors"
+              onClick={() => setUpNextOpen((o: boolean) => !o)}
+            >
+              <span>Up next · {pending.length - currentIdx - 1} movie{pending.length - currentIdx - 1 !== 1 ? 's' : ''}</span>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className={`transition-transform ${upNextOpen ? 'rotate-180' : ''}`}>
+                <path d="M6 9l6 6 6-6" />
+              </svg>
+            </button>
+            {upNextOpen && (
+              <div className="divide-y divide-[#1D2939] border-t border-[#1D2939] max-h-64 overflow-y-auto">
+                {pending.slice(currentIdx + 1, currentIdx + 11).map((movie: Movie, i: number) => (
+                  <button
+                    key={movie.id}
+                    onClick={() => { setCurrentIdx(currentIdx + 1 + i); setUpNextOpen(false) }}
+                    className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-[#1D2939]/60 transition-colors text-left"
+                  >
+                    <span className="text-xs text-[#475467] w-4 flex-shrink-0">{i + 1}</span>
+                    <span className="text-sm text-[#D0D5DD] truncate flex-1">{movie.title}</span>
+                    {movie.year && <span className="text-xs text-[#475467] flex-shrink-0">{movie.year}</span>}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Downloading progress */}
         {downloading && (
           <div className="flex items-center gap-2.5 rounded-xl border border-[#1D2939] bg-[#101828] px-4 py-3">
@@ -234,16 +287,32 @@ export default function QueuePage() {
         {!downloading && (
           <div className="rounded-xl border border-[#1D2939] bg-[#101828] divide-y divide-[#1D2939]">
             <div className="px-4 py-3 flex items-center gap-2">
-              <p className="text-xs font-semibold text-[#667085] uppercase tracking-wider flex-1">
+              <p className="text-xs font-semibold text-[#667085] uppercase tracking-wider flex-shrink-0">
                 YouTube results
               </p>
+              {/* Editable search query */}
+              <input
+                value={searchQuery}
+                onChange={(e: { target: { value: string } }) => setSearchQuery(e.target.value)}
+                onKeyDown={(e: { key: string }) => { if (e.key === 'Enter' && searchQuery.trim()) reSearch(searchQuery.trim()) }}
+                placeholder={`${current.title}${current.year ? ` ${current.year}` : ''} theme`}
+                className="flex-1 min-w-0 bg-transparent text-xs text-[#D0D5DD] placeholder:text-[#344054] outline-none"
+              />
+              {searchQuery.trim() && (
+                <button
+                  onClick={() => reSearch(searchQuery.trim())}
+                  className="flex-shrink-0 text-xs text-[#BB0000] hover:text-[#E07777] transition-colors"
+                >
+                  Search ↵
+                </button>
+              )}
               {/* Auto-download best match button */}
               {bestMatch && !searching && (
                 <Button size="sm" onClick={doAutoDownload} disabled={downloading}>
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
                     <path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 0v10m0 0-3-3m3 3 3-3" />
                   </svg>
-                  Auto-download best match
+                  Best match
                 </Button>
               )}
               {searching && <Spinner size={13} className="text-[#BB0000]" />}

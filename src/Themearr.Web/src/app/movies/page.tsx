@@ -49,8 +49,8 @@ export default function MoviesPage() {
     try { await syncApi.start() } catch { setSyncing(false) }
   }
 
-  function handleMovieUpdated(id: string) {
-    setMovies(prev => prev.map(m => m.id === id ? { ...m, status: 'downloaded' } : m))
+  function handleMovieUpdated(id: string, status: Movie['status']) {
+    setMovies(prev => prev.map(m => m.id === id ? { ...m, status } : m))
   }
 
   const pending    = movies.filter(m => m.status === 'pending').length

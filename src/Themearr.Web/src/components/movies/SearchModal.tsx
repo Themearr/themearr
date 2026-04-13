@@ -93,7 +93,7 @@ export function SearchModal({ movie, onClose, onDownloaded }: SearchModalProps) 
             {results.map(r => (
               <div
                 key={r.videoId}
-                className="flex items-center gap-3 rounded-lg border border-[#1D2939] bg-[#0C111D] p-3 hover:border-[#344054] transition-colors"
+                className={`flex items-center gap-3 rounded-lg border p-3 transition-colors ${r.bestMatch ? 'border-[#12B76A]/30 bg-[#12B76A]/5 hover:border-[#12B76A]/50' : 'border-[#1D2939] bg-[#0C111D] hover:border-[#344054]'}`}
               >
                 {r.thumbnail && (
                   <img
@@ -104,7 +104,14 @@ export function SearchModal({ movie, onClose, onDownloaded }: SearchModalProps) 
                   />
                 )}
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-[#F9FAFB] truncate">{r.title}</p>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <p className="text-sm font-medium text-[#F9FAFB] truncate">{r.title}</p>
+                    {r.bestMatch && (
+                      <span className="flex-shrink-0 text-[10px] font-semibold text-[#12B76A] bg-[#12B76A]/15 px-1.5 py-0.5 rounded">
+                        Best match
+                      </span>
+                    )}
+                  </div>
                   <p className="text-xs text-[#667085]">
                     {r.channel}{r.duration ? ` · ${r.duration}` : ''}
                   </p>

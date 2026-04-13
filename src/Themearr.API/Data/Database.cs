@@ -26,6 +26,7 @@ public class Database(string dbPath)
                 sourcePath      TEXT,
                 folderName      TEXT,
                 status          TEXT NOT NULL DEFAULT 'pending',
+                ignored         INTEGER NOT NULL DEFAULT 0,
                 UNIQUE(plex_server_id, plex_rating_key)
             )
             """);
@@ -48,6 +49,7 @@ public class Database(string dbPath)
             """);
         MigrateMoviesTable(conn);
         MigrateHistoryTable(conn);
+        MigrateMoviesTableV2(conn);
     }
 
     private static void MigrateHistoryTable(SqliteConnection conn)
@@ -62,6 +64,17 @@ public class Database(string dbPath)
             conn.Execute("ALTER TABLE theme_history ADD COLUMN theme_title TEXT");
         if (!columns.Contains("source_url"))
             conn.Execute("ALTER TABLE theme_history ADD COLUMN source_url TEXT");
+    }
+
+    private static void MigrateMoviesTableV2(SqliteConnection conn)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "PRAGMA table_info(movies)";
+        var columns = new HashSet<string>();
+        using (var r = cmd.ExecuteReader())
+            while (r.Read()) columns.Add(r.GetString(1));
+        if (!columns.Contains("ignored"))
+            conn.Execute("ALTER TABLE movies ADD COLUMN ignored INTEGER NOT NULL DEFAULT 0");
     }
 
     private static void MigrateMoviesTable(SqliteConnection conn)
@@ -221,7 +234,7 @@ public class Database(string dbPath)
     public List<Dictionary<string, object?>> GetAllMovies()
     {
         using var conn = Open();
-        using var r = conn.Query("SELECT id, plex_server_id, plex_rating_key, title, year, sourcePath, folderName, status FROM movies ORDER BY status, title");
+        using var r = conn.Query("SELECT id, plex_server_id, plex_rating_key, title, year, sourcePath, folderName, status, ignored FROM movies ORDER BY status, title");
         var result = new List<Dictionary<string, object?>>();
         while (r.Read())
         {
@@ -235,7 +248,7 @@ public class Database(string dbPath)
     {
         using var conn = Open();
         using var r = conn.Query(
-            "SELECT id, plex_server_id, plex_rating_key, title, year, sourcePath, folderName, status FROM movies WHERE id = @id",
+            "SELECT id, plex_server_id, plex_rating_key, title, year, sourcePath, folderName, status, ignored FROM movies WHERE id = @id",
             ("@id", id));
         return r.Read() ? ReadMovieRow(r) : null;
     }
@@ -244,6 +257,12 @@ public class Database(string dbPath)
     {
         using var conn = Open();
         conn.Execute("UPDATE movies SET status = @s WHERE id = @id", ("@s", status), ("@id", id));
+    }
+
+    public void SetMovieIgnored(string id, bool ignored)
+    {
+        using var conn = Open();
+        conn.Execute("UPDATE movies SET ignored = @v WHERE id = @id", ("@v", ignored ? 1 : 0), ("@id", id));
     }
 
     // ── History ───────────────────────────────────────────────────────────────
@@ -283,12 +302,24 @@ public class Database(string dbPath)
 
     private static Dictionary<string, object?>? ReadMovieRow(SqliteDataReader r)
     {
-        var folder = r.IsDBNull(6) ? "" : r.GetString(6);
-        if (string.IsNullOrEmpty(folder) || !Directory.Exists(folder)) return null;
+        var ignored = !r.IsDBNull(8) && r.GetInt32(8) == 1;
+        var folder  = r.IsDBNull(6) ? "" : r.GetString(6);
 
-        var hasTheme = Directory.EnumerateFiles(folder, "theme.*")
-                                 .Any(f => Path.GetExtension(f) is not (".part" or ".ytdl"));
-        var status = hasTheme ? "downloaded" : "pending";
+        // Always return ignored movies so they can be unignored from the UI;
+        // non-ignored movies with missing folders can't be used so filter them out.
+        if (!ignored && (string.IsNullOrEmpty(folder) || !Directory.Exists(folder)))
+            return null;
+
+        string status;
+        if (ignored)
+            status = "ignored";
+        else
+        {
+            var hasTheme = Directory.EnumerateFiles(folder, "theme.*")
+                                     .Any(f => Path.GetExtension(f) is not (".part" or ".ytdl"));
+            status = hasTheme ? "downloaded" : "pending";
+        }
+
         return new Dictionary<string, object?>
         {
             ["id"]             = r.GetString(0),

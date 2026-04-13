@@ -6,7 +6,7 @@ export interface Movie {
   year: number | null
   sourcePath: string | null
   folderName: string
-  status: 'pending' | 'downloaded'
+  status: 'pending' | 'downloaded' | 'ignored'
   posterUrl: string | null
 }
 
