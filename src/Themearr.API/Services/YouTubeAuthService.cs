@@ -9,8 +9,8 @@ public class YouTubeAuthService(Database db, ILogger<YouTubeAuthService> log)
 {
     public enum FlowState { Idle, WaitingForUser, Completed, Failed }
 
-    private sealed record State(FlowState Status, string? DeviceUrl, string? UserCode, string? Error);
-    private volatile State _state = new(FlowState.Idle, null, null, null);
+    private sealed record State(FlowState Status, string? DeviceUrl, string? UserCode, string? Error, string[] Logs);
+    private volatile State _state = new(FlowState.Idle, null, null, null, []);
     private CancellationTokenSource? _cts;
 
     // Marker file — present only after a successful OAuth2 auth
@@ -24,13 +24,14 @@ public class YouTubeAuthService(Database db, ILogger<YouTubeAuthService> log)
         deviceUrl     = _state.DeviceUrl,
         userCode      = _state.UserCode,
         error         = _state.Error,
+        logs          = _state.Logs,
     };
 
     public void StartFlow()
     {
         _cts?.Cancel();
         _cts = new CancellationTokenSource();
-        _state = new(FlowState.Idle, null, null, null);
+        _state = new(FlowState.WaitingForUser, null, null, null, []);
         _ = Task.Run(() => RunAuthAsync(_cts.Token));
     }
 
@@ -48,10 +49,13 @@ public class YouTubeAuthService(Database db, ILogger<YouTubeAuthService> log)
                 UseShellExecute        = false,
             };
 
+            _state = new(FlowState.WaitingForUser, null, null, null, []);
+
             using var proc = Process.Start(psi)!;
 
             string? pendingUrl  = null;
             string? pendingCode = null;
+            var     allLines    = new List<string>();
 
             var stderrTask = Task.Run(async () =>
             {
@@ -59,6 +63,8 @@ public class YouTubeAuthService(Database db, ILogger<YouTubeAuthService> log)
                 while ((line = await proc.StandardError.ReadLineAsync()) != null)
                 {
                     log.LogInformation("[oauth2] {Line}", line);
+                    allLines.Add(line);
+                    var recentLogs = allLines.TakeLast(20).ToArray();
 
                     // yt-dlp outputs something like:
                     //   "To continue, open https://www.google.com/device and enter code XXXX-XXXX"
@@ -76,10 +82,7 @@ public class YouTubeAuthService(Database db, ILogger<YouTubeAuthService> log)
                         if (bare.Success) pendingCode = bare.Groups[1].Value;
                     }
 
-                    if (pendingUrl != null && pendingCode != null)
-                        _state = new(FlowState.WaitingForUser, pendingUrl, pendingCode, null);
-                    else if (pendingUrl != null && _state.Status == FlowState.Idle)
-                        _state = new(FlowState.WaitingForUser, pendingUrl, null, null);
+                    _state = new(FlowState.WaitingForUser, pendingUrl, pendingCode, null, recentLogs);
                 }
             }, ct);
 
@@ -90,29 +93,29 @@ public class YouTubeAuthService(Database db, ILogger<YouTubeAuthService> log)
             {
                 Directory.CreateDirectory(db.DataDir);
                 File.WriteAllText(MarkerPath, DateTime.UtcNow.ToString("o"));
-                _state = new(FlowState.Completed, null, null, null);
+                _state = new(FlowState.Completed, null, null, null, _state.Logs);
                 log.LogInformation("YouTube OAuth2 authentication completed successfully");
             }
             else if (!ct.IsCancellationRequested)
             {
-                _state = new(FlowState.Failed, null, null, "Authentication failed — please try again.");
+                _state = new(FlowState.Failed, null, null, "Authentication failed — please try again.", _state.Logs);
             }
         }
         catch (OperationCanceledException)
         {
-            _state = new(FlowState.Idle, null, null, null);
+            _state = new(FlowState.Idle, null, null, null, []);
         }
         catch (Exception ex)
         {
             log.LogError(ex, "YouTube OAuth2 flow error");
-            _state = new(FlowState.Failed, null, null, ex.Message);
+            _state = new(FlowState.Failed, null, null, ex.Message, _state.Logs);
         }
     }
 
     public void Revoke()
     {
         _cts?.Cancel();
-        _state = new(FlowState.Idle, null, null, null);
+        _state = new(FlowState.Idle, null, null, null, []);
 
         if (File.Exists(MarkerPath)) File.Delete(MarkerPath);
 

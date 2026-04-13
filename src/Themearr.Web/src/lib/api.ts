@@ -151,6 +151,7 @@ export const youtubeAuthApi = {
     deviceUrl: string | null
     userCode:  string | null
     error:     string | null
+    logs:      string[]
   }>('/api/youtube-auth'),
 
   start:  () => request<void>('/api/youtube-auth/start', { method: 'POST' }),

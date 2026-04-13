@@ -12,7 +12,7 @@ export default function SettingsPage() {
   const [saving,         setSaving]         = useState(false)
   const [saved,          setSaved]          = useState(false)
   const [error,          setError]          = useState('')
-  const [ytAuth,      setYtAuth]      = useState<{ authenticated: boolean; flowState: string; deviceUrl: string | null; userCode: string | null; error: string | null } | null>(null)
+  const [ytAuth,      setYtAuth]      = useState<{ authenticated: boolean; flowState: string; deviceUrl: string | null; userCode: string | null; error: string | null; logs: string[] } | null>(null)
   const [ytStarting,  setYtStarting]  = useState(false)
   const [ytPolling,   setYtPolling]   = useState(false)
   const ytUrlOpened = useRef(false)
@@ -139,7 +139,7 @@ export default function SettingsPage() {
     setYtPolling(false)
     ytUrlOpened.current = false
     await youtubeAuthApi.revoke().catch(() => null)
-    setYtAuth(a => a ? { ...a, authenticated: false, flowState: 'idle', deviceUrl: null, userCode: null } : null)
+    setYtAuth(a => a ? { ...a, authenticated: false, flowState: 'idle', deviceUrl: null, userCode: null, logs: [] } : null)
   }
 
   async function uploadCookies(file: File) {
@@ -341,9 +341,27 @@ export default function SettingsPage() {
                 <Button variant="ghost" size="sm" onClick={revokeYouTubeAuth}>Cancel</Button>
               </div>
             ) : ytAuth.flowState === 'failed' ? (
-              <div className="flex items-center justify-between">
+              <div className="space-y-2">
                 <p className="text-xs text-[#FDA29B]">{ytAuth.error ?? 'Authentication failed.'}</p>
+                {ytAuth.logs?.length > 0 && (
+                  <div className="max-h-28 overflow-y-auto rounded-lg bg-[#0C111D] px-3 py-2">
+                    {ytAuth.logs.map((l: string, i: number) => <p key={i} className="font-mono text-[11px] leading-relaxed text-[#667085]">{l}</p>)}
+                  </div>
+                )}
                 <Button size="sm" onClick={startYouTubeAuth} loading={ytStarting}>Try again</Button>
+              </div>
+            ) : ytPolling ? (
+              <div className="space-y-2">
+                <div className="flex items-center gap-2 text-sm text-[#475467]">
+                  <Spinner size={13} className="text-[#BB0000]" />
+                  Connecting to YouTube…
+                </div>
+                {ytAuth.logs?.length > 0 && (
+                  <div className="max-h-28 overflow-y-auto rounded-lg bg-[#0C111D] px-3 py-2">
+                    {ytAuth.logs.map((l: string, i: number) => <p key={i} className="font-mono text-[11px] leading-relaxed text-[#667085]">{l}</p>)}
+                  </div>
+                )}
+                <Button variant="ghost" size="sm" onClick={revokeYouTubeAuth}>Cancel</Button>
               </div>
             ) : (
               <Button size="sm" onClick={startYouTubeAuth} loading={ytStarting}>Connect YouTube account</Button>
