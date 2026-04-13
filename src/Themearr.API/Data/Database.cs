@@ -41,10 +41,27 @@ public class Database(string dbPath)
                 movie_id      TEXT NOT NULL,
                 movie_title   TEXT NOT NULL,
                 movie_year    INTEGER,
+                theme_title   TEXT,
+                source_url    TEXT,
                 downloaded_at TEXT NOT NULL
             )
             """);
         MigrateMoviesTable(conn);
+        MigrateHistoryTable(conn);
+    }
+
+    private static void MigrateHistoryTable(SqliteConnection conn)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "PRAGMA table_info(theme_history)";
+        var columns = new HashSet<string>();
+        using (var r = cmd.ExecuteReader())
+            while (r.Read()) columns.Add(r.GetString(1));
+
+        if (!columns.Contains("theme_title"))
+            conn.Execute("ALTER TABLE theme_history ADD COLUMN theme_title TEXT");
+        if (!columns.Contains("source_url"))
+            conn.Execute("ALTER TABLE theme_history ADD COLUMN source_url TEXT");
     }
 
     private static void MigrateMoviesTable(SqliteConnection conn)
@@ -231,21 +248,23 @@ public class Database(string dbPath)
 
     // ── History ───────────────────────────────────────────────────────────────
 
-    public void AddThemeHistory(string movieId, string movieTitle, int? movieYear)
+    public void AddThemeHistory(string movieId, string movieTitle, int? movieYear, string? themeTitle, string? sourceUrl)
     {
         using var conn = Open();
         conn.Execute(
-            "INSERT INTO theme_history (movie_id, movie_title, movie_year, downloaded_at) VALUES (@mid, @t, @y, @dt)",
+            "INSERT INTO theme_history (movie_id, movie_title, movie_year, theme_title, source_url, downloaded_at) VALUES (@mid, @t, @y, @tt, @url, @dt)",
             ("@mid", movieId), ("@t", movieTitle),
-            ("@y", (object?)movieYear ?? DBNull.Value),
-            ("@dt", DateTime.UtcNow.ToString("o")));
+            ("@y",   (object?)movieYear  ?? DBNull.Value),
+            ("@tt",  (object?)themeTitle ?? DBNull.Value),
+            ("@url", (object?)sourceUrl  ?? DBNull.Value),
+            ("@dt",  DateTime.UtcNow.ToString("o")));
     }
 
     public List<Dictionary<string, object?>> GetThemeHistory(int limit = 200)
     {
         using var conn = Open();
         using var r = conn.Query(
-            "SELECT id, movie_id, movie_title, movie_year, downloaded_at FROM theme_history ORDER BY id DESC LIMIT @lim",
+            "SELECT id, movie_id, movie_title, movie_year, theme_title, source_url, downloaded_at FROM theme_history ORDER BY id DESC LIMIT @lim",
             ("@lim", limit));
         var result = new List<Dictionary<string, object?>>();
         while (r.Read())
@@ -255,7 +274,9 @@ public class Database(string dbPath)
                 ["movieId"]      = r.GetString(1),
                 ["movieTitle"]   = r.GetString(2),
                 ["movieYear"]    = r.IsDBNull(3) ? null : r.GetInt32(3),
-                ["downloadedAt"] = r.GetString(4),
+                ["themeTitle"]   = r.IsDBNull(4) ? null : r.GetString(4),
+                ["sourceUrl"]    = r.IsDBNull(5) ? null : r.GetString(5),
+                ["downloadedAt"] = r.GetString(6),
             });
         return result;
     }

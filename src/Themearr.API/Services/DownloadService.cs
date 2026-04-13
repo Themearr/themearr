@@ -48,7 +48,7 @@ public class DownloadService(Database db, ILogger<DownloadService> log)
             var psi = new ProcessStartInfo
             {
                 FileName               = "yt-dlp",
-                Arguments              = $"-x --audio-format mp3 --audio-quality 0 --no-playlist --extractor-args \"youtube:player_client=android,web\" -o \"{outputTemplate}\" \"{url}\"",
+                Arguments              = $"-x --audio-format mp3 --audio-quality 0 --no-playlist --extractor-args \"youtube:player_client=android,web\" --print \"%(title)s\" -o \"{outputTemplate}\" \"{url}\"",
                 RedirectStandardOutput = true,
                 RedirectStandardError  = true,
                 UseShellExecute        = false,
@@ -80,10 +80,13 @@ public class DownloadService(Database db, ILogger<DownloadService> log)
                 throw new InvalidOperationException($"yt-dlp failed (exit {proc.ExitCode}): {tail}");
             }
 
-            var title = movie["title"]?.ToString() ?? "";
-            var year  = movie["year"] is int y ? y : (int?)null;
+            var title      = movie["title"]?.ToString() ?? "";
+            var year       = movie["year"] is int y ? y : (int?)null;
+            var themeTitle = stdout.Split('\n')
+                                   .Select(l => l.Trim())
+                                   .FirstOrDefault(l => l.Length > 0);
             db.SetMovieStatus(movieId, "downloaded");
-            db.AddThemeHistory(movieId, title, year);
+            db.AddThemeHistory(movieId, title, year, themeTitle, url);
             _jobs[movieId] = new JobState(false, true, null);
         }
         catch (Exception ex)

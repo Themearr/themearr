@@ -73,6 +73,8 @@ export interface HistoryEntry {
   movieId: string
   movieTitle: string
   movieYear: number | null
+  themeTitle: string | null
+  sourceUrl: string | null
   downloadedAt: string
 }
 
