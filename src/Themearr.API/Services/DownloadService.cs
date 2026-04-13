@@ -66,7 +66,7 @@ public class DownloadService(Database db, IHttpClientFactory httpClientFactory, 
 
             if (videoId != null)
             {
-                // YouTube URL — use youtube-mp36 RapidAPI
+                // YouTube URL — use youtube-mp36 RapidAPI (may require polling while status=processing)
                 var apiKey = db.GetSetting("rapidapi_key", "");
                 if (string.IsNullOrWhiteSpace(apiKey))
                     throw new InvalidOperationException("RapidAPI key is not configured. Please add it in Settings.");
@@ -76,30 +76,57 @@ public class DownloadService(Database db, IHttpClientFactory httpClientFactory, 
 
                 var http = httpClientFactory.CreateClient();
                 http.Timeout = TimeSpan.FromSeconds(30);
-                using var req = new HttpRequestMessage(HttpMethod.Get, $"https://youtube-mp36.p.rapidapi.com/dl?id={videoId}");
-                req.Headers.Add("X-RapidAPI-Key", apiKey);
-                req.Headers.Add("X-RapidAPI-Host", "youtube-mp36.p.rapidapi.com");
 
-                using var resp = await http.SendAsync(req);
-                var body = await resp.Content.ReadAsStringAsync();
+                string? status = null;
+                string? link = null;
+                string? title = null;
+                var deadline = DateTime.UtcNow.AddMinutes(5);
+                var attempt = 0;
 
-                if (!resp.IsSuccessStatusCode)
-                    throw new InvalidOperationException($"RapidAPI error ({(int)resp.StatusCode}): {body}");
-
-                using var doc = JsonDocument.Parse(body);
-                var root = doc.RootElement;
-
-                var status = root.TryGetProperty("status", out var st) ? st.GetString() : null;
-                if (status != "ok")
+                while (DateTime.UtcNow < deadline)
                 {
+                    attempt++;
+                    using var req = new HttpRequestMessage(HttpMethod.Get, $"https://youtube-mp36.p.rapidapi.com/dl?id={videoId}");
+                    req.Headers.Add("X-RapidAPI-Key", apiKey);
+                    req.Headers.Add("X-RapidAPI-Host", "youtube-mp36.p.rapidapi.com");
+
+                    using var resp = await http.SendAsync(req);
+                    var body = await resp.Content.ReadAsStringAsync();
+
+                    if (!resp.IsSuccessStatusCode)
+                        throw new InvalidOperationException($"RapidAPI error ({(int)resp.StatusCode}): {body}");
+
+                    using var doc = JsonDocument.Parse(body);
+                    var root = doc.RootElement;
+
+                    status = root.TryGetProperty("status", out var st) ? st.GetString() : null;
+                    title  = root.TryGetProperty("title",  out var t)  ? t.GetString()  : null;
+
+                    if (status == "ok")
+                    {
+                        link = root.TryGetProperty("link", out var lnk) ? lnk.GetString() : null;
+                        if (string.IsNullOrEmpty(link))
+                            throw new InvalidOperationException($"RapidAPI returned ok but missing link: {body}");
+                        break;
+                    }
+
+                    if (status == "processing")
+                    {
+                        AddLog(movieId, $"[themearr] Processing… (attempt {attempt}, retrying in 3s)");
+                        await Task.Delay(3000);
+                        continue;
+                    }
+
+                    // Any other status is a hard failure
                     var msg = root.TryGetProperty("msg", out var m) ? m.GetString() : body;
-                    throw new InvalidOperationException($"RapidAPI returned status '{status}': {msg}");
+                    throw new InvalidOperationException($"RapidAPI error (status={status}): {msg}");
                 }
 
-                downloadUrl = root.TryGetProperty("link", out var lnk) ? lnk.GetString()! :
-                              throw new InvalidOperationException($"RapidAPI response missing link: {body}");
+                if (status != "ok" || string.IsNullOrEmpty(link))
+                    throw new InvalidOperationException("RapidAPI timed out waiting for processing to complete.");
 
-                themeTitle = root.TryGetProperty("title", out var t) ? t.GetString() : null;
+                downloadUrl = link;
+                themeTitle = title;
                 AddLog(movieId, "[themearr] Got download link. Downloading…");
             }
             else
