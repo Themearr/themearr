@@ -113,8 +113,8 @@ public class DownloadService(Database db, IHttpClientFactory httpClientFactory, 
 
                     if (status == "processing")
                     {
-                        AddLog(movieId, $"[themearr] Processing… (attempt {attempt}, retrying in 3s)");
-                        await Task.Delay(3000);
+                        AddLog(movieId, $"[themearr] Processing… (attempt {attempt})");
+                        await Task.Delay(1000);
                         continue;
                     }
 
@@ -140,7 +140,7 @@ public class DownloadService(Database db, IHttpClientFactory httpClientFactory, 
                     {
                         // Link expired — re-poll the API for a fresh one
                         AddLog(movieId, $"[themearr] Link expired ({(int)dlResp.StatusCode}), re-polling for a fresh link…");
-                        await Task.Delay(2000);
+                        await Task.Delay(1000);
                         continue;
                     }
 
