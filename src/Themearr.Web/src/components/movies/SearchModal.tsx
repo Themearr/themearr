@@ -15,6 +15,7 @@ export function SearchModal({ movie, onClose, onDownloaded }: SearchModalProps) 
   const [results, setResults] = useState<YoutubeResult[]>([])
   const [searching, setSearching] = useState(false)
   const [downloading, setDownloading] = useState<string | null>(null)
+  const [downloadLogs, setDownloadLogs] = useState<string[]>([])
   const [manualUrl, setManualUrl] = useState('')
   const [error, setError] = useState('')
   const [searched, setSearched] = useState(false)
@@ -25,6 +26,7 @@ export function SearchModal({ movie, onClose, onDownloaded }: SearchModalProps) 
     const id = setInterval(async () => {
       try {
         const st = await moviesApi.downloadStatus(movie.id)
+        if (st.logs?.length) setDownloadLogs(st.logs)
         if (!st.finished) return
         clearInterval(id)
         if (st.error) {
@@ -168,9 +170,18 @@ export function SearchModal({ movie, onClose, onDownloaded }: SearchModalProps) 
 
         {/* In-progress indicator */}
         {downloading && (
-          <div className="flex items-center gap-2 text-sm text-[#D0D5DD]">
-            <Spinner size={14} className="text-[#BB0000]" />
-            Downloading… you can navigate away, this will finish in the background.
+          <div className="space-y-2">
+            <div className="flex items-center gap-2 text-sm text-[#D0D5DD]">
+              <Spinner size={14} className="text-[#BB0000]" />
+              Downloading… you can navigate away, this will finish in the background.
+            </div>
+            {downloadLogs.length > 0 && (
+              <div className="max-h-36 overflow-y-auto rounded-lg bg-[#0C111D] px-3 py-2">
+                {downloadLogs.slice(-15).map((line: string, i: number) => (
+                  <p key={i} className="font-mono text-[11px] text-[#667085] leading-relaxed break-all">{line}</p>
+                ))}
+              </div>
+            )}
           </div>
         )}
 

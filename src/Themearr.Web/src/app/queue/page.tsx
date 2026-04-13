@@ -14,14 +14,17 @@ export default function QueuePage() {
   const [searchQuery,  setSearchQuery]  = useState('')
   const [manualUrl,    setManualUrl]    = useState('')
   const [error,        setError]        = useState('')
-  const [downloading,  setDownloading]  = useState(false)
-  const [autoMode,     setAutoMode]     = useState(false)
+  const [downloading,   setDownloading]   = useState(false)
+  const [downloadLogs,  setDownloadLogs]  = useState<string[]>([])
+  const [autoMode,      setAutoMode]      = useState(false)
 
   // Holds the movieId being downloaded so the polling closure keeps the right id
   const downloadingMovieId = useRef<string | null>(null)
   const searchedFor        = useRef<string | null>(null)
   // Tracks whether we've already triggered auto-download for the current movie
   const autoTriggeredFor   = useRef<string | null>(null)
+  // Keep a ref in sync with autoMode so polling closures never see stale state
+  const autoModeRef        = useRef(autoMode)
 
   const current   = pending?.[currentIdx] ?? null
   const remaining = pending ? Math.max(0, pending.length - currentIdx) : 0
@@ -35,6 +38,9 @@ export default function QueuePage() {
       .then(s => setAutoMode(s.autoDownload))
       .catch(() => null)
   }, [])
+
+  // Keep ref in sync
+  useEffect(() => { autoModeRef.current = autoMode }, [autoMode])
 
   async function toggleAutoMode() {
     const next = !autoMode
@@ -106,11 +112,19 @@ export default function QueuePage() {
     const id = setInterval(async () => {
       try {
         const st = await moviesApi.downloadStatus(movieId)
+        if (st.logs?.length) setDownloadLogs(st.logs)
         if (!st.finished) return
         clearInterval(id)
         if (st.error) {
           setError(st.error)
           setDownloading(false)
+          // Auto mode: skip this movie automatically after a short pause
+          if (autoModeRef.current) {
+            setTimeout(() => {
+              setError('')
+              advanceQueue()
+            }, 3000)
+          }
         } else {
           advanceQueue()
         }
@@ -127,6 +141,7 @@ export default function QueuePage() {
     setError('')
     setManualUrl('')
     setDownloading(false)
+    setDownloadLogs([])
     downloadingMovieId.current = null
   }
 
@@ -269,9 +284,18 @@ export default function QueuePage() {
 
         {/* Downloading progress */}
         {downloading && (
-          <div className="flex items-center gap-2.5 rounded-xl border border-[#1D2939] bg-[#101828] px-4 py-3">
-            <Spinner size={14} className="text-[#BB0000]" />
-            <p className="text-sm text-[#D0D5DD]">Downloading theme…</p>
+          <div className="rounded-xl border border-[#1D2939] bg-[#101828] overflow-hidden">
+            <div className="flex items-center gap-2.5 px-4 py-3 border-b border-[#1D2939]">
+              <Spinner size={14} className="text-[#BB0000]" />
+              <p className="text-sm text-[#D0D5DD]">Downloading theme…</p>
+            </div>
+            {downloadLogs.length > 0 && (
+              <div className="max-h-40 overflow-y-auto px-4 py-3 space-y-0.5">
+                {downloadLogs.slice(-20).map((line: string, i: number) => (
+                  <p key={i} className="font-mono text-[11px] text-[#475467] leading-relaxed break-all">{line}</p>
+                ))}
+              </div>
+            )}
           </div>
         )}
 

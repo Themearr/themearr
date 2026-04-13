@@ -82,7 +82,7 @@ export const moviesApi = {
     }),
 
   downloadStatus: (movieId: string) =>
-    request<{ inProgress: boolean; finished: boolean; error: string | null }>(`/api/download/status/${encodeURIComponent(movieId)}`),
+    request<{ inProgress: boolean; finished: boolean; error: string | null; logs: string[] }>(`/api/download/status/${encodeURIComponent(movieId)}`),
 
   autoDownload: (movieId: string) =>
     request<{ started: boolean; movieId: string; videoId: string; videoTitle: string }>(`/api/auto-download/${encodeURIComponent(movieId)}`, { method: 'POST' }),

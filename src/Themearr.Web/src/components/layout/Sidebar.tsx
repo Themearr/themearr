@@ -4,8 +4,9 @@ import Image from 'next/image'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useEffect, useState } from 'react'
-import { versionApi } from '@/lib/api'
+import { syncApi, versionApi } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
+import { Spinner } from '@/components/ui'
 import type { VersionInfo } from '@/lib/types'
 
 const NAV = [
@@ -56,9 +57,20 @@ export function Sidebar() {
   const pathname = usePathname()
   const { accountName, logout } = useAuth()
   const [version, setVersion] = useState<VersionInfo | null>(null)
+  const [syncing, setSyncing] = useState(false)
 
   useEffect(() => {
     versionApi.get().then(setVersion).catch(() => null)
+  }, [])
+
+  // Poll sync status to show badge on Movies nav item
+  useEffect(() => {
+    const id = setInterval(() => {
+      syncApi.status()
+        .then(s => setSyncing(s.inProgress))
+        .catch(() => null)
+    }, 3000)
+    return () => clearInterval(id)
   }, [])
 
   return (
@@ -75,6 +87,7 @@ export function Sidebar() {
       <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-0.5">
         {NAV.map(({ href, label, icon }) => {
           const active = pathname.startsWith(href)
+          const showSyncBadge = label === 'Movies' && syncing
           return (
             <Link
               key={href}
@@ -87,7 +100,8 @@ export function Sidebar() {
               `}
             >
               <span className={active ? 'text-[#CC3333]' : 'text-[#475467]'}>{icon}</span>
-              {label}
+              <span className="flex-1">{label}</span>
+              {showSyncBadge && <Spinner size={12} className="text-[#F79009]" />}
             </Link>
           )
         })}

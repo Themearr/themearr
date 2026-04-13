@@ -8,14 +8,20 @@ namespace Themearr.API.Services;
 public class DownloadService(Database db, ILogger<DownloadService> log)
 {
     private sealed record JobState(bool InProgress, bool Finished, string? Error);
-    private readonly ConcurrentDictionary<string, JobState> _jobs = new();
+    private readonly ConcurrentDictionary<string, JobState>          _jobs    = new();
+    private readonly ConcurrentDictionary<string, ConcurrentQueue<string>> _jobLogs = new();
+
+    private const int MaxLogLines = 300;
 
     public bool Start(string movieId, string youtubeUrl)
     {
         if (_jobs.TryGetValue(movieId, out var existing) && existing.InProgress)
             return false;
 
-        var url = NormaliseYoutubeUrl(youtubeUrl.Trim());
+        var url  = NormaliseYoutubeUrl(youtubeUrl.Trim());
+        var logs = _jobLogs.GetOrAdd(movieId, _ => new ConcurrentQueue<string>());
+        while (logs.TryDequeue(out _)) { }   // clear previous run's logs
+
         _jobs[movieId] = new JobState(true, false, null);
         _ = Task.Run(() => RunAsync(movieId, url));
         return true;
@@ -24,8 +30,13 @@ public class DownloadService(Database db, ILogger<DownloadService> log)
     public object GetStatus(string movieId)
     {
         if (!_jobs.TryGetValue(movieId, out var state))
-            return new { inProgress = false, finished = false, error = (string?)null };
-        return new { inProgress = state.InProgress, finished = state.Finished, error = state.Error };
+            return new { inProgress = false, finished = false, error = (string?)null, logs = Array.Empty<string>() };
+
+        _jobLogs.TryGetValue(movieId, out var logQueue);
+        var lines = logQueue?.ToArray() ?? [];
+        if (lines.Length > 50) lines = lines[^50..];
+
+        return new { inProgress = state.InProgress, finished = state.Finished, error = state.Error, logs = lines };
     }
 
     private async Task RunAsync(string movieId, string url)
@@ -56,9 +67,33 @@ public class DownloadService(Database db, ILogger<DownloadService> log)
 
             log.LogInformation("Running yt-dlp for {MovieId}: {Url}", movieId, url);
 
+            _jobLogs.TryGetValue(movieId, out var logQueue);
+
             using var proc = Process.Start(psi)!;
-            var stdoutTask = proc.StandardOutput.ReadToEndAsync();
-            var stderrTask = proc.StandardError.ReadToEndAsync();
+
+            var stdoutLines = new List<string>();
+            var stderrLines = new List<string>();
+
+            var stdoutTask = Task.Run(async () => {
+                string? line;
+                while ((line = await proc.StandardOutput.ReadLineAsync()) != null)
+                    stdoutLines.Add(line);
+            });
+
+            var stderrTask = Task.Run(async () => {
+                string? line;
+                while ((line = await proc.StandardError.ReadLineAsync()) != null)
+                {
+                    stderrLines.Add(line);
+                    if (logQueue != null)
+                    {
+                        logQueue.Enqueue(line);
+                        // Trim to prevent unbounded growth
+                        while (logQueue.Count > MaxLogLines)
+                            logQueue.TryDequeue(out _);
+                    }
+                }
+            });
 
             await Task.WhenAny(
                 Task.Run(() => proc.WaitForExit()),
@@ -70,8 +105,10 @@ public class DownloadService(Database db, ILogger<DownloadService> log)
                 throw new TimeoutException("Download timed out after 15 minutes");
             }
 
-            var stdout = await stdoutTask;
-            var stderr = await stderrTask;
+            await Task.WhenAll(stdoutTask, stderrTask);
+
+            var stdout = string.Join("\n", stdoutLines);
+            var stderr = string.Join("\n", stderrLines);
 
             if (proc.ExitCode != 0)
             {
