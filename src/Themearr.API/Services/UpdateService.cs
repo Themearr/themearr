@@ -188,13 +188,32 @@ public class UpdateService(Database db, IConfiguration config)
 
         var helper = "/usr/local/bin/themearr-update";
         if (File.Exists(helper))
-            return Environment.GetEnvironmentVariable("EUID") == "0" ? helper : $"sudo {helper}";
+            return IsRoot() ? helper : $"sudo {helper}";
 
         var deployUrl = "https://raw.githubusercontent.com/Themearr/themearr/main/deploy.sh";
-        var isRoot = Environment.GetEnvironmentVariable("EUID") == "0";
-        return isRoot
+        return IsRoot()
             ? $"TMP_DEPLOY=/tmp/themearr-deploy.sh && curl -fsSL {deployUrl} -o \"$TMP_DEPLOY\" && bash \"$TMP_DEPLOY\" && systemctl restart themearr"
             : $"TMP_DEPLOY=/tmp/themearr-deploy.sh && curl -fsSL {deployUrl} -o \"$TMP_DEPLOY\" && sudo bash \"$TMP_DEPLOY\" && sudo systemctl restart themearr";
+    }
+
+    private static bool IsRoot()
+    {
+        // Check EUID env var (may be set explicitly), then fall back to whoami
+        var euid = Environment.GetEnvironmentVariable("EUID");
+        if (euid == "0") return true;
+        try
+        {
+            var psi = new ProcessStartInfo("id", "-u")
+            {
+                RedirectStandardOutput = true,
+                UseShellExecute        = false,
+            };
+            using var p = Process.Start(psi)!;
+            var output = p.StandardOutput.ReadToEnd().Trim();
+            p.WaitForExit(3000);
+            return output == "0";
+        }
+        catch { return false; }
     }
 
     private static string NormaliseSemver(string value)

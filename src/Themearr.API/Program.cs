@@ -42,7 +42,19 @@ db.SetSetting("app_version", appVersion);
 
 app.UseCors();
 app.UseDefaultFiles();
-app.UseStaticFiles();
+// Prevent browsers from caching index.html so updated JS bundles are loaded after deploys
+app.UseStaticFiles(new StaticFileOptions
+{
+    OnPrepareResponse = ctx =>
+    {
+        var path = ctx.File.Name;
+        if (path.EndsWith(".html", StringComparison.OrdinalIgnoreCase))
+        {
+            ctx.Context.Response.Headers["Cache-Control"] = "no-cache, no-store, must-revalidate";
+            ctx.Context.Response.Headers["Pragma"] = "no-cache";
+        }
+    }
+});
 
 app.MapControllers();
 

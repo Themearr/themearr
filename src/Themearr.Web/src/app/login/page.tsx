@@ -17,7 +17,7 @@ export default function LoginPage() {
   // Redirect if already authenticated
   useEffect(() => {
     if (!loading && connected) {
-      router.replace(setupComplete ? '/movies' : '/setup')
+      router.replace(setupComplete ? '/queue' : '/setup')
     }
   }, [loading, connected, setupComplete, router])
 
@@ -63,7 +63,7 @@ export default function LoginPage() {
           setPolling(false)
           await refresh()
           const s = await setupApi.status()
-          router.replace(s.setupComplete ? '/movies' : '/setup')
+          router.replace(s.setupComplete ? '/queue' : '/setup')
         }
       } catch { /* keep polling */ }
     }, 2000)
