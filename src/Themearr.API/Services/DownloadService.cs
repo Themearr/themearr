@@ -59,7 +59,7 @@ public class DownloadService(Database db, ILogger<DownloadService> log)
             var psi = new ProcessStartInfo
             {
                 FileName               = "yt-dlp",
-                Arguments              = $"-x --audio-format mp3 --audio-quality 0 --no-playlist --no-simulate --extractor-args \"youtube:player_client=tv_embedded,web_embedded\" --print \"%(title)s\" -o \"{outputTemplate}\" \"{url}\"",
+                Arguments              = $"-x --audio-format mp3 --audio-quality 0 --no-playlist --no-simulate --print \"%(title)s\" -o \"{outputTemplate}\" \"{url}\"",
                 RedirectStandardOutput = true,
                 RedirectStandardError  = true,
                 UseShellExecute        = false,

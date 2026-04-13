@@ -49,8 +49,8 @@ info "Installing Themearr $TAG ($ARCH_SUFFIX)"
 # ── System dependencies ───────────────────────────────────────────────────────
 
 if command -v apt-get &>/dev/null; then
-  info "Installing ffmpeg and yt-dlp..."
-  apt-get install -y --no-install-recommends ffmpeg yt-dlp 2>&1 | grep -v "^$" || true
+  info "Installing system dependencies (ffmpeg, yt-dlp, nodejs)..."
+  apt-get install -y --no-install-recommends ffmpeg yt-dlp nodejs 2>&1 | grep -v "^$" || true
   ok "System dependencies installed"
 fi
 
