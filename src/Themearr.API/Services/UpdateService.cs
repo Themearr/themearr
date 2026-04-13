@@ -190,10 +190,13 @@ public class UpdateService(Database db, IConfiguration config)
         if (File.Exists(helper))
             return IsRoot() ? helper : $"sudo {helper}";
 
+        // deploy.sh handles its own restart via systemd-run --no-block, so we
+        // must NOT append "systemctl restart" here — that would kill this process
+        // (exit 143) before the command is recorded as finished.
         var deployUrl = "https://raw.githubusercontent.com/Themearr/themearr/main/deploy.sh";
         return IsRoot()
-            ? $"TMP_DEPLOY=/tmp/themearr-deploy.sh && curl -fsSL {deployUrl} -o \"$TMP_DEPLOY\" && bash \"$TMP_DEPLOY\" && systemctl restart themearr"
-            : $"TMP_DEPLOY=/tmp/themearr-deploy.sh && curl -fsSL {deployUrl} -o \"$TMP_DEPLOY\" && sudo bash \"$TMP_DEPLOY\" && sudo systemctl restart themearr";
+            ? $"curl -fsSL {deployUrl} | bash"
+            : $"curl -fsSL {deployUrl} | sudo bash";
     }
 
     private static bool IsRoot()
