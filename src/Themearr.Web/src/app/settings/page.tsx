@@ -12,10 +12,11 @@ export default function SettingsPage() {
   const [saving,         setSaving]         = useState(false)
   const [saved,          setSaved]          = useState(false)
   const [error,          setError]          = useState('')
-  const [rapidApiOk,     setRapidApiOk]     = useState<boolean | null>(null)
-  const [rapidApiKey,    setRapidApiKey]    = useState('')
-  const [rapidApiSaving, setRapidApiSaving] = useState(false)
-  const [rapidApiError,  setRapidApiError]  = useState('')
+  const [rapidApiOk,       setRapidApiOk]       = useState<boolean | null>(null)
+  const [rapidApiKey,      setRapidApiKey]      = useState('')
+  const [rapidApiUsername, setRapidApiUsername] = useState('')
+  const [rapidApiSaving,   setRapidApiSaving]   = useState(false)
+  const [rapidApiError,    setRapidApiError]    = useState('')
 
   // Update modal state
   const [updateOpen,    setUpdateOpen]    = useState(false)
@@ -94,13 +95,14 @@ export default function SettingsPage() {
   }
 
   async function saveRapidApiKey() {
-    if (!rapidApiKey.trim()) return
+    if (!rapidApiKey.trim() || !rapidApiUsername.trim()) return
     setRapidApiSaving(true)
     setRapidApiError('')
     try {
-      await rapidApiApi.save(rapidApiKey.trim())
+      await rapidApiApi.save(rapidApiKey.trim(), rapidApiUsername.trim())
       setRapidApiOk(true)
       setRapidApiKey('')
+      setRapidApiUsername('')
     } catch (e) {
       setRapidApiError((e as Error).message)
     } finally {
@@ -112,6 +114,7 @@ export default function SettingsPage() {
     await rapidApiApi.remove().catch(() => null)
     setRapidApiOk(false)
     setRapidApiKey('')
+    setRapidApiUsername('')
   }
 
   function closeUpdateModal() {
@@ -259,7 +262,7 @@ export default function SettingsPage() {
               <li>Search for <span className="text-[#D0D5DD]">youtube-mp36</span> and open the API</li>
               <li>Subscribe to the <span className="text-[#D0D5DD]">Basic (free)</span> plan</li>
               <li>Copy your key from the <span className="text-[#D0D5DD]">X-RapidAPI-Key</span> header shown in the code snippets</li>
-              <li>Paste it below and click Save</li>
+              <li>Paste your key and your RapidAPI username below, then click Save</li>
             </ol>
           </div>
 
@@ -274,29 +277,21 @@ export default function SettingsPage() {
                 </div>
                 <Button variant="ghost" size="sm" onClick={removeRapidApiKey}>Remove</Button>
               </div>
-              <div className="flex gap-2">
-                <Input
-                  placeholder="Replace with a new key…"
-                  value={rapidApiKey}
-                  onChange={e => setRapidApiKey(e.target.value)}
-                  className="flex-1 font-mono text-xs"
-                />
-                <Button onClick={saveRapidApiKey} loading={rapidApiSaving} size="sm" disabled={!rapidApiKey.trim()}>
-                  Replace
-                </Button>
+              <div className="space-y-2">
+                <Input placeholder="New RapidAPI key…" value={rapidApiKey} onChange={e => setRapidApiKey(e.target.value)} className="font-mono text-xs" />
+                <div className="flex gap-2">
+                  <Input placeholder="RapidAPI username…" value={rapidApiUsername} onChange={e => setRapidApiUsername(e.target.value)} className="flex-1 text-xs" />
+                  <Button onClick={saveRapidApiKey} loading={rapidApiSaving} size="sm" disabled={!rapidApiKey.trim() || !rapidApiUsername.trim()}>Replace</Button>
+                </div>
               </div>
             </div>
           ) : (
-            <div className="flex gap-2">
-              <Input
-                placeholder="Paste your RapidAPI key…"
-                value={rapidApiKey}
-                onChange={e => setRapidApiKey(e.target.value)}
-                className="flex-1 font-mono text-xs"
-              />
-              <Button onClick={saveRapidApiKey} loading={rapidApiSaving} size="sm" disabled={!rapidApiKey.trim()}>
-                Save
-              </Button>
+            <div className="space-y-2">
+              <Input placeholder="RapidAPI key…" value={rapidApiKey} onChange={e => setRapidApiKey(e.target.value)} className="font-mono text-xs" />
+              <div className="flex gap-2">
+                <Input placeholder="RapidAPI username…" value={rapidApiUsername} onChange={e => setRapidApiUsername(e.target.value)} className="flex-1 text-xs" />
+                <Button onClick={saveRapidApiKey} loading={rapidApiSaving} size="sm" disabled={!rapidApiKey.trim() || !rapidApiUsername.trim()}>Save</Button>
+              </div>
             </div>
           )}
           {rapidApiError && <p className="text-xs text-[#FDA29B]">{rapidApiError}</p>}

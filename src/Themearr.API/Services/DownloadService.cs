@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Themearr.API.Data;
 
@@ -72,9 +74,12 @@ public class DownloadService(Database db, IHttpClientFactory httpClientFactory, 
             if (videoId != null)
             {
                 // YouTube URL — use youtube-mp36 RapidAPI, poll until ready then download immediately
-                var apiKey = db.GetSetting("rapidapi_key", "");
-                if (string.IsNullOrWhiteSpace(apiKey))
-                    throw new InvalidOperationException("RapidAPI key is not configured. Please add it in Settings.");
+                var apiKey   = db.GetSetting("rapidapi_key", "");
+                var username = db.GetSetting("rapidapi_username", "");
+                if (string.IsNullOrWhiteSpace(apiKey) || string.IsNullOrWhiteSpace(username))
+                    throw new InvalidOperationException("RapidAPI key and username are not configured. Please add them in Settings.");
+
+                var usernameMd5 = Convert.ToHexString(MD5.HashData(Encoding.UTF8.GetBytes(username))).ToLower();
 
                 AddLog(movieId, $"[themearr] Fetching download link for video {videoId}…");
                 log.LogInformation("Fetching RapidAPI download link for {MovieId}: {VideoId}", movieId, videoId);
@@ -126,13 +131,17 @@ public class DownloadService(Database db, IHttpClientFactory httpClientFactory, 
                     themeTitle = root.TryGetProperty("title", out var t) ? t.GetString() : null;
                     AddLog(movieId, "[themearr] Got download link. Downloading immediately…");
 
-                    // Download immediately while the link is fresh
-                    using var dlResp = await http.GetAsync(link, HttpCompletionOption.ResponseHeadersRead);
+                    // Download immediately while the link is fresh, with whitelist headers
+                    using var dlReq = new HttpRequestMessage(HttpMethod.Get, link);
+                    dlReq.Headers.TryAddWithoutValidation("User-Agent", $"Mozilla/5.0 {username}");
+                    dlReq.Headers.Add("X-RUN", usernameMd5);
+                    using var dlResp = await http.SendAsync(dlReq, HttpCompletionOption.ResponseHeadersRead);
                     if (!dlResp.IsSuccessStatusCode)
                     {
-                        var errBody = await dlResp.Content.ReadAsStringAsync();
-                        var snippet = errBody.Length > 300 ? errBody[..300] : errBody;
-                        throw new InvalidOperationException($"Download failed ({(int)dlResp.StatusCode}): {snippet}");
+                        // Link expired — re-poll the API for a fresh one
+                        AddLog(movieId, $"[themearr] Link expired ({(int)dlResp.StatusCode}), re-polling for a fresh link…");
+                        await Task.Delay(2000);
+                        continue;
                     }
 
                     await using var fileStream = File.Create(outputPath);

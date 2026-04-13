@@ -131,10 +131,10 @@ export const historyApi = {
 export const rapidApiApi = {
   status: () => request<{ configured: boolean }>('/api/settings/rapidapi'),
 
-  save: (key: string) =>
+  save: (key: string, username: string) =>
     request<{ configured: boolean }>('/api/settings/rapidapi', {
       method: 'POST',
-      body: JSON.stringify({ key }),
+      body: JSON.stringify({ key, username }),
     }),
 
   remove: () => request<{ configured: boolean }>('/api/settings/rapidapi', { method: 'DELETE' }),

@@ -58,8 +58,9 @@ public class SettingsController(Database db) : ControllerBase
     [HttpGet("rapidapi")]
     public IActionResult GetRapidApiKey()
     {
-        var key = db.GetSetting("rapidapi_key", "");
-        return Ok(new { configured = !string.IsNullOrWhiteSpace(key) });
+        var key      = db.GetSetting("rapidapi_key", "");
+        var username = db.GetSetting("rapidapi_username", "");
+        return Ok(new { configured = !string.IsNullOrWhiteSpace(key) && !string.IsNullOrWhiteSpace(username) });
     }
 
     [HttpPost("rapidapi")]
@@ -67,19 +68,23 @@ public class SettingsController(Database db) : ControllerBase
     {
         if (string.IsNullOrWhiteSpace(payload.Key))
             return BadRequest(new { detail = "API key cannot be empty." });
-        db.SetSetting("rapidapi_key", payload.Key.Trim());
+        if (string.IsNullOrWhiteSpace(payload.Username))
+            return BadRequest(new { detail = "RapidAPI username cannot be empty." });
+        db.SetSetting("rapidapi_key",      payload.Key.Trim());
+        db.SetSetting("rapidapi_username", payload.Username.Trim());
         return Ok(new { configured = true });
     }
 
     [HttpDelete("rapidapi")]
     public IActionResult DeleteRapidApiKey()
     {
-        db.SetSetting("rapidapi_key", "");
+        db.SetSetting("rapidapi_key",      "");
+        db.SetSetting("rapidapi_username", "");
         return Ok(new { configured = false });
     }
 }
 
-public record RapidApiKeyPayload(string Key);
+public record RapidApiKeyPayload(string Key, string Username);
 
 public class SettingsPayload
 {
