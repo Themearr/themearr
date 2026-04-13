@@ -83,6 +83,17 @@ export interface HistoryEntry {
   downloadedAt: string
 }
 
+export interface DashboardStats {
+  total: number
+  downloaded: number
+  pending: number
+  ignored: number
+  coverage: number
+  addedThisWeek: number
+  recentActivity: HistoryEntry[]
+  recentlyAdded: { id: string; title: string; year: number | null; syncedAt: string | null; posterUrl: string | null }[]
+}
+
 export interface VersionInfo {
   current: string
   latest: string

@@ -1,6 +1,6 @@
 import type {
   Movie, YoutubeResult, PlexServer, PlexLibrary,
-  SetupStatus, Settings, SyncStatus, VersionInfo, HistoryEntry,
+  SetupStatus, Settings, SyncStatus, VersionInfo, HistoryEntry, DashboardStats,
 } from './types'
 
 const BASE = (process.env.NEXT_PUBLIC_API_URL ?? '').replace(/\/$/, '')
@@ -123,6 +123,12 @@ export const syncApi = {
 
 export const historyApi = {
   get: () => request<HistoryEntry[]>('/api/history'),
+}
+
+// ── Stats ─────────────────────────────────────────────────────────────────────
+
+export const statsApi = {
+  get: () => request<DashboardStats>('/api/stats'),
 }
 
 // ── Version / update ──────────────────────────────────────────────────────────

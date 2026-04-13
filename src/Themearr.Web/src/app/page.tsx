@@ -13,7 +13,7 @@ export default function RootPage() {
     if (loading) return
     if (!connected) router.replace('/login')
     else if (!setupComplete) router.replace('/setup')
-    else router.replace('/queue')
+    else router.replace('/dashboard')
   }, [loading, connected, setupComplete, router])
 
   return (

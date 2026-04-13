@@ -50,6 +50,7 @@ public class Database(string dbPath)
         MigrateMoviesTable(conn);
         MigrateHistoryTable(conn);
         MigrateMoviesTableV2(conn);
+        MigrateMoviesTableV3(conn);
     }
 
     private static void MigrateHistoryTable(SqliteConnection conn)
@@ -75,6 +76,17 @@ public class Database(string dbPath)
             while (r.Read()) columns.Add(r.GetString(1));
         if (!columns.Contains("ignored"))
             conn.Execute("ALTER TABLE movies ADD COLUMN ignored INTEGER NOT NULL DEFAULT 0");
+    }
+
+    private static void MigrateMoviesTableV3(SqliteConnection conn)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "PRAGMA table_info(movies)";
+        var columns = new HashSet<string>();
+        using (var r = cmd.ExecuteReader())
+            while (r.Read()) columns.Add(r.GetString(1));
+        if (!columns.Contains("synced_at"))
+            conn.Execute("ALTER TABLE movies ADD COLUMN synced_at TEXT");
     }
 
     private static void MigrateMoviesTable(SqliteConnection conn)
@@ -215,15 +227,16 @@ public class Database(string dbPath)
         using var tx = conn.BeginTransaction();
         foreach (var m in movies)
             conn.Execute("""
-                INSERT INTO movies (id, plex_server_id, plex_rating_key, title, year, sourcePath, folderName, status)
-                VALUES (@id, @sid, @rk, @t, @y, @sp, @fn, 'pending')
+                INSERT INTO movies (id, plex_server_id, plex_rating_key, title, year, sourcePath, folderName, status, synced_at)
+                VALUES (@id, @sid, @rk, @t, @y, @sp, @fn, 'pending', COALESCE((SELECT synced_at FROM movies WHERE id = @id), strftime('%Y-%m-%dT%H:%M:%fZ', 'now')))
                 ON CONFLICT(id) DO UPDATE SET
                     plex_server_id  = excluded.plex_server_id,
                     plex_rating_key = excluded.plex_rating_key,
                     title           = excluded.title,
                     year            = excluded.year,
                     sourcePath      = excluded.sourcePath,
-                    folderName      = excluded.folderName
+                    folderName      = excluded.folderName,
+                    synced_at       = COALESCE(movies.synced_at, excluded.synced_at)
                 """,
                 ("@id", m.Id), ("@sid", m.PlexServerId), ("@rk", m.PlexRatingKey),
                 ("@t", m.Title), ("@y", (object?)m.Year ?? DBNull.Value),
@@ -263,6 +276,82 @@ public class Database(string dbPath)
     {
         using var conn = Open();
         conn.Execute("UPDATE movies SET ignored = @v WHERE id = @id", ("@v", ignored ? 1 : 0), ("@id", id));
+    }
+
+    // ── Stats ─────────────────────────────────────────────────────────────────
+
+    public StatsResult GetStats()
+    {
+        using var conn = Open();
+
+        // Movie counts (using DB status — fast, avoids per-row filesystem checks)
+        int total = 0, downloaded = 0, pending = 0, ignored = 0;
+        using (var r = conn.Query("""
+            SELECT
+                SUM(CASE WHEN ignored = 0 THEN 1 ELSE 0 END),
+                SUM(CASE WHEN ignored = 0 AND status = 'downloaded' THEN 1 ELSE 0 END),
+                SUM(CASE WHEN ignored = 0 AND status = 'pending'    THEN 1 ELSE 0 END),
+                SUM(CASE WHEN ignored = 1 THEN 1 ELSE 0 END)
+            FROM movies
+            """))
+        {
+            if (r.Read())
+            {
+                total      = r.IsDBNull(0) ? 0 : (int)r.GetInt64(0);
+                downloaded = r.IsDBNull(1) ? 0 : (int)r.GetInt64(1);
+                pending    = r.IsDBNull(2) ? 0 : (int)r.GetInt64(2);
+                ignored    = r.IsDBNull(3) ? 0 : (int)r.GetInt64(3);
+            }
+        }
+
+        var coverage = total > 0 ? Math.Round(downloaded * 100.0 / total, 1) : 0.0;
+
+        // Themes added in the last 7 days
+        int addedThisWeek = 0;
+        var weekAgo = DateTime.UtcNow.AddDays(-7).ToString("o");
+        using (var r = conn.Query("SELECT COUNT(*) FROM theme_history WHERE downloaded_at >= @w", ("@w", weekAgo)))
+            if (r.Read()) addedThisWeek = (int)r.GetInt64(0);
+
+        // Last 5 downloaded themes
+        var recentActivity = new List<Dictionary<string, object?>>();
+        using (var r = conn.Query(
+            "SELECT id, movie_id, movie_title, movie_year, theme_title, source_url, downloaded_at FROM theme_history ORDER BY id DESC LIMIT 5"))
+        {
+            while (r.Read())
+                recentActivity.Add(new Dictionary<string, object?>
+                {
+                    ["id"]           = r.GetInt64(0),
+                    ["movieId"]      = r.GetString(1),
+                    ["movieTitle"]   = r.GetString(2),
+                    ["movieYear"]    = r.IsDBNull(3) ? null : r.GetInt32(3),
+                    ["themeTitle"]   = r.IsDBNull(4) ? null : r.GetString(4),
+                    ["sourceUrl"]    = r.IsDBNull(5) ? null : r.GetString(5),
+                    ["downloadedAt"] = r.GetString(6),
+                });
+        }
+
+        // Last 5 pending movies by first-sync date (shows what's new in the library)
+        var recentlyAdded = new List<Dictionary<string, object?>>();
+        using (var r = conn.Query("""
+            SELECT id, plex_server_id, plex_rating_key, title, year, synced_at
+            FROM movies
+            WHERE ignored = 0 AND status = 'pending' AND synced_at IS NOT NULL
+            ORDER BY synced_at DESC LIMIT 5
+            """))
+        {
+            while (r.Read())
+                recentlyAdded.Add(new Dictionary<string, object?>
+                {
+                    ["id"]            = r.GetString(0),
+                    ["plexServerId"]  = r.GetString(1),
+                    ["plexRatingKey"] = r.GetString(2),
+                    ["title"]         = r.GetString(3),
+                    ["year"]          = r.IsDBNull(4) ? null : r.GetInt32(4),
+                    ["syncedAt"]      = r.IsDBNull(5) ? null : r.GetString(5),
+                });
+        }
+
+        return new StatsResult(total, downloaded, pending, ignored, coverage, addedThisWeek, recentActivity, recentlyAdded);
     }
 
     // ── History ───────────────────────────────────────────────────────────────
@@ -357,7 +446,17 @@ file static class SqliteExtensions
     }
 }
 
-// ── Simple DTO for upsert ──────────────────────────────────────────────────────
+// ── DTOs ──────────────────────────────────────────────────────────────────────
+
+public record StatsResult(
+    int Total,
+    int Downloaded,
+    int Pending,
+    int Ignored,
+    double Coverage,
+    int AddedThisWeek,
+    List<Dictionary<string, object?>> RecentActivity,
+    List<Dictionary<string, object?>> RecentlyAdded);
 
 public record MovieRecord(
     string Id,
