@@ -51,6 +51,11 @@ info "Installing Themearr $TAG ($ARCH_SUFFIX)"
 if command -v apt-get &>/dev/null; then
   info "Installing system dependencies (ffmpeg, yt-dlp, nodejs)..."
   apt-get install -y --no-install-recommends ffmpeg yt-dlp nodejs 2>&1 | grep -v "^$" || true
+  # yt-dlp looks for "node" but Debian/Ubuntu installs it as "nodejs"
+  if ! command -v node &>/dev/null && command -v nodejs &>/dev/null; then
+    ln -sf "$(command -v nodejs)" /usr/local/bin/node
+    info "Created node → nodejs symlink"
+  fi
   ok "System dependencies installed"
 fi
 
