@@ -68,16 +68,19 @@ export const moviesApi = {
     request<{ movie: Movie; results: YoutubeResult[] }>(`/api/search/${encodeURIComponent(movieId)}`),
 
   download: (movieId: string, videoId: string) =>
-    request<{ status: string; movieId: string }>('/api/download', {
+    request<{ started: boolean; movieId: string }>('/api/download', {
       method: 'POST',
       body: JSON.stringify({ movieId, videoId }),
     }),
 
   downloadUrl: (movieId: string, url: string) =>
-    request<{ status: string; movieId: string }>('/api/download-url', {
+    request<{ started: boolean; movieId: string }>('/api/download-url', {
       method: 'POST',
       body: JSON.stringify({ movieId, url }),
     }),
+
+  downloadStatus: (movieId: string) =>
+    request<{ inProgress: boolean; finished: boolean; error: string | null }>(`/api/download/status/${encodeURIComponent(movieId)}`),
 }
 
 // ── Settings ──────────────────────────────────────────────────────────────────

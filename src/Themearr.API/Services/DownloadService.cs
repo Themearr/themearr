@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text.RegularExpressions;
 using Themearr.API.Data;
@@ -6,66 +7,93 @@ namespace Themearr.API.Services;
 
 public class DownloadService(Database db, ILogger<DownloadService> log)
 {
-    public async Task<string> DownloadThemeAsync(string movieId, string youtubeUrl)
-    {
-        var movie = db.GetMovie(movieId)
-            ?? throw new KeyNotFoundException($"Movie not found: {movieId}");
+    private sealed record JobState(bool InProgress, bool Finished, string? Error);
+    private readonly ConcurrentDictionary<string, JobState> _jobs = new();
 
-        var folder = movie["folderName"]?.ToString()
-            ?? throw new InvalidOperationException("Movie has no folder path");
+    public bool Start(string movieId, string youtubeUrl)
+    {
+        if (_jobs.TryGetValue(movieId, out var existing) && existing.InProgress)
+            return false;
 
         var url = NormaliseYoutubeUrl(youtubeUrl.Trim());
-        if (!url.StartsWith("http://") && !url.StartsWith("https://"))
-            throw new ArgumentException("Invalid URL");
+        _jobs[movieId] = new JobState(true, false, null);
+        _ = Task.Run(() => RunAsync(movieId, url));
+        return true;
+    }
 
-        if (!IsCommandAvailable("yt-dlp"))
-            throw new InvalidOperationException("yt-dlp is not installed or not in PATH");
+    public object GetStatus(string movieId)
+    {
+        if (!_jobs.TryGetValue(movieId, out var state))
+            return new { inProgress = false, finished = false, error = (string?)null };
+        return new { inProgress = state.InProgress, finished = state.Finished, error = state.Error };
+    }
 
-        var outputTemplate = Path.Combine(folder, "theme.%(ext)s");
-        var psi = new ProcessStartInfo
+    private async Task RunAsync(string movieId, string url)
+    {
+        try
         {
-            FileName               = "yt-dlp",
-            Arguments              = $"-x --audio-format mp3 --audio-quality 0 --no-playlist --extractor-args \"youtube:player_client=android,web\" -o \"{outputTemplate}\" \"{url}\"",
-            RedirectStandardOutput = true,
-            RedirectStandardError  = true,
-            UseShellExecute        = false,
-        };
+            var movie = db.GetMovie(movieId)
+                ?? throw new KeyNotFoundException($"Movie not found: {movieId}");
 
-        log.LogInformation("Running yt-dlp for {MovieId}: {Url}", movieId, url);
+            var folder = movie["folderName"]?.ToString()
+                ?? throw new InvalidOperationException("Movie has no folder path");
 
-        using var proc = Process.Start(psi)!;
-        var stdoutTask = proc.StandardOutput.ReadToEndAsync();
-        var stderrTask = proc.StandardError.ReadToEndAsync();
+            if (!url.StartsWith("http://") && !url.StartsWith("https://"))
+                throw new ArgumentException("Invalid URL");
 
-        var completed = await Task.WhenAny(
-            Task.Run(() => proc.WaitForExit()),
-            Task.Delay(TimeSpan.FromMinutes(15)));
+            if (!IsCommandAvailable("yt-dlp"))
+                throw new InvalidOperationException("yt-dlp is not installed or not in PATH");
 
-        if (!proc.HasExited)
-        {
-            proc.Kill(true);
-            throw new TimeoutException("Download timed out after 15 minutes");
+            var outputTemplate = Path.Combine(folder, "theme.%(ext)s");
+            var psi = new ProcessStartInfo
+            {
+                FileName               = "yt-dlp",
+                Arguments              = $"-x --audio-format mp3 --audio-quality 0 --no-playlist --extractor-args \"youtube:player_client=android,web\" -o \"{outputTemplate}\" \"{url}\"",
+                RedirectStandardOutput = true,
+                RedirectStandardError  = true,
+                UseShellExecute        = false,
+            };
+
+            log.LogInformation("Running yt-dlp for {MovieId}: {Url}", movieId, url);
+
+            using var proc = Process.Start(psi)!;
+            var stdoutTask = proc.StandardOutput.ReadToEndAsync();
+            var stderrTask = proc.StandardError.ReadToEndAsync();
+
+            await Task.WhenAny(
+                Task.Run(() => proc.WaitForExit()),
+                Task.Delay(TimeSpan.FromMinutes(15)));
+
+            if (!proc.HasExited)
+            {
+                proc.Kill(true);
+                throw new TimeoutException("Download timed out after 15 minutes");
+            }
+
+            var stdout = await stdoutTask;
+            var stderr = await stderrTask;
+
+            if (proc.ExitCode != 0)
+            {
+                var tail = (stderr + "\n" + stdout).Trim();
+                if (tail.Length > 1200) tail = tail[^1200..];
+                throw new InvalidOperationException($"yt-dlp failed (exit {proc.ExitCode}): {tail}");
+            }
+
+            db.SetMovieStatus(movieId, "downloaded");
+            _jobs[movieId] = new JobState(false, true, null);
         }
-
-        var stdout = await stdoutTask;
-        var stderr = await stderrTask;
-
-        if (proc.ExitCode != 0)
+        catch (Exception ex)
         {
-            var tail = (stderr + "\n" + stdout).Trim();
-            if (tail.Length > 1200) tail = tail[^1200..];
-            throw new InvalidOperationException($"yt-dlp failed (exit {proc.ExitCode}): {tail}");
+            log.LogError(ex, "Download failed for {MovieId}", movieId);
+            _jobs[movieId] = new JobState(false, true, ex.Message);
         }
-
-        db.SetMovieStatus(movieId, "downloaded");
-        return movieId;
     }
 
     private static string NormaliseYoutubeUrl(string url)
     {
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return url;
         var host = uri.Host.ToLower().TrimStart('w').TrimStart('w').TrimStart('w').TrimStart('.');
-        // www.youtube.com / youtube.com / m.youtube.com
         if (host is "youtube.com" or "m.youtube.com")
         {
             var q = System.Web.HttpUtility.ParseQueryString(uri.Query);

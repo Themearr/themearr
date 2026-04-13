@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { moviesApi } from '@/lib/api'
 import type { Movie, YoutubeResult } from '@/lib/types'
 import { Button, Modal, Spinner, Input } from '@/components/ui'
@@ -18,6 +18,26 @@ export function SearchModal({ movie, onClose, onDownloaded }: SearchModalProps) 
   const [manualUrl, setManualUrl] = useState('')
   const [error, setError] = useState('')
   const [searched, setSearched] = useState(false)
+
+  // Poll download status while a download is in progress
+  useEffect(() => {
+    if (!downloading) return
+    const id = setInterval(async () => {
+      try {
+        const st = await moviesApi.downloadStatus(movie.id)
+        if (!st.finished) return
+        clearInterval(id)
+        if (st.error) {
+          setError(st.error)
+          setDownloading(null)
+        } else {
+          onDownloaded(movie.id)
+          onClose()
+        }
+      } catch { /* ignore */ }
+    }, 1000)
+    return () => clearInterval(id)
+  }, [downloading, movie.id, onDownloaded, onClose])
 
   async function doSearch() {
     setSearching(true)
@@ -38,8 +58,6 @@ export function SearchModal({ movie, onClose, onDownloaded }: SearchModalProps) 
     setError('')
     try {
       await moviesApi.download(movie.id, videoId)
-      onDownloaded(movie.id)
-      onClose()
     } catch (e) {
       setError((e as Error).message)
       setDownloading(null)
@@ -52,8 +70,6 @@ export function SearchModal({ movie, onClose, onDownloaded }: SearchModalProps) 
     setError('')
     try {
       await moviesApi.downloadUrl(movie.id, manualUrl.trim())
-      onDownloaded(movie.id)
-      onClose()
     } catch (e) {
       setError((e as Error).message)
       setDownloading(null)
@@ -92,7 +108,6 @@ export function SearchModal({ movie, onClose, onDownloaded }: SearchModalProps) 
                   <p className="text-xs text-[#667085]">
                     {r.channel}{r.duration ? ` · ${r.duration}` : ''}
                   </p>
-                  {/* Embedded preview */}
                   <a
                     href={`https://www.youtube.com/watch?v=${r.videoId}`}
                     target="_blank"
@@ -143,6 +158,14 @@ export function SearchModal({ movie, onClose, onDownloaded }: SearchModalProps) 
             </Button>
           </div>
         </div>
+
+        {/* In-progress indicator */}
+        {downloading && (
+          <div className="flex items-center gap-2 text-sm text-[#D0D5DD]">
+            <Spinner size={14} className="text-[#BB0000]" />
+            Downloading… you can navigate away, this will finish in the background.
+          </div>
+        )}
 
         {error && (
           <div className="rounded-lg border border-[#B42318]/40 bg-[#FEF3F2]/5 px-4 py-3">

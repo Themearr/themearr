@@ -46,31 +46,33 @@ public class MoviesController(Database db, YoutubeService youtube, DownloadServi
     }
 
     [HttpPost("download")]
-    public async Task<IActionResult> Download([FromBody] DownloadRequest req)
+    public IActionResult Download([FromBody] DownloadRequest req)
     {
+        if (db.GetMovie(req.MovieId) == null)
+            return NotFound(new { detail = "Movie not found" });
+
         var url = $"https://www.youtube.com/watch?v={req.VideoId}";
-        return await DownloadInternal(req.MovieId, url);
+        download.Start(req.MovieId, url);
+        return Accepted(new { started = true, movieId = req.MovieId });
     }
 
     [HttpPost("download-url")]
-    public async Task<IActionResult> DownloadUrl([FromBody] DownloadUrlRequest req)
+    public IActionResult DownloadUrl([FromBody] DownloadUrlRequest req)
     {
         if (string.IsNullOrEmpty(req.Url) || !Uri.IsWellFormedUriString(req.Url, UriKind.Absolute))
             return BadRequest(new { detail = "Invalid URL" });
-        return await DownloadInternal(req.MovieId, req.Url);
+
+        if (db.GetMovie(req.MovieId) == null)
+            return NotFound(new { detail = "Movie not found" });
+
+        download.Start(req.MovieId, req.Url);
+        return Accepted(new { started = true, movieId = req.MovieId });
     }
 
-    private async Task<IActionResult> DownloadInternal(string movieId, string url)
+    [HttpGet("download/status/{movieId}")]
+    public IActionResult DownloadStatus(string movieId)
     {
-        try
-        {
-            await download.DownloadThemeAsync(movieId, url);
-            return Ok(new { status = "downloaded", movieId });
-        }
-        catch (KeyNotFoundException ex) { return NotFound(new { detail = ex.Message }); }
-        catch (ArgumentException ex)    { return BadRequest(new { detail = ex.Message }); }
-        catch (TimeoutException ex)     { return StatusCode(504, new { detail = ex.Message }); }
-        catch (Exception ex)            { return StatusCode(500, new { detail = ex.Message }); }
+        return Ok(download.GetStatus(movieId));
     }
 }
 
