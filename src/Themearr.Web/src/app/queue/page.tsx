@@ -50,20 +50,25 @@ export default function QueuePage() {
       .finally(() => setSearching(false))
   }, [current])
 
-  // ── Auto-download best match when in auto mode ─────────────────────────────
+  // ── Auto-download in auto mode ─────────────────────────────────────────────
+  // Calls the server-side auto-download endpoint directly rather than waiting
+  // for client-side search results — avoids silent failures from scoring edge cases.
   useEffect(() => {
-    if (!autoMode) return
-    if (!current || downloading) return
+    if (!autoMode || !current || downloading) return
     if (autoTriggeredFor.current === current.id) return
-    if (searching || results.length === 0) return
-
-    const best = results.find((r: YoutubeResult) => r.bestMatch)
-    if (!best) return
 
     autoTriggeredFor.current = current.id
-    doDownload(best.videoId)
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoMode, current, results, searching, downloading])
+    downloadingMovieId.current = current.id
+    setDownloading(true)
+    setError('')
+    moviesApi.autoDownload(current.id)
+      .catch((e: Error) => {
+        setError(e.message)
+        setDownloading(false)
+        downloadingMovieId.current = null
+        autoTriggeredFor.current = null // allow manual retry
+      })
+  }, [autoMode, current, downloading])
 
   // ── Poll download status while a download is in flight ────────────────────
   useEffect(() => {
