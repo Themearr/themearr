@@ -49,8 +49,8 @@ info "Installing Themearr $TAG ($ARCH_SUFFIX)"
 # ── System dependencies ───────────────────────────────────────────────────────
 
 if command -v apt-get &>/dev/null; then
-  info "Installing system dependencies (ffmpeg, yt-dlp, nodejs)..."
-  apt-get install -y --no-install-recommends ffmpeg yt-dlp nodejs 2>&1 | grep -v "^$" || true
+  info "Installing system dependencies (ffmpeg, nodejs)..."
+  apt-get install -y --no-install-recommends ffmpeg nodejs 2>&1 | grep -v "^$" || true
   # yt-dlp looks for "node" but Debian/Ubuntu installs it as "nodejs"
   if ! command -v node &>/dev/null && command -v nodejs &>/dev/null; then
     ln -sf "$(command -v nodejs)" /usr/local/bin/node
@@ -58,6 +58,13 @@ if command -v apt-get &>/dev/null; then
   fi
   ok "System dependencies installed"
 fi
+
+# ── yt-dlp (always install latest from GitHub — apt package is typically years out of date) ──
+info "Installing latest yt-dlp from GitHub..."
+curl -fsSL "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp" \
+  -o /usr/local/bin/yt-dlp
+chmod a+rx /usr/local/bin/yt-dlp
+ok "yt-dlp $(yt-dlp --version) installed"
 
 # ── Download and extract ──────────────────────────────────────────────────────
 
