@@ -8,73 +8,103 @@ import { AppShell } from '@/components/layout/AppShell'
 import { Button, Input, Spinner } from '@/components/ui'
 
 export default function QueuePage() {
-  const [pending,    setPending]    = useState<Movie[] | null>(null)
-  const [currentIdx, setCurrentIdx] = useState(0)
-
-  // Per-movie state — reset on movie change
-  const [results,    setResults]    = useState<YoutubeResult[]>([])
-  const [searching,  setSearching]  = useState(false)
-  const [manualUrl,  setManualUrl]  = useState('')
-  const [error,      setError]      = useState('')
+  const [pending,     setPending]     = useState<Movie[] | null>(null)
+  const [currentIdx,  setCurrentIdx]  = useState(0)
+  const [results,     setResults]     = useState<YoutubeResult[]>([])
+  const [searching,   setSearching]   = useState(false)
+  const [manualUrl,   setManualUrl]   = useState('')
+  const [error,       setError]       = useState('')
   const [downloading, setDownloading] = useState(false)
+
+  // Holds the movieId being downloaded so the polling closure keeps the right id
+  // even after the component re-renders or the displayed movie changes
+  const downloadingMovieId = useRef<string | null>(null)
+  const searchedFor        = useRef<string | null>(null)
 
   const current   = pending?.[currentIdx] ?? null
   const remaining = pending ? Math.max(0, pending.length - currentIdx) : 0
 
-  // Load pending movies once
+  // ── Load pending movies once ───────────────────────────────────────────────
   useEffect(() => {
     moviesApi.list()
       .then(movies => setPending(movies.filter(m => m.status === 'pending')))
       .catch(() => setPending([]))
   }, [])
 
-  // Auto-search whenever the displayed movie changes
-  const searchedFor = useRef<string | null>(null)
+  // ── Auto-search when displayed movie changes ───────────────────────────────
   useEffect(() => {
     if (!current || searchedFor.current === current.id) return
     searchedFor.current = current.id
     setResults([])
     setError('')
     setManualUrl('')
-    setDownloading(false)
     setSearching(true)
     moviesApi.search(current.id)
       .then(data => setResults(data.results))
-      .catch(e  => setError((e as Error).message))
+      .catch((e: Error) => setError(e.message))
       .finally(() => setSearching(false))
   }, [current])
 
-  function advance() {
-    setCurrentIdx(i => i + 1)
+  // ── Poll download status while a download is in flight ────────────────────
+  useEffect(() => {
+    if (!downloading) return
+    const movieId = downloadingMovieId.current
+    if (!movieId) return
+
+    const id = setInterval(async () => {
+      try {
+        const st = await moviesApi.downloadStatus(movieId)
+        if (!st.finished) return
+        clearInterval(id)
+        if (st.error) {
+          setError(st.error)
+          setDownloading(false)
+        } else {
+          advanceQueue()
+        }
+      } catch { /* ignore transient fetch errors */ }
+    }, 1000)
+
+    return () => clearInterval(id)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [downloading])
+
+  function advanceQueue() {
+    setCurrentIdx((i: number) => i + 1)
     setResults([])
     setError('')
     setManualUrl('')
     setDownloading(false)
+    downloadingMovieId.current = null
   }
 
   async function doDownload(videoId: string) {
     if (!current) return
+    downloadingMovieId.current = current.id
     setDownloading(true)
     setError('')
     try {
       await moviesApi.download(current.id, videoId)
-      advance()
+      // download is fire-and-forget (202); polling handles the rest
     } catch (e) {
       setError((e as Error).message)
       setDownloading(false)
+      downloadingMovieId.current = null
     }
   }
 
   async function doDownloadUrl() {
     if (!current || !manualUrl.trim()) return
+    downloadingMovieId.current = current.id
     setDownloading(true)
     setError('')
     try {
       await moviesApi.downloadUrl(current.id, manualUrl.trim())
-      advance()
+      // download is fire-and-forget (202); polling handles the rest
     } catch (e) {
       setError((e as Error).message)
       setDownloading(false)
+      downloadingMovieId.current = null
     }
   }
 
@@ -111,7 +141,7 @@ export default function QueuePage() {
     <AppShell
       title="Queue"
       actions={
-        <Button variant="ghost" size="sm" onClick={advance} disabled={downloading}>
+        <Button variant="ghost" size="sm" onClick={advanceQueue} disabled={downloading}>
           Skip
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
             <path d="M5 12h14M12 5l7 7-7 7" />
@@ -133,83 +163,93 @@ export default function QueuePage() {
           </div>
         </div>
 
-        {/* Search results */}
-        <div className="rounded-xl border border-[#1D2939] bg-[#101828] divide-y divide-[#1D2939]">
-          <div className="px-4 py-3 flex items-center gap-2">
-            <p className="text-xs font-semibold text-[#667085] uppercase tracking-wider flex-1">
-              YouTube results
-            </p>
-            {searching && <Spinner size={13} className="text-[#BB0000]" />}
+        {/* Downloading progress */}
+        {downloading && (
+          <div className="flex items-center gap-2.5 rounded-xl border border-[#1D2939] bg-[#101828] px-4 py-3">
+            <Spinner size={14} className="text-[#BB0000]" />
+            <p className="text-sm text-[#D0D5DD]">Downloading theme…</p>
           </div>
+        )}
 
-          {searching && results.length === 0 && (
-            <div className="px-4 py-5 flex items-center gap-2 text-sm text-[#475467]">
-              <Spinner size={14} className="text-[#BB0000]" />
-              Searching YouTube…
+        {/* Search results */}
+        {!downloading && (
+          <div className="rounded-xl border border-[#1D2939] bg-[#101828] divide-y divide-[#1D2939]">
+            <div className="px-4 py-3 flex items-center gap-2">
+              <p className="text-xs font-semibold text-[#667085] uppercase tracking-wider flex-1">
+                YouTube results
+              </p>
+              {searching && <Spinner size={13} className="text-[#BB0000]" />}
             </div>
-          )}
 
-          {!searching && results.length === 0 && !error && (
-            <p className="px-4 py-5 text-sm text-[#475467]">No results found.</p>
-          )}
-
-          {results.map(r => (
-            <div key={r.videoId} className="flex items-center gap-3 px-4 py-3 hover:bg-[#0C111D]/60 transition-colors">
-              {r.thumbnail && (
-                <img
-                  src={r.thumbnail}
-                  alt={r.title}
-                  className="h-12 w-20 flex-shrink-0 rounded object-cover bg-[#1D2939]"
-                  loading="lazy"
-                />
-              )}
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-[#F9FAFB] truncate">{r.title}</p>
-                <p className="text-xs text-[#667085]">
-                  {r.channel}{r.duration ? ` · ${r.duration}` : ''}
-                </p>
-                <a
-                  href={`https://www.youtube.com/watch?v=${r.videoId}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-xs text-[#CC3333] hover:underline"
-                >
-                  Preview ↗
-                </a>
+            {searching && results.length === 0 && (
+              <div className="px-4 py-5 flex items-center gap-2 text-sm text-[#475467]">
+                <Spinner size={14} className="text-[#BB0000]" />
+                Searching YouTube…
               </div>
+            )}
+
+            {!searching && results.length === 0 && !error && (
+              <p className="px-4 py-5 text-sm text-[#475467]">No results found.</p>
+            )}
+
+            {results.map(r => (
+              <div key={r.videoId} className="flex items-center gap-3 px-4 py-3 hover:bg-[#0C111D]/60 transition-colors">
+                {r.thumbnail && (
+                  <img
+                    src={r.thumbnail}
+                    alt={r.title}
+                    className="h-12 w-20 flex-shrink-0 rounded object-cover bg-[#1D2939]"
+                    loading="lazy"
+                  />
+                )}
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-[#F9FAFB] truncate">{r.title}</p>
+                  <p className="text-xs text-[#667085]">
+                    {r.channel}{r.duration ? ` · ${r.duration}` : ''}
+                  </p>
+                  <a
+                    href={`https://www.youtube.com/watch?v=${r.videoId}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs text-[#CC3333] hover:underline"
+                  >
+                    Preview ↗
+                  </a>
+                </div>
+                <Button
+                  size="sm"
+                  onClick={() => doDownload(r.videoId)}
+                  disabled={downloading}
+                >
+                  Download
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Manual URL */}
+        {!downloading && (
+          <div className="rounded-xl border border-[#1D2939] bg-[#101828] p-4 space-y-3">
+            <p className="text-xs font-semibold text-[#667085] uppercase tracking-wider">Paste YouTube URL</p>
+            <div className="flex gap-2">
+              <Input
+                placeholder="https://www.youtube.com/watch?v=…"
+                value={manualUrl}
+                onChange={e => setManualUrl(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') doDownloadUrl() }}
+                className="flex-1"
+              />
               <Button
-                size="sm"
-                onClick={() => doDownload(r.videoId)}
-                loading={downloading}
-                disabled={downloading}
+                onClick={doDownloadUrl}
+                disabled={!manualUrl.trim()}
+                size="md"
               >
                 Download
               </Button>
             </div>
-          ))}
-        </div>
-
-        {/* Manual URL */}
-        <div className="rounded-xl border border-[#1D2939] bg-[#101828] p-4 space-y-3">
-          <p className="text-xs font-semibold text-[#667085] uppercase tracking-wider">Paste YouTube URL</p>
-          <div className="flex gap-2">
-            <Input
-              placeholder="https://www.youtube.com/watch?v=…"
-              value={manualUrl}
-              onChange={e => setManualUrl(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && doDownloadUrl()}
-              className="flex-1"
-            />
-            <Button
-              onClick={doDownloadUrl}
-              loading={downloading}
-              disabled={!manualUrl.trim() || downloading}
-              size="md"
-            >
-              Download
-            </Button>
           </div>
-        </div>
+        )}
 
         {error && (
           <div className="rounded-lg border border-[#B42318]/40 bg-[#FEF3F2]/5 px-4 py-3">
