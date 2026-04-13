@@ -80,7 +80,10 @@ public class DownloadService(Database db, ILogger<DownloadService> log)
                 throw new InvalidOperationException($"yt-dlp failed (exit {proc.ExitCode}): {tail}");
             }
 
+            var title = movie["title"]?.ToString() ?? "";
+            var year  = movie["year"] is int y ? y : (int?)null;
             db.SetMovieStatus(movieId, "downloaded");
+            db.AddThemeHistory(movieId, title, year);
             _jobs[movieId] = new JobState(false, true, null);
         }
         catch (Exception ex)

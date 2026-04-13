@@ -68,6 +68,14 @@ export interface SyncStatus {
   logs: string[]
 }
 
+export interface HistoryEntry {
+  id: number
+  movieId: string
+  movieTitle: string
+  movieYear: number | null
+  downloadedAt: string
+}
+
 export interface VersionInfo {
   current: string
   latest: string

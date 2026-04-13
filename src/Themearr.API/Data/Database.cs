@@ -35,6 +35,15 @@ public class Database(string dbPath)
                 value TEXT NOT NULL
             )
             """);
+        conn.Execute("""
+            CREATE TABLE IF NOT EXISTS theme_history (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                movie_id      TEXT NOT NULL,
+                movie_title   TEXT NOT NULL,
+                movie_year    INTEGER,
+                downloaded_at TEXT NOT NULL
+            )
+            """);
         MigrateMoviesTable(conn);
     }
 
@@ -218,6 +227,37 @@ public class Database(string dbPath)
     {
         using var conn = Open();
         conn.Execute("UPDATE movies SET status = @s WHERE id = @id", ("@s", status), ("@id", id));
+    }
+
+    // ── History ───────────────────────────────────────────────────────────────
+
+    public void AddThemeHistory(string movieId, string movieTitle, int? movieYear)
+    {
+        using var conn = Open();
+        conn.Execute(
+            "INSERT INTO theme_history (movie_id, movie_title, movie_year, downloaded_at) VALUES (@mid, @t, @y, @dt)",
+            ("@mid", movieId), ("@t", movieTitle),
+            ("@y", (object?)movieYear ?? DBNull.Value),
+            ("@dt", DateTime.UtcNow.ToString("o")));
+    }
+
+    public List<Dictionary<string, object?>> GetThemeHistory(int limit = 200)
+    {
+        using var conn = Open();
+        using var r = conn.Query(
+            "SELECT id, movie_id, movie_title, movie_year, downloaded_at FROM theme_history ORDER BY id DESC LIMIT @lim",
+            ("@lim", limit));
+        var result = new List<Dictionary<string, object?>>();
+        while (r.Read())
+            result.Add(new Dictionary<string, object?>
+            {
+                ["id"]           = r.GetInt64(0),
+                ["movieId"]      = r.GetString(1),
+                ["movieTitle"]   = r.GetString(2),
+                ["movieYear"]    = r.IsDBNull(3) ? null : r.GetInt32(3),
+                ["downloadedAt"] = r.GetString(4),
+            });
+        return result;
     }
 
     private static Dictionary<string, object?>? ReadMovieRow(SqliteDataReader r)
