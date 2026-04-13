@@ -125,21 +125,19 @@ export const historyApi = {
   get: () => request<HistoryEntry[]>('/api/history'),
 }
 
-// ── YouTube cookies ───────────────────────────────────────────────────────────
+// ── YouTube authentication ────────────────────────────────────────────────────
 
-export const cookiesApi = {
-  status: () => request<{ configured: boolean }>('/api/settings/cookies'),
+export const youtubeAuthApi = {
+  status: () => request<{
+    authenticated: boolean
+    flowState: 'idle' | 'waitingforuser' | 'completed' | 'failed'
+    deviceUrl: string | null
+    userCode:  string | null
+    error:     string | null
+  }>('/api/youtube-auth'),
 
-  upload: async (file: File): Promise<{ configured: boolean }> => {
-    const form = new FormData()
-    form.append('file', file)
-    const res = await fetch(`${BASE}/api/settings/cookies`, { method: 'POST', body: form })
-    const body = await res.json().catch(() => ({ detail: res.statusText }))
-    if (!res.ok) throw new Error(body.detail ?? res.statusText)
-    return body
-  },
-
-  remove: () => request<{ configured: boolean }>('/api/settings/cookies', { method: 'DELETE' }),
+  start:  () => request<void>('/api/youtube-auth/start', { method: 'POST' }),
+  revoke: () => request<{ authenticated: boolean }>('/api/youtube-auth', { method: 'DELETE' }),
 }
 
 // ── Stats ─────────────────────────────────────────────────────────────────────

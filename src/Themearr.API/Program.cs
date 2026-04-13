@@ -18,6 +18,7 @@ builder.Services.AddSingleton<SyncService>();
 builder.Services.AddSingleton<UpdateService>();
 builder.Services.AddHttpClient<PlexService>();
 builder.Services.AddTransient<YoutubeService>();
+builder.Services.AddSingleton<YouTubeAuthService>();
 builder.Services.AddSingleton<DownloadService>();
 builder.Services.AddHostedService<AutoSyncService>();
 

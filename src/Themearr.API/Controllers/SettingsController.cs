@@ -1,5 +1,4 @@
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.Http;
 using Themearr.API.Data;
 
 namespace Themearr.API.Controllers;
@@ -53,32 +52,6 @@ public class SettingsController(Database db) : ControllerBase
         return Get();
     }
 
-    // ── YouTube cookies ───────────────────────────────────────────────────────
-
-    [HttpGet("cookies")]
-    public IActionResult GetCookies() =>
-        Ok(new { configured = db.HasCookiesFile });
-
-    [HttpPost("cookies")]
-    [RequestSizeLimit(20 * 1024 * 1024)]
-    public async Task<IActionResult> UploadCookies(IFormFile? file)
-    {
-        if (file == null || file.Length == 0)
-            return BadRequest(new { detail = "No file provided." });
-
-        Directory.CreateDirectory(db.DataDir);
-        await using var stream = System.IO.File.Create(db.CookiesFilePath);
-        await file.CopyToAsync(stream);
-        return Ok(new { configured = true });
-    }
-
-    [HttpDelete("cookies")]
-    public IActionResult DeleteCookies()
-    {
-        if (System.IO.File.Exists(db.CookiesFilePath))
-            System.IO.File.Delete(db.CookiesFilePath);
-        return Ok(new { configured = false });
-    }
 }
 
 public class SettingsPayload

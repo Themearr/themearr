@@ -5,7 +5,7 @@ using Themearr.API.Data;
 
 namespace Themearr.API.Services;
 
-public class DownloadService(Database db, ILogger<DownloadService> log)
+public class DownloadService(Database db, YouTubeAuthService ytAuth, ILogger<DownloadService> log)
 {
     private sealed record JobState(bool InProgress, bool Finished, string? Error);
     private readonly ConcurrentDictionary<string, JobState>          _jobs    = new();
@@ -144,8 +144,9 @@ public class DownloadService(Database db, ILogger<DownloadService> log)
 
     private string BuildArgs(string outputTemplate, string url)
     {
-        var cookies = db.HasCookiesFile ? $"--cookies \"{db.CookiesFilePath}\" " : "";
-        return $"-x --audio-format mp3 --audio-quality 0 --no-playlist --no-simulate --js-runtimes node {cookies}--print \"%(title)s\" -o \"{outputTemplate}\" \"{url}\"";
+        var auth    = ytAuth.IsAuthenticated ? "--username oauth2 --password \"\" " : "";
+        var cookies = db.HasCookiesFile      ? $"--cookies \"{db.CookiesFilePath}\" " : "";
+        return $"-x --audio-format mp3 --audio-quality 0 --no-playlist --no-simulate --js-runtimes node {auth}{cookies}--print \"%(title)s\" -o \"{outputTemplate}\" \"{url}\"";
     }
 
     private static string NormaliseYoutubeUrl(string url)
