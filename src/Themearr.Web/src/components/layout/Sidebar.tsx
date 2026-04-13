@@ -10,6 +10,17 @@ import type { VersionInfo } from '@/lib/types'
 
 const NAV = [
   {
+    href: '/queue',
+    label: 'Queue',
+    icon: (
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M3 6h18M3 12h14M3 18h9" />
+        <circle cx="19" cy="18" r="3" />
+        <path d="M18 17.3l2 .7-2 .7v-1.4z" fill="currentColor" stroke="none" />
+      </svg>
+    ),
+  },
+  {
     href: '/movies',
     label: 'Movies',
     icon: (

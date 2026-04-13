@@ -286,7 +286,9 @@ public class Database(string dbPath)
         var folder = r.IsDBNull(6) ? "" : r.GetString(6);
         if (string.IsNullOrEmpty(folder) || !Directory.Exists(folder)) return null;
 
-        var status = File.Exists(Path.Combine(folder, "theme.mp3")) ? "downloaded" : "pending";
+        var hasTheme = Directory.EnumerateFiles(folder, "theme.*")
+                                 .Any(f => Path.GetExtension(f) is not (".part" or ".ytdl"));
+        var status = hasTheme ? "downloaded" : "pending";
         return new Dictionary<string, object?>
         {
             ["id"]             = r.GetString(0),

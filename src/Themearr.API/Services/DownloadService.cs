@@ -80,6 +80,15 @@ public class DownloadService(Database db, ILogger<DownloadService> log)
                 throw new InvalidOperationException($"yt-dlp failed (exit {proc.ExitCode}): {tail}");
             }
 
+            // Verify a theme file was actually produced (yt-dlp can exit 0 if
+            // the download succeeds but ffmpeg post-processing fails silently)
+            var themeFile = Directory.EnumerateFiles(folder, "theme.*")
+                                     .FirstOrDefault(f => Path.GetExtension(f) is not (".part" or ".ytdl"));
+            if (themeFile == null)
+                throw new InvalidOperationException(
+                    "yt-dlp exited successfully but no theme file was written — " +
+                    "ffmpeg may not be installed or the conversion failed");
+
             var title      = movie["title"]?.ToString() ?? "";
             var year       = movie["year"] is int y ? y : (int?)null;
             var themeTitle = stdout.Split('\n')
