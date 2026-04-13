@@ -61,6 +61,8 @@ export interface Settings {
     searchDepth: number
   }
   autoDownload: boolean
+  autoSync: boolean
+  lastAutoSyncAt: string
 }
 
 export interface SyncStatus {

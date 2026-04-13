@@ -19,6 +19,7 @@ builder.Services.AddSingleton<UpdateService>();
 builder.Services.AddHttpClient<PlexService>();
 builder.Services.AddTransient<YoutubeService>();
 builder.Services.AddSingleton<DownloadService>();
+builder.Services.AddHostedService<AutoSyncService>();
 
 // CORS for dev (Next.js dev server on :3000)
 builder.Services.AddCors(o => o.AddDefaultPolicy(p =>

@@ -206,19 +206,20 @@ export default function SettingsPage() {
 
         {/* Queue behaviour */}
         <Section title="Queue">
-          <div className="flex items-center justify-between">
-            <div className="space-y-0.5">
-              <p className="text-sm font-medium text-[#F9FAFB]">Auto-download mode</p>
-              <p className="text-xs text-[#667085]">Automatically download the best match for each movie without confirmation.</p>
-            </div>
-            <button
-              role="switch"
-              aria-checked={settings.autoDownload}
-              onClick={() => setSettings(s => s ? { ...s, autoDownload: !s.autoDownload } : s)}
-              className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus:outline-none ${settings.autoDownload ? 'bg-[#BB0000]' : 'bg-[#344054]'}`}
-            >
-              <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${settings.autoDownload ? 'translate-x-5' : 'translate-x-0'}`} />
-            </button>
+          <div className="space-y-4">
+            <ToggleRow
+              label="Auto-download mode"
+              hint="Automatically download the best match for each movie without confirmation."
+              checked={settings.autoDownload}
+              onChange={() => setSettings(s => s ? { ...s, autoDownload: !s.autoDownload } : s)}
+            />
+            <div className="border-t border-[#1D2939]" />
+            <ToggleRow
+              label="Auto-sync with Plex"
+              hint={`Check Plex for new movies once a day.${settings.lastAutoSyncAt ? ` Last synced: ${formatUnix(settings.lastAutoSyncAt)}` : ''}`}
+              checked={settings.autoSync}
+              onChange={() => setSettings(s => s ? { ...s, autoSync: !s.autoSync } : s)}
+            />
           </div>
         </Section>
 
@@ -355,6 +356,34 @@ export default function SettingsPage() {
       </div>
     </AppShell>
   )
+}
+
+function ToggleRow({ label, hint, checked, onChange }: {
+  label: string; hint?: string; checked: boolean; onChange: () => void
+}) {
+  return (
+    <div className="flex items-center justify-between gap-4">
+      <div className="space-y-0.5">
+        <p className="text-sm font-medium text-[#F9FAFB]">{label}</p>
+        {hint && <p className="text-xs text-[#667085]">{hint}</p>}
+      </div>
+      <button
+        role="switch"
+        aria-checked={checked}
+        onClick={onChange}
+        className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus:outline-none ${checked ? 'bg-[#BB0000]' : 'bg-[#344054]'}`}
+      >
+        <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${checked ? 'translate-x-5' : 'translate-x-0'}`} />
+      </button>
+    </div>
+  )
+}
+
+function formatUnix(unix: string): string {
+  try {
+    const d = new Date(parseInt(unix, 10) * 1000)
+    return d.toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+  } catch { return '' }
 }
 
 function Section({ title, hint, children }: { title: string; hint?: string; children: React.ReactNode }) {
