@@ -53,8 +53,10 @@ info "Deploying Themearr $TAG ($ARCH_SUFFIX)"
 
 BACKUP=""
 if [[ -d "$DATA_DIR" ]]; then
-  BACKUP="/tmp/themearr_data_backup_$$"
-  cp -r "$DATA_DIR" "$BACKUP"
+  BACKUP=$(mktemp -d /tmp/themearr_data_backup.XXXXXX)
+  trap 'rm -rf "$BACKUP"' EXIT
+  chmod 700 "$BACKUP"
+  cp -r "$DATA_DIR/." "$BACKUP/"
   info "Data backed up"
 fi
 
@@ -64,7 +66,7 @@ mkdir -p "$INSTALL_DIR"
 TMP=$(mktemp /tmp/themearr-XXXXXX.tar.gz)
 info "Downloading release..."
 curl -fsSL "$ASSET_URL" -o "$TMP"
-tar -xzf "$TMP" -C "$INSTALL_DIR" --strip-components=1
+tar -xzf "$TMP" -C "$INSTALL_DIR" --strip-components=1 --no-same-owner --no-same-permissions
 rm -f "$TMP"
 ok "Extracted to $INSTALL_DIR"
 
@@ -73,8 +75,16 @@ ok "Extracted to $INSTALL_DIR"
 mkdir -p "$DATA_DIR"
 if [[ -n "$BACKUP" ]]; then
   cp -r "$BACKUP/." "$DATA_DIR/"
+  chmod 700 "$DATA_DIR"
+  [[ -f "$DATA_DIR/auth.env" ]] && chmod 600 "$DATA_DIR/auth.env"
   rm -rf "$BACKUP"
   ok "Data restored"
+fi
+
+# Re-assert ownership after extraction (tar wrote files as root; the service
+# runs as 'themearr' and must be able to read its own install directory).
+if id -u themearr &>/dev/null; then
+  chown -R themearr:themearr "$INSTALL_DIR"
 fi
 
 echo "$TAG" > "$INSTALL_DIR/VERSION"

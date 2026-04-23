@@ -21,13 +21,24 @@ builder.Services.AddTransient<YoutubeService>();
 builder.Services.AddSingleton<DownloadService>();
 builder.Services.AddHostedService<AutoSyncService>();
 
-// CORS for dev (Next.js dev server on :3000)
-builder.Services.AddCors(o => o.AddDefaultPolicy(p =>
-    p.WithOrigins("http://localhost:3000")
-     .AllowAnyHeader()
-     .AllowAnyMethod()));
+// CORS for dev (Next.js dev server on :3000) — only in Development
+if (builder.Environment.IsDevelopment())
+{
+    builder.Services.AddCors(o => o.AddDefaultPolicy(p =>
+        p.WithOrigins("http://localhost:3000")
+         .AllowAnyHeader()
+         .AllowAnyMethod()));
+}
 
 var app = builder.Build();
+
+// Fail-closed: require a token at startup so an unauth'd deploy can't happen by accident.
+using (var scope = app.Services.CreateScope())
+{
+    var logger = scope.ServiceProvider.GetRequiredService<ILoggerFactory>()
+        .CreateLogger<Themearr.API.Services.ApiAuthMiddleware>();
+    Themearr.API.Services.ApiAuthMiddleware.LoadToken(builder.Configuration, logger);
+}
 
 // Initialise DB
 var db = app.Services.GetRequiredService<Database>();
@@ -41,7 +52,14 @@ var appVersion = Environment.GetEnvironmentVariable("APP_VERSION")?.Trim()
     ?? (File.Exists(versionFile) ? File.ReadAllText(versionFile).Trim() : "dev");
 db.SetSetting("app_version", appVersion);
 
-app.UseCors();
+if (app.Environment.IsDevelopment()) app.UseCors();
+
+// Bearer-token auth for every /api/* route except /api/auth/*
+app.UseWhen(
+    ctx => ctx.Request.Path.StartsWithSegments("/api")
+           && !ctx.Request.Path.StartsWithSegments("/api/auth"),
+    branch => branch.UseMiddleware<Themearr.API.Services.ApiAuthMiddleware>());
+
 app.UseDefaultFiles();
 // Prevent browsers from caching index.html so updated JS bundles are loaded after deploys
 app.UseStaticFiles(new StaticFileOptions

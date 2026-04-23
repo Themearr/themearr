@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { Movie } from '@/lib/types'
 import { moviesApi } from '@/lib/api'
 import { Button, EmptyState, Spinner } from '@/components/ui'
@@ -174,12 +174,7 @@ function MovieActionModal({ movie, onClose, onUpdated }: {
               {/* Audio preview */}
               <div className="space-y-1.5">
                 <p className="text-xs font-semibold text-[#667085] uppercase tracking-wider">Theme preview</p>
-                <audio
-                  controls
-                  src={moviesApi.themeAudioUrl(movie.id)}
-                  className="w-full h-9"
-                  style={{ colorScheme: 'dark' }}
-                />
+                <ThemeAudioPreview movieId={movie.id} />
               </div>
               <div className="border-t border-[#1D2939]" />
               <Button variant="secondary" size="sm" className="w-full" onClick={() => setView('search')} loading={replacing}>
@@ -271,5 +266,39 @@ function MovieCard({ movie, onClick }: { movie: Movie; onClick: () => void }) {
         {movie.year && <p className="text-[11px] text-[#475467]">{movie.year}</p>}
       </div>
     </button>
+  )
+}
+
+// ── Theme audio preview (fetches via bearer auth, plays from object URL) ─────
+
+function ThemeAudioPreview({ movieId }: { movieId: string }) {
+  const [src, setSrc] = useState<string>('')
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let revoked = false
+    let objectUrl = ''
+    moviesApi.themeAudioObjectUrl(movieId)
+      .then(url => {
+        if (revoked) { URL.revokeObjectURL(url); return }
+        objectUrl = url
+        setSrc(url)
+      })
+      .catch(e => setError((e as Error).message))
+    return () => {
+      revoked = true
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+    }
+  }, [movieId])
+
+  if (error) return <p className="text-xs text-[#FDA29B]">{error}</p>
+  if (!src)  return <div className="h-9 flex items-center"><Spinner size={16} /></div>
+  return (
+    <audio
+      controls
+      src={src}
+      className="w-full h-9"
+      style={{ colorScheme: 'dark' }}
+    />
   )
 }

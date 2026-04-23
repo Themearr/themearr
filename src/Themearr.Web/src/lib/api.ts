@@ -5,16 +5,59 @@ import type {
 
 const BASE = (process.env.NEXT_PUBLIC_API_URL ?? '').replace(/\/$/, '')
 
+const TOKEN_KEY = 'themearr_token'
+
+export function getAuthToken(): string {
+  if (typeof window === 'undefined') return ''
+  return localStorage.getItem(TOKEN_KEY) ?? ''
+}
+
+export function setAuthToken(token: string) {
+  if (typeof window === 'undefined') return
+  localStorage.setItem(TOKEN_KEY, token)
+}
+
+export function clearAuthToken() {
+  if (typeof window === 'undefined') return
+  localStorage.removeItem(TOKEN_KEY)
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...init?.headers },
-    ...init,
-  })
+  const token = getAuthToken()
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(init?.headers as Record<string, string> | undefined),
+  }
+  // Carve-out: /api/auth/* endpoints don't require (and shouldn't send) the bearer token.
+  if (token && !path.startsWith('/api/auth/')) {
+    headers['Authorization'] = `Bearer ${token}`
+  }
+
+  const res = await fetch(`${BASE}${path}`, { ...init, headers })
+
+  if (res.status === 401 && !path.startsWith('/api/auth/')) {
+    clearAuthToken()
+    if (typeof window !== 'undefined' && !window.location.pathname.startsWith('/login')) {
+      window.location.href = '/login'
+    }
+    throw new Error('Unauthorized')
+  }
+
   if (!res.ok) {
     const body = await res.json().catch(() => ({ detail: res.statusText }))
     throw new Error(body.detail ?? res.statusText)
   }
   return res.json()
+}
+
+// ── Auth ──────────────────────────────────────────────────────────────────────
+
+export const authApi = {
+  verify: (token: string) =>
+    request<{ ok: boolean }>('/api/auth/verify', {
+      method: 'POST',
+      body: JSON.stringify({ token }),
+    }),
 }
 
 // ── Setup ─────────────────────────────────────────────────────────────────────
@@ -96,8 +139,23 @@ export const moviesApi = {
   unignoreMovie: (movieId: string) =>
     request<{ ignored: boolean }>(`/api/movies/${encodeURIComponent(movieId)}/unignore`, { method: 'POST' }),
 
-  themeAudioUrl: (movieId: string) =>
-    `${BASE}/api/movies/${encodeURIComponent(movieId)}/theme/audio`,
+  // Fetch the theme audio as a blob using the bearer token and return an object URL.
+  // Caller is responsible for revoking the URL when it's no longer needed.
+  themeAudioObjectUrl: async (movieId: string) => {
+    const token = getAuthToken()
+    const res = await fetch(
+      `${BASE}/api/movies/${encodeURIComponent(movieId)}/theme/audio`,
+      { headers: token ? { Authorization: `Bearer ${token}` } : undefined },
+    )
+    if (res.status === 401) {
+      clearAuthToken()
+      if (typeof window !== 'undefined') window.location.href = '/login'
+      throw new Error('Unauthorized')
+    }
+    if (!res.ok) throw new Error(`Audio fetch failed (${res.status})`)
+    const blob = await res.blob()
+    return URL.createObjectURL(blob)
+  },
 }
 
 // ── Settings ──────────────────────────────────────────────────────────────────

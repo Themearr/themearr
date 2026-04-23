@@ -7,15 +7,27 @@ services:
         APP_VERSION: dev
     container_name: themearr
     ports:
-      - "8080:8080"
+      # Bound to loopback only — put a reverse proxy (caddy/nginx) in front for
+      # remote access. Change the left-hand "127.0.0.1" at your own risk.
+      - "127.0.0.1:8080:8080"
     volumes:
       # Persist database and config
       - themearr-data:/opt/themearr/data
-      # Mount your movie library (adjust to your local path)
+      # Mount your movie library — REQUIRED: edit the host path before `docker compose up`.
       - /path/to/your/movies:/movies:ro
     environment:
       - DB_PATH=/opt/themearr/data/themearr.db
       - ASPNETCORE_ENVIRONMENT=Production
+      # REQUIRED: generate with `openssl rand -hex 32` and keep it secret.
+      # The service refuses to start without it.
+      - THEMEARR_AUTH_TOKEN=${THEMEARR_AUTH_TOKEN:?THEMEARR_AUTH_TOKEN is required}
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     restart: unless-stopped
 
 volumes:

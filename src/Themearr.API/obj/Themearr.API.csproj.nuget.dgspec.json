@@ -1,25 +1,26 @@
 {
   "format": 1,
   "restore": {
-    "/Users/calum/GitHub/themearr-app/themearr/src/Themearr.API/Themearr.API.csproj": {}
+    "/Users/devlin/Documents/GitHub/themearr/src/Themearr.API/Themearr.API.csproj": {}
   },
   "projects": {
-    "/Users/calum/GitHub/themearr-app/themearr/src/Themearr.API/Themearr.API.csproj": {
+    "/Users/devlin/Documents/GitHub/themearr/src/Themearr.API/Themearr.API.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "/Users/calum/GitHub/themearr-app/themearr/src/Themearr.API/Themearr.API.csproj",
+        "projectUniqueName": "/Users/devlin/Documents/GitHub/themearr/src/Themearr.API/Themearr.API.csproj",
         "projectName": "Themearr.API",
-        "projectPath": "/Users/calum/GitHub/themearr-app/themearr/src/Themearr.API/Themearr.API.csproj",
-        "packagesPath": "/Users/calum/.nuget/packages/",
-        "outputPath": "/Users/calum/GitHub/themearr-app/themearr/src/Themearr.API/obj/",
+        "projectPath": "/Users/devlin/Documents/GitHub/themearr/src/Themearr.API/Themearr.API.csproj",
+        "packagesPath": "/Users/devlin/.nuget/packages/",
+        "outputPath": "/Users/devlin/Documents/GitHub/themearr/src/Themearr.API/obj/",
         "projectStyle": "PackageReference",
         "configFilePaths": [
-          "/Users/calum/.nuget/NuGet/NuGet.Config"
+          "/Users/devlin/.nuget/NuGet/NuGet.Config"
         ],
         "originalTargetFrameworks": [
           "net9.0"
         ],
         "sources": {
+          "/opt/homebrew/Cellar/dotnet/10.0.107/libexec/library-packs": {},
           "https://api.nuget.org/v3/index.json": {}
         },
         "frameworks": {
@@ -38,7 +39,7 @@
           "auditLevel": "low",
           "auditMode": "direct"
         },
-        "SdkAnalysisLevel": "10.0.200"
+        "SdkAnalysisLevel": "10.0.100"
       },
       "frameworks": {
         "net9.0": {
@@ -67,15 +68,15 @@
           "downloadDependencies": [
             {
               "name": "Microsoft.AspNetCore.App.Ref",
-              "version": "[9.0.14, 9.0.14]"
+              "version": "[9.0.15, 9.0.15]"
             },
             {
               "name": "Microsoft.NETCore.App.Host.osx-arm64",
-              "version": "[9.0.14, 9.0.14]"
+              "version": "[9.0.15, 9.0.15]"
             },
             {
               "name": "Microsoft.NETCore.App.Ref",
-              "version": "[9.0.14, 9.0.14]"
+              "version": "[9.0.15, 9.0.15]"
             }
           ],
           "frameworkReferences": {
@@ -86,7 +87,7 @@
               "privateAssets": "all"
             }
           },
-          "runtimeIdentifierGraphPath": "/usr/local/share/dotnet/sdk/10.0.201/PortableRuntimeIdentifierGraph.json"
+          "runtimeIdentifierGraphPath": "/opt/homebrew/Cellar/dotnet/10.0.107/libexec/sdk/10.0.107/PortableRuntimeIdentifierGraph.json"
         }
       }
     }

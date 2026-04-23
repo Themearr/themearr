@@ -1,21 +1,22 @@
 {
   "version": 2,
-  "dgSpecHash": "ZgGDtWNzzJ4=",
+  "dgSpecHash": "hcxEgDebDGQ=",
   "success": true,
-  "projectFilePath": "/Users/calum/GitHub/themearr-app/themearr/src/Themearr.API/Themearr.API.csproj",
+  "projectFilePath": "/Users/devlin/Documents/GitHub/themearr/src/Themearr.API/Themearr.API.csproj",
   "expectedPackageFiles": [
-    "/Users/calum/.nuget/packages/anglesharp/1.4.0/anglesharp.1.4.0.nupkg.sha512",
-    "/Users/calum/.nuget/packages/microsoft.data.sqlite/9.0.14/microsoft.data.sqlite.9.0.14.nupkg.sha512",
-    "/Users/calum/.nuget/packages/microsoft.data.sqlite.core/9.0.14/microsoft.data.sqlite.core.9.0.14.nupkg.sha512",
-    "/Users/calum/.nuget/packages/sqlitepclraw.bundle_e_sqlite3/2.1.10/sqlitepclraw.bundle_e_sqlite3.2.1.10.nupkg.sha512",
-    "/Users/calum/.nuget/packages/sqlitepclraw.core/2.1.10/sqlitepclraw.core.2.1.10.nupkg.sha512",
-    "/Users/calum/.nuget/packages/sqlitepclraw.lib.e_sqlite3/2.1.10/sqlitepclraw.lib.e_sqlite3.2.1.10.nupkg.sha512",
-    "/Users/calum/.nuget/packages/sqlitepclraw.provider.e_sqlite3/2.1.10/sqlitepclraw.provider.e_sqlite3.2.1.10.nupkg.sha512",
-    "/Users/calum/.nuget/packages/system.memory/4.5.3/system.memory.4.5.3.nupkg.sha512",
-    "/Users/calum/.nuget/packages/youtubeexplode/6.5.7/youtubeexplode.6.5.7.nupkg.sha512",
-    "/Users/calum/.nuget/packages/microsoft.netcore.app.ref/9.0.14/microsoft.netcore.app.ref.9.0.14.nupkg.sha512",
-    "/Users/calum/.nuget/packages/microsoft.aspnetcore.app.ref/9.0.14/microsoft.aspnetcore.app.ref.9.0.14.nupkg.sha512",
-    "/Users/calum/.nuget/packages/microsoft.netcore.app.host.osx-arm64/9.0.14/microsoft.netcore.app.host.osx-arm64.9.0.14.nupkg.sha512"
+    "/Users/devlin/.nuget/packages/anglesharp/1.4.0/anglesharp.1.4.0.nupkg.sha512",
+    "/Users/devlin/.nuget/packages/jsonextensions/1.2.0/jsonextensions.1.2.0.nupkg.sha512",
+    "/Users/devlin/.nuget/packages/microsoft.data.sqlite/9.0.15/microsoft.data.sqlite.9.0.15.nupkg.sha512",
+    "/Users/devlin/.nuget/packages/microsoft.data.sqlite.core/9.0.15/microsoft.data.sqlite.core.9.0.15.nupkg.sha512",
+    "/Users/devlin/.nuget/packages/sqlitepclraw.bundle_e_sqlite3/2.1.10/sqlitepclraw.bundle_e_sqlite3.2.1.10.nupkg.sha512",
+    "/Users/devlin/.nuget/packages/sqlitepclraw.core/2.1.10/sqlitepclraw.core.2.1.10.nupkg.sha512",
+    "/Users/devlin/.nuget/packages/sqlitepclraw.lib.e_sqlite3/2.1.10/sqlitepclraw.lib.e_sqlite3.2.1.10.nupkg.sha512",
+    "/Users/devlin/.nuget/packages/sqlitepclraw.provider.e_sqlite3/2.1.10/sqlitepclraw.provider.e_sqlite3.2.1.10.nupkg.sha512",
+    "/Users/devlin/.nuget/packages/system.memory/4.5.3/system.memory.4.5.3.nupkg.sha512",
+    "/Users/devlin/.nuget/packages/youtubeexplode/6.6.0/youtubeexplode.6.6.0.nupkg.sha512",
+    "/Users/devlin/.nuget/packages/microsoft.netcore.app.ref/9.0.15/microsoft.netcore.app.ref.9.0.15.nupkg.sha512",
+    "/Users/devlin/.nuget/packages/microsoft.aspnetcore.app.ref/9.0.15/microsoft.aspnetcore.app.ref.9.0.15.nupkg.sha512",
+    "/Users/devlin/.nuget/packages/microsoft.netcore.app.host.osx-arm64/9.0.15/microsoft.netcore.app.host.osx-arm64.9.0.15.nupkg.sha512"
   ],
   "logs": []
 }

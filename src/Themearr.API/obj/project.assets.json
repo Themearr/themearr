@@ -15,10 +15,23 @@
           }
         }
       },
-      "Microsoft.Data.Sqlite/9.0.14": {
+      "JsonExtensions/1.2.0": {
+        "type": "package",
+        "compile": {
+          "lib/net5.0/JsonExtensions.dll": {
+            "related": ".xml"
+          }
+        },
+        "runtime": {
+          "lib/net5.0/JsonExtensions.dll": {
+            "related": ".xml"
+          }
+        }
+      },
+      "Microsoft.Data.Sqlite/9.0.15": {
         "type": "package",
         "dependencies": {
-          "Microsoft.Data.Sqlite.Core": "9.0.14",
+          "Microsoft.Data.Sqlite.Core": "9.0.15",
           "SQLitePCLRaw.bundle_e_sqlite3": "2.1.10",
           "SQLitePCLRaw.core": "2.1.10"
         },
@@ -29,7 +42,7 @@
           "lib/netstandard2.0/_._": {}
         }
       },
-      "Microsoft.Data.Sqlite.Core/9.0.14": {
+      "Microsoft.Data.Sqlite.Core/9.0.15": {
         "type": "package",
         "dependencies": {
           "SQLitePCLRaw.core": "2.1.10"
@@ -189,10 +202,11 @@
           "lib/netcoreapp2.1/_._": {}
         }
       },
-      "YoutubeExplode/6.5.7": {
+      "YoutubeExplode/6.6.0": {
         "type": "package",
         "dependencies": {
-          "AngleSharp": "1.4.0"
+          "AngleSharp": "1.4.0",
+          "JsonExtensions": "1.2.0"
         },
         "compile": {
           "lib/net7.0/YoutubeExplode.dll": {
@@ -231,24 +245,42 @@
         "logo.png"
       ]
     },
-    "Microsoft.Data.Sqlite/9.0.14": {
-      "sha512": "kwz3EIVMiE53DE0QamYWZ5U1Nlg96tsjarHOXTk+Aqr0AMePkS3uT8nSqObm0GTXpkkDvFojz3VfHyWRbmuY0Q==",
+    "JsonExtensions/1.2.0": {
+      "sha512": "ujtrK6m5BQVQLEteLfl54upN7Z59c1ZqEKmU3OlYriqnV74dIgIlNM2vkcgn2AuZEItQDNORD/2H1biI/asOdg==",
       "type": "package",
-      "path": "microsoft.data.sqlite/9.0.14",
+      "path": "jsonextensions/1.2.0",
+      "files": [
+        ".nupkg.metadata",
+        ".signature.p7s",
+        "Readme.md",
+        "jsonextensions.1.2.0.nupkg.sha512",
+        "jsonextensions.nuspec",
+        "lib/net5.0/JsonExtensions.dll",
+        "lib/net5.0/JsonExtensions.xml",
+        "lib/netcoreapp3.0/JsonExtensions.dll",
+        "lib/netcoreapp3.0/JsonExtensions.xml",
+        "lib/netstandard2.0/JsonExtensions.dll",
+        "lib/netstandard2.0/JsonExtensions.xml"
+      ]
+    },
+    "Microsoft.Data.Sqlite/9.0.15": {
+      "sha512": "/RrKC6M5c1BsvArUniSi6bhLtUyaJFPZLRdNoZyoN6W7CC2Sh0xTGsQ06ue649dRgRoedRdGQZJUQ+/txKUm4g==",
+      "type": "package",
+      "path": "microsoft.data.sqlite/9.0.15",
       "files": [
         ".nupkg.metadata",
         ".signature.p7s",
         "Icon.png",
         "PACKAGE.md",
         "lib/netstandard2.0/_._",
-        "microsoft.data.sqlite.9.0.14.nupkg.sha512",
+        "microsoft.data.sqlite.9.0.15.nupkg.sha512",
         "microsoft.data.sqlite.nuspec"
       ]
     },
-    "Microsoft.Data.Sqlite.Core/9.0.14": {
-      "sha512": "EG3EHsTmmSf5Sk/JNSBMly1DZdBgg3OOb6/1Fg/eG/SEMTShpFnQPMi/PgiVfF4CPIS6d+BPrW91EeJyLhDOIQ==",
+    "Microsoft.Data.Sqlite.Core/9.0.15": {
+      "sha512": "WGb3nGPflnBqpHvlM4jhWniGbBaQUxedoiCvc9XB6403EUE6iVE3ZP1cPMS1+UTrAXLBP/c1/qCvezJ40Ly1Zw==",
       "type": "package",
-      "path": "microsoft.data.sqlite.core/9.0.14",
+      "path": "microsoft.data.sqlite.core/9.0.15",
       "files": [
         ".nupkg.metadata",
         ".signature.p7s",
@@ -260,7 +292,7 @@
         "lib/net8.0/Microsoft.Data.Sqlite.xml",
         "lib/netstandard2.0/Microsoft.Data.Sqlite.dll",
         "lib/netstandard2.0/Microsoft.Data.Sqlite.xml",
-        "microsoft.data.sqlite.core.9.0.14.nupkg.sha512",
+        "microsoft.data.sqlite.core.9.0.15.nupkg.sha512",
         "microsoft.data.sqlite.core.nuspec"
       ]
     },
@@ -377,10 +409,10 @@
         "version.txt"
       ]
     },
-    "YoutubeExplode/6.5.7": {
-      "sha512": "oIJpcxpgSUaPxg73iYj1a0hckbCbOHOrE1OzeCH9lNf6oRjJp2awOyPaWvf1qRm6kYFJ88FktdMeT+lGyNUcvA==",
+    "YoutubeExplode/6.6.0": {
+      "sha512": "DCFAmPvADs/ZB3pB24kLFzVY/1o6iECqJ7IL9LKi4zkSZLgcXDwFbOJe3vd2K3FBw36Xa3O/QMv10zelT7hjfA==",
       "type": "package",
-      "path": "youtubeexplode/6.5.7",
+      "path": "youtubeexplode/6.6.0",
       "files": [
         ".nupkg.metadata",
         ".signature.p7s",
@@ -393,7 +425,7 @@
         "lib/net7.0/YoutubeExplode.xml",
         "lib/netstandard2.0/YoutubeExplode.dll",
         "lib/netstandard2.0/YoutubeExplode.xml",
-        "youtubeexplode.6.5.7.nupkg.sha512",
+        "youtubeexplode.6.6.0.nupkg.sha512",
         "youtubeexplode.nuspec"
       ]
     }
@@ -405,24 +437,25 @@
     ]
   },
   "packageFolders": {
-    "/Users/calum/.nuget/packages/": {}
+    "/Users/devlin/.nuget/packages/": {}
   },
   "project": {
     "version": "1.0.0",
     "restore": {
-      "projectUniqueName": "/Users/calum/GitHub/themearr-app/themearr/src/Themearr.API/Themearr.API.csproj",
+      "projectUniqueName": "/Users/devlin/Documents/GitHub/themearr/src/Themearr.API/Themearr.API.csproj",
       "projectName": "Themearr.API",
-      "projectPath": "/Users/calum/GitHub/themearr-app/themearr/src/Themearr.API/Themearr.API.csproj",
-      "packagesPath": "/Users/calum/.nuget/packages/",
-      "outputPath": "/Users/calum/GitHub/themearr-app/themearr/src/Themearr.API/obj/",
+      "projectPath": "/Users/devlin/Documents/GitHub/themearr/src/Themearr.API/Themearr.API.csproj",
+      "packagesPath": "/Users/devlin/.nuget/packages/",
+      "outputPath": "/Users/devlin/Documents/GitHub/themearr/src/Themearr.API/obj/",
       "projectStyle": "PackageReference",
       "configFilePaths": [
-        "/Users/calum/.nuget/NuGet/NuGet.Config"
+        "/Users/devlin/.nuget/NuGet/NuGet.Config"
       ],
       "originalTargetFrameworks": [
         "net9.0"
       ],
       "sources": {
+        "/opt/homebrew/Cellar/dotnet/10.0.107/libexec/library-packs": {},
         "https://api.nuget.org/v3/index.json": {}
       },
       "frameworks": {
@@ -441,7 +474,7 @@
         "auditLevel": "low",
         "auditMode": "direct"
       },
-      "SdkAnalysisLevel": "10.0.200"
+      "SdkAnalysisLevel": "10.0.100"
     },
     "frameworks": {
       "net9.0": {
@@ -470,15 +503,15 @@
         "downloadDependencies": [
           {
             "name": "Microsoft.AspNetCore.App.Ref",
-            "version": "[9.0.14, 9.0.14]"
+            "version": "[9.0.15, 9.0.15]"
           },
           {
             "name": "Microsoft.NETCore.App.Host.osx-arm64",
-            "version": "[9.0.14, 9.0.14]"
+            "version": "[9.0.15, 9.0.15]"
           },
           {
             "name": "Microsoft.NETCore.App.Ref",
-            "version": "[9.0.14, 9.0.14]"
+            "version": "[9.0.15, 9.0.15]"
           }
         ],
         "frameworkReferences": {
@@ -489,7 +522,7 @@
             "privateAssets": "all"
           }
         },
-        "runtimeIdentifierGraphPath": "/usr/local/share/dotnet/sdk/10.0.201/PortableRuntimeIdentifierGraph.json"
+        "runtimeIdentifierGraphPath": "/opt/homebrew/Cellar/dotnet/10.0.107/libexec/sdk/10.0.107/PortableRuntimeIdentifierGraph.json"
       }
     }
   }

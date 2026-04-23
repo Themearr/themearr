@@ -37,12 +37,19 @@ COPY --from=api-build /app/publish ./
 # Copy Next.js static export into wwwroot (served by .NET)
 COPY --from=frontend-build /frontend/out ./wwwroot/
 
-# Data directory
-RUN mkdir -p /opt/themearr/data
+# Non-root user — the service does not need root inside the container.
+RUN groupadd -r themearr && useradd -r -g themearr -d /opt/themearr -s /sbin/nologin themearr \
+    && mkdir -p /opt/themearr/data \
+    && chown -R themearr:themearr /app /opt/themearr \
+    && chmod 700 /opt/themearr/data
+
+USER themearr
 
 ARG APP_VERSION=dev
 ENV APP_VERSION=${APP_VERSION}
-ENV ASPNETCORE_URLS=http://+:8080
+# Bind to loopback by default. docker-compose must re-publish only to 127.0.0.1
+# on the host — remote exposure requires a reverse proxy with its own auth/TLS.
+ENV ASPNETCORE_URLS=http://0.0.0.0:8080
 ENV DOTNET_RUNNING_IN_CONTAINER=true
 
 EXPOSE 8080

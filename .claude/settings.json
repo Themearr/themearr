@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//Users/devlin/.dotnet/tools/**)",
+      "Bash(dotnet tool *)",
+      "Bash(dotnet build *)",
+      "Bash(npx --no-install tsc --noEmit)",
+      "mcp__plugin_semgrep_semgrep__semgrep_scan"
+    ]
+  }
+}
