@@ -20,7 +20,10 @@ builder.Services.AddHttpClient<PlexService>();
 builder.Services.AddTransient<YoutubeService>();
 builder.Services.AddSingleton<DownloadService>();
 builder.Services.AddHostedService<AutoSyncService>();
-builder.Services.AddHostedService<AutoDownloadService>();
+// Register AutoDownloadService as a singleton AND wire its hosted-service lifecycle
+// off the same instance so a controller can ask it for diagnostics.
+builder.Services.AddSingleton<AutoDownloadService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<AutoDownloadService>());
 
 // CORS for dev (Next.js dev server on :3000) — only in Development
 if (builder.Environment.IsDevelopment())

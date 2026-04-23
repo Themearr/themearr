@@ -230,6 +230,12 @@ public class MoviesController(Database db, YoutubeService youtube, DownloadServi
     {
         return Ok(download.GetStatus(movieId));
     }
+
+    // Diagnostic view of the server-side auto-download loop. Use this to verify
+    // the background service is actually running when "set and forget" seems broken.
+    [HttpGet("auto-download/debug")]
+    public IActionResult AutoDownloadDebug([FromServices] AutoDownloadService auto)
+        => Ok(auto.GetDiagnostics());
 }
 
 public record DownloadRequest(string MovieId, string VideoId);
