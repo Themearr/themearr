@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("Themearr.API")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+cd7d24eec28afda5c36e9b84b5afa7bcef110a8e")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+58278024af8ecad310336b2113b48d11d46e3a5d")]
 [assembly: System.Reflection.AssemblyProductAttribute("Themearr.API")]
 [assembly: System.Reflection.AssemblyTitleAttribute("Themearr.API")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

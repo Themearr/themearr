@@ -1,4 +1,7 @@
+using System.Net;
+using System.Net.Sockets;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Net.Http.Headers;
 using Themearr.API.Data;
 using Themearr.API.Services;
 
@@ -105,7 +108,13 @@ public class MoviesController(Database db, YoutubeService youtube, DownloadServi
             ".flac" => "audio/flac",
             _       => "audio/mpeg",
         };
-        return PhysicalFile(themeFile, contentType, enableRangeProcessing: true);
+
+        // ETag + Last-Modified so repeated visits don't re-download the same theme file.
+        // Framework honours If-None-Match / If-Modified-Since and returns 304 automatically.
+        var info = new FileInfo(themeFile);
+        var etag = new EntityTagHeaderValue($"\"{info.Length:x}-{info.LastWriteTimeUtc.Ticks:x}\"");
+        Response.Headers.CacheControl = "private, max-age=300";
+        return PhysicalFile(themeFile, contentType, info.LastWriteTimeUtc, etag, enableRangeProcessing: true);
     }
 
     [HttpPost("auto-download/{movieId}")]
@@ -155,14 +164,65 @@ public class MoviesController(Database db, YoutubeService youtube, DownloadServi
     [HttpPost("download-url")]
     public IActionResult DownloadUrl([FromBody] DownloadUrlRequest req)
     {
-        if (string.IsNullOrEmpty(req.Url) || !Uri.IsWellFormedUriString(req.Url, UriKind.Absolute))
+        if (string.IsNullOrEmpty(req.Url) ||
+            !Uri.TryCreate(req.Url, UriKind.Absolute, out var uri))
             return BadRequest(new { detail = "Invalid URL" });
+
+        if (uri.Scheme is not ("http" or "https"))
+            return BadRequest(new { detail = "Only http and https URLs are supported." });
+
+        if (IsPrivateOrLoopbackHost(uri.Host))
+            return BadRequest(new { detail = "Refusing to download from a private or loopback address." });
 
         if (db.GetMovie(req.MovieId) == null)
             return NotFound(new { detail = "Movie not found" });
 
         download.Start(req.MovieId, req.Url);
         return Accepted(new { started = true, movieId = req.MovieId });
+    }
+
+    // ── SSRF guard ────────────────────────────────────────────────────────────
+    // Blocks IP literals and resolved hostnames that fall into private, loopback,
+    // link-local, or IPv6-unique-local ranges. Best-effort: a TOCTOU between DNS
+    // resolution here and the actual HTTP GET remains, but this rejects the easy
+    // cases (127.0.0.1, 10.x, 169.254.x, ::1, localhost).
+    private static bool IsPrivateOrLoopbackHost(string host)
+    {
+        if (string.IsNullOrWhiteSpace(host)) return true;
+        if (host.Equals("localhost", StringComparison.OrdinalIgnoreCase)) return true;
+
+        IPAddress[] addresses;
+        if (IPAddress.TryParse(host, out var literal))
+            addresses = [literal];
+        else
+            try { addresses = Dns.GetHostAddresses(host); }
+            catch { return true; } // fail-closed on DNS errors
+
+        return addresses.Any(IsPrivateAddress);
+    }
+
+    private static bool IsPrivateAddress(IPAddress ip)
+    {
+        if (IPAddress.IsLoopback(ip)) return true;
+        if (ip.AddressFamily == AddressFamily.InterNetwork)
+        {
+            var b = ip.GetAddressBytes();
+            // 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, 100.64.0.0/10 (CGNAT), 0.0.0.0/8
+            if (b[0] == 10) return true;
+            if (b[0] == 172 && b[1] >= 16 && b[1] <= 31) return true;
+            if (b[0] == 192 && b[1] == 168) return true;
+            if (b[0] == 169 && b[1] == 254) return true;
+            if (b[0] == 100 && b[1] >= 64 && b[1] <= 127) return true;
+            if (b[0] == 0) return true;
+        }
+        else if (ip.AddressFamily == AddressFamily.InterNetworkV6)
+        {
+            if (ip.IsIPv6LinkLocal || ip.IsIPv6SiteLocal) return true;
+            var b = ip.GetAddressBytes();
+            // fc00::/7 unique-local
+            if ((b[0] & 0xFE) == 0xFC) return true;
+        }
+        return false;
     }
 
     [HttpGet("download/status/{movieId}")]

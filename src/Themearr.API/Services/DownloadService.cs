@@ -28,6 +28,8 @@ public class DownloadService(Database db, IHttpClientFactory httpClientFactory, 
         return true;
     }
 
+    public bool IsAnyInProgress() => _jobs.Values.Any(j => j.InProgress);
+
     public object GetStatus(string movieId)
     {
         if (!_jobs.TryGetValue(movieId, out var state))
@@ -89,6 +91,10 @@ public class DownloadService(Database db, IHttpClientFactory httpClientFactory, 
 
                 var deadline = DateTime.UtcNow.AddMinutes(5);
                 var attempt = 0;
+                // Cap retries on CDN 4xx to avoid burning RapidAPI quota when a bad
+                // video (private/age-gated) returns links that 403 every time.
+                const int MaxCdnRetries = 3;
+                var cdnRetries = 0;
 
                 while (true)
                 {
@@ -138,9 +144,13 @@ public class DownloadService(Database db, IHttpClientFactory httpClientFactory, 
                     using var dlResp = await http.SendAsync(dlReq, HttpCompletionOption.ResponseHeadersRead);
                     if (!dlResp.IsSuccessStatusCode)
                     {
-                        // Link expired — re-poll the API for a fresh one
-                        AddLog(movieId, $"[themearr] Link expired ({(int)dlResp.StatusCode}), re-polling for a fresh link…");
-                        await Task.Delay(1000);
+                        cdnRetries++;
+                        if (cdnRetries > MaxCdnRetries)
+                            throw new InvalidOperationException($"CDN download kept failing after {MaxCdnRetries} retries (last status {(int)dlResp.StatusCode}). Giving up to preserve RapidAPI quota.");
+                        // Exponential backoff: 2s, 4s, 8s
+                        var backoff = TimeSpan.FromSeconds(Math.Pow(2, cdnRetries));
+                        AddLog(movieId, $"[themearr] Link 4xx ({(int)dlResp.StatusCode}), retry {cdnRetries}/{MaxCdnRetries} in {backoff.TotalSeconds:0}s…");
+                        await Task.Delay(backoff);
                         continue;
                     }
 
@@ -186,14 +196,16 @@ public class DownloadService(Database db, IHttpClientFactory httpClientFactory, 
         }
     }
 
+    // Single source of truth for YouTube URL parsing. Returns null for non-YouTube URLs.
     private static string? ExtractVideoId(string url)
     {
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return null;
-        var host = uri.Host.ToLower().TrimStart('w').TrimStart('w').TrimStart('w').TrimStart('.');
-        if (host is "youtube.com" or "m.youtube.com")
+        var host = uri.Host.ToLowerInvariant();
+        if (host.StartsWith("www.")) host = host[4..];
+
+        if (host is "youtube.com" or "m.youtube.com" or "music.youtube.com")
         {
-            var q = System.Web.HttpUtility.ParseQueryString(uri.Query);
-            var v = q["v"]?.Trim();
+            var v = System.Web.HttpUtility.ParseQueryString(uri.Query)["v"]?.Trim();
             return string.IsNullOrEmpty(v) ? null : v;
         }
         if (host is "youtu.be")
@@ -206,20 +218,7 @@ public class DownloadService(Database db, IHttpClientFactory httpClientFactory, 
 
     private static string NormaliseYoutubeUrl(string url)
     {
-        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return url;
-        var host = uri.Host.ToLower().TrimStart('w').TrimStart('w').TrimStart('w').TrimStart('.');
-        if (host is "youtube.com" or "m.youtube.com")
-        {
-            var q = System.Web.HttpUtility.ParseQueryString(uri.Query);
-            var v = q["v"]?.Trim();
-            if (!string.IsNullOrEmpty(v))
-                return $"https://www.youtube.com/watch?v={v}";
-        }
-        if (host is "youtu.be")
-        {
-            var videoId = uri.AbsolutePath.Trim('/');
-            if (!string.IsNullOrEmpty(videoId)) return $"https://youtu.be/{videoId}";
-        }
-        return url;
+        var videoId = ExtractVideoId(url);
+        return videoId == null ? url : $"https://www.youtube.com/watch?v={videoId}";
     }
 }

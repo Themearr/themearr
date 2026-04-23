@@ -8,8 +8,10 @@ namespace Themearr.API.Services;
 public class AutoSyncService(IServiceProvider services, ILogger<AutoSyncService> log)
     : BackgroundService
 {
-    // Check every 30 minutes whether a sync is due
+    // Check every 30 minutes (±5 min jitter) whether a sync is due. Jitter keeps
+    // retries from all firing on the same second after a Plex outage recovers.
     private static readonly TimeSpan CheckInterval = TimeSpan.FromMinutes(30);
+    private static readonly TimeSpan JitterMax     = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan SyncInterval  = TimeSpan.FromHours(24);
 
     protected override async Task ExecuteAsync(CancellationToken ct)
@@ -22,7 +24,10 @@ public class AutoSyncService(IServiceProvider services, ILogger<AutoSyncService>
             try { await TryAutoSync(); }
             catch (Exception ex) { log.LogWarning(ex, "AutoSync check failed"); }
 
-            await Task.Delay(CheckInterval, ct);
+            var jitter = TimeSpan.FromMilliseconds(Random.Shared.Next(
+                (int)-JitterMax.TotalMilliseconds,
+                (int) JitterMax.TotalMilliseconds));
+            await Task.Delay(CheckInterval + jitter, ct);
         }
     }
 
