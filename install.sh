@@ -5,6 +5,11 @@
 # and yt-dlp are already available.
 #
 # Usage: bash install.sh [version]  (defaults to latest GitHub release)
+#
+# Environment variables:
+#   THEMEARR_BIND  — address the API listens on (default: 127.0.0.1).
+#                    Set to 0.0.0.0 to expose on the LAN (bearer auth still
+#                    required; no TLS — put a reverse proxy in front for WAN).
 set -euo pipefail
 
 GITHUB_REPO="Themearr/themearr"
@@ -16,6 +21,8 @@ SERVICE_GROUP="themearr"
 UPDATER="/usr/local/bin/themearr-update"
 AUTH_ENV="$DATA_DIR/auth.env"
 SUDOERS_FILE="/etc/sudoers.d/themearr"
+BIND_ADDR="${THEMEARR_BIND:-127.0.0.1}"
+LISTEN_PORT=8080
 
 info()  { echo "  [INFO]  $*"; }
 ok()    { echo "  [OK]    $*"; }
@@ -149,7 +156,7 @@ Environment="HOME=$DATA_DIR"
 Environment="XDG_CACHE_HOME=$DATA_DIR/.cache"
 Environment="DB_PATH=$DATA_DIR/themearr.db"
 Environment="THEMEARR_VERSION_FILE=$INSTALL_DIR/VERSION"
-Environment="ASPNETCORE_URLS=http://127.0.0.1:8080"
+Environment="ASPNETCORE_URLS=http://$BIND_ADDR:$LISTEN_PORT"
 ExecStart=/usr/bin/dotnet $INSTALL_DIR/Themearr.API.dll
 Restart=on-failure
 RestartSec=5
@@ -176,4 +183,9 @@ chown root:root "$UPDATER"
 
 systemctl daemon-reload
 systemctl enable --now "$SERVICE"
-ok "Service started — Themearr $TAG is running on 127.0.0.1:8080"
+ok "Service started — Themearr $TAG is running on $BIND_ADDR:$LISTEN_PORT"
+if [[ "$BIND_ADDR" == "0.0.0.0" ]]; then
+  echo "  [WARN]  Bound to 0.0.0.0 — the API is reachable from the LAN without TLS."
+  echo "          The bearer token is still required, but consider putting a reverse"
+  echo "          proxy (caddy/nginx) in front before exposing this to the internet."
+fi
