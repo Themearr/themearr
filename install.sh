@@ -58,24 +58,8 @@ ASSET_URL=$(echo "$RELEASE_JSON" \
 info "Installing Themearr $TAG ($ARCH_SUFFIX)"
 
 # ── System dependencies ───────────────────────────────────────────────────────
-
-if command -v apt-get &>/dev/null; then
-  info "Installing system dependencies (ffmpeg, nodejs)..."
-  apt-get install -y --no-install-recommends ffmpeg nodejs 2>&1 | grep -v "^$" || true
-  # yt-dlp looks for "node" but Debian/Ubuntu installs it as "nodejs"
-  if ! command -v node &>/dev/null && command -v nodejs &>/dev/null; then
-    ln -sf "$(command -v nodejs)" /usr/local/bin/node
-    info "Created node → nodejs symlink"
-  fi
-  ok "System dependencies installed"
-fi
-
-# ── yt-dlp (always install latest from GitHub — apt package is typically years out of date) ──
-info "Installing latest yt-dlp from GitHub..."
-curl -fsSL "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp" \
-  -o /usr/local/bin/yt-dlp
-chmod a+rx /usr/local/bin/yt-dlp
-ok "yt-dlp $(yt-dlp --version) installed"
+# None required: theme audio is fetched over HTTP from the youtube-mp36 RapidAPI
+# (configured in-app under Settings → RapidAPI), so yt-dlp/ffmpeg are not needed.
 
 # ── Download and extract ──────────────────────────────────────────────────────
 
@@ -184,6 +168,11 @@ chown root:root "$UPDATER"
 systemctl daemon-reload
 systemctl enable --now "$SERVICE"
 ok "Service started — Themearr $TAG is running on $BIND_ADDR:$LISTEN_PORT"
+echo
+echo "  Next step — enable downloads:"
+echo "    Theme downloads use the youtube-mp36 RapidAPI. After signing in,"
+echo "    open Settings → RapidAPI and add your RapidAPI key + username."
+echo "    Browsing works without it; downloads stay disabled until both are set."
 if [[ "$BIND_ADDR" == "0.0.0.0" ]]; then
   echo "  [WARN]  Bound to 0.0.0.0 — the API is reachable from the LAN without TLS."
   echo "          The bearer token is still required, but consider putting a reverse"

@@ -23,9 +23,13 @@ Themearr signs in with your Plex account, reads your movie libraries, and helps 
 
 - Browse your full Plex library as a poster grid
 - Auto-search YouTube for each movie's theme
-- One-click download via `yt-dlp`
+- One-click download to `theme.mp3`
 - Paste any video URL to use a custom source
 - Downloaded status tracked per movie
+
+## Downloads require a RapidAPI key
+
+Theme audio is fetched through the [youtube-mp36](https://rapidapi.com/ytjar/api/youtube-mp36) API on RapidAPI. **Downloads will not work until you add your RapidAPI key and username** in **Settings → RapidAPI**. Plex sign-in and library browsing work without it — only downloading a `theme.mp3` needs it. The free RapidAPI tier is quota-limited, so Themearr backs off automatically when the quota is exhausted.
 
 ## One-line Proxmox LXC install
 
@@ -44,8 +48,8 @@ After the container is created, open `http://<container-ip>:8080` and sign in wi
 | API | .NET 9 Web API (ASP.NET Core) |
 | Frontend | Next.js 16 (static export, served by .NET) |
 | Database | SQLite via `Microsoft.Data.Sqlite` |
-| YouTube | `YoutubeExplode` + `yt-dlp` |
-| Audio | `ffmpeg` |
+| YouTube search | `YoutubeExplode` |
+| Theme download | [youtube-mp36 RapidAPI](https://rapidapi.com/ytjar/api/youtube-mp36) |
 
 ## Local development
 
@@ -53,7 +57,7 @@ After the container is created, open `http://<container-ip>:8080` and sign in wi
 
 - [.NET 9 SDK](https://dotnet.microsoft.com/download)
 - [Node.js 22+](https://nodejs.org/)
-- `yt-dlp` and `ffmpeg` in `PATH`
+- A [youtube-mp36 RapidAPI](https://rapidapi.com/ytjar/api/youtube-mp36) key + username (added in **Settings → RapidAPI**) — required for downloads
 
 ### Run
 
