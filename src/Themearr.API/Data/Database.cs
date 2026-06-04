@@ -5,10 +5,6 @@ namespace Themearr.API.Data;
 
 public class Database(string dbPath)
 {
-    public string DataDir         => Path.GetDirectoryName(dbPath)!;
-    public string CookiesFilePath => Path.Combine(DataDir, "youtube-cookies.txt");
-    public bool   HasCookiesFile  => File.Exists(CookiesFilePath);
-
     private SqliteConnection Open()
     {
         Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
