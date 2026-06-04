@@ -435,7 +435,7 @@ file static class SqliteExtensions
     public static void Execute(this SqliteConnection conn, string sql, params (string name, object? value)[] parameters)
     {
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = sql;
+        cmd.CommandText = sql; // nosemgrep: csharp-sqli — literal SQL only; all values bound via SqliteParameter
         foreach (var (name, value) in parameters)
             cmd.Parameters.AddWithValue(name, value ?? DBNull.Value);
         cmd.ExecuteNonQuery();
@@ -444,7 +444,7 @@ file static class SqliteExtensions
     public static SqliteDataReader Query(this SqliteConnection conn, string sql, params (string name, object? value)[] parameters)
     {
         var cmd = conn.CreateCommand();
-        cmd.CommandText = sql;
+        cmd.CommandText = sql; // nosemgrep: csharp-sqli — literal SQL only; all values bound via SqliteParameter
         foreach (var (name, value) in parameters)
             cmd.Parameters.AddWithValue(name, value ?? DBNull.Value);
         return cmd.ExecuteReader();
