@@ -11,6 +11,7 @@ namespace Themearr.API.Services;
 public class AutoDownloadService(
     IServiceProvider services,
     DownloadService  download,
+    IThemeAudioProvider provider,
     ILogger<AutoDownloadService> log) : BackgroundService
 {
     private static readonly TimeSpan CheckInterval    = TimeSpan.FromSeconds(30);
@@ -36,7 +37,7 @@ public class AutoDownloadService(
         {
             enabled            = db.GetSetting("auto_download", "false") == "true",
             setupComplete      = db.IsSetupComplete(),
-            rapidApiConfigured = !string.IsNullOrEmpty(db.GetSetting("rapidapi_key", "")),
+            rapidApiConfigured = provider.CheckConfiguration() == null,
             downloadInProgress = download.IsAnyInProgress(),
             lastStartedMovieId = _lastStartedMovieId,
             lastTickAt         = _lastTickAt,
@@ -91,6 +92,14 @@ public class AutoDownloadService(
         if (!db.IsSetupComplete())
         {
             _lastTickResult = "skipped: setup not complete";
+            return;
+        }
+
+        // Don't churn through pending movies when the provider can't download yet —
+        // surface the actionable reason instead of failing one movie per tick.
+        if (provider.CheckConfiguration() is { } notReady)
+        {
+            _lastTickResult = $"skipped: {notReady}";
             return;
         }
 

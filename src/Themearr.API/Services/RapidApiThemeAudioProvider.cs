@@ -15,13 +15,31 @@ public class RapidApiThemeAudioProvider(
     IHttpClientFactory httpClientFactory,
     ILogger<RapidApiThemeAudioProvider> log) : IThemeAudioProvider
 {
+    public string? CheckConfiguration()
+    {
+        var hasKey  = !string.IsNullOrWhiteSpace(db.GetSetting("rapidapi_key", ""));
+        var hasUser = !string.IsNullOrWhiteSpace(db.GetSetting("rapidapi_username", ""));
+        if (hasKey && hasUser) return null;
+
+        var missing = (hasKey, hasUser) switch
+        {
+            (false, false) => "RapidAPI key and username are",
+            (false, true)  => "RapidAPI key is",
+            _              => "RapidAPI username is",
+        };
+        return $"Theme downloads are disabled: {missing} not set. " +
+               "Add your youtube-mp36 credentials under Settings → RapidAPI.";
+    }
+
     public async Task<string?> DownloadAsync(
         string videoId, string outputPath, Action<string> progress, CancellationToken ct = default)
     {
+        var configError = CheckConfiguration();
+        if (configError != null)
+            throw new ProviderNotConfiguredException(configError);
+
         var apiKey   = db.GetSetting("rapidapi_key", "");
         var username = db.GetSetting("rapidapi_username", "");
-        if (string.IsNullOrWhiteSpace(apiKey) || string.IsNullOrWhiteSpace(username))
-            throw new InvalidOperationException("RapidAPI key and username are not configured. Please add them in Settings.");
 
         var usernameMd5 = Convert.ToHexString(MD5.HashData(Encoding.UTF8.GetBytes(username))).ToLower();
 

@@ -28,6 +28,16 @@ public class DownloadService(
 
     public bool IsAnyInProgress() => _jobs.Values.Any(j => j.InProgress);
 
+    // Cheap (no-network) readiness check for the configured provider. Returns a
+    // user-facing message when downloads can't run yet (e.g. missing credentials),
+    // else null. Lets callers pre-flight before kicking off an async job.
+    public string? CheckProviderReadiness() => provider.CheckConfiguration();
+
+    // True if this URL would be handled by the theme-audio provider (a YouTube URL)
+    // rather than fetched directly. Used to decide whether a provider readiness
+    // check applies before starting a download.
+    public static bool IsProviderUrl(string url) => ExtractVideoId(url) != null;
+
     public object GetStatus(string movieId)
     {
         if (!_jobs.TryGetValue(movieId, out var state))

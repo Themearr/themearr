@@ -9,7 +9,8 @@ namespace Themearr.API.Controllers;
 
 [ApiController]
 [Route("api")]
-public class MoviesController(Database db, YoutubeService youtube, DownloadService download) : ControllerBase
+public class MoviesController(
+    Database db, YoutubeService youtube, DownloadService download, ILogger<MoviesController> log) : ControllerBase
 {
     [HttpGet("movies")]
     public IActionResult ListMovies()
@@ -143,6 +144,12 @@ public class MoviesController(Database db, YoutubeService youtube, DownloadServi
         if (best == null)
             return UnprocessableEntity(new { detail = "No suitable match found — please select manually." });
 
+        if (download.CheckProviderReadiness() is { } notReady)
+        {
+            log.LogWarning("Auto-download for {MovieId} blocked: {Reason}", movieId, notReady);
+            return UnprocessableEntity(new { detail = notReady });
+        }
+
         var videoId = best["videoId"]?.ToString() ?? "";
         var url     = $"https://www.youtube.com/watch?v={videoId}";
         download.Start(movieId, url);
@@ -155,6 +162,12 @@ public class MoviesController(Database db, YoutubeService youtube, DownloadServi
     {
         if (db.GetMovie(req.MovieId) == null)
             return NotFound(new { detail = "Movie not found" });
+
+        if (download.CheckProviderReadiness() is { } notReady)
+        {
+            log.LogWarning("Download for {MovieId} blocked: {Reason}", req.MovieId, notReady);
+            return UnprocessableEntity(new { detail = notReady });
+        }
 
         var url = $"https://www.youtube.com/watch?v={req.VideoId}";
         download.Start(req.MovieId, url);
@@ -176,6 +189,13 @@ public class MoviesController(Database db, YoutubeService youtube, DownloadServi
 
         if (db.GetMovie(req.MovieId) == null)
             return NotFound(new { detail = "Movie not found" });
+
+        // A pasted YouTube URL still goes through the provider, so pre-flight it.
+        if (DownloadService.IsProviderUrl(req.Url) && download.CheckProviderReadiness() is { } notReady)
+        {
+            log.LogWarning("Download-url for {MovieId} blocked: {Reason}", req.MovieId, notReady);
+            return UnprocessableEntity(new { detail = notReady });
+        }
 
         download.Start(req.MovieId, req.Url);
         return Accepted(new { started = true, movieId = req.MovieId });
