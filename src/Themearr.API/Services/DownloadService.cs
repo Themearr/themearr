@@ -4,13 +4,36 @@ using Themearr.API.Data;
 namespace Themearr.API.Services;
 
 public class DownloadService(
-    IThemeAudioProvider provider, Database db, IHttpClientFactory httpClientFactory, ILogger<DownloadService> log)
+    IThemeAudioProvider provider, Database db, IHttpClientFactory httpClientFactory,
+    IConfiguration config, ILogger<DownloadService> log)
 {
     private sealed record JobState(bool InProgress, bool Finished, string? Error);
     private readonly ConcurrentDictionary<string, JobState>          _jobs    = new();
     private readonly ConcurrentDictionary<string, ConcurrentQueue<string>> _jobLogs = new();
 
     private const int MaxLogLines = 300;
+
+    // After a provider quota-exhaustion (HTTP 429) we pause downloads until this time
+    // so the auto-download loop stops hammering the API. Volatile single-writer state.
+    private volatile int _quotaCooldownUntilUnix;
+
+    private TimeSpan QuotaCooldown
+    {
+        get
+        {
+            var raw = Environment.GetEnvironmentVariable("THEMEARR_QUOTA_COOLDOWN_MINUTES")
+                      ?? config["Themearr:QuotaCooldownMinutes"];
+            return int.TryParse(raw, out var m) && m > 0 ? TimeSpan.FromMinutes(m) : TimeSpan.FromHours(1);
+        }
+    }
+
+    // True while a quota cooldown is active; `untilUtc` is the (UTC) resume time.
+    public bool IsQuotaCoolingDown(out DateTime untilUtc)
+    {
+        var until = _quotaCooldownUntilUnix;
+        untilUtc = until == 0 ? DateTime.MinValue : DateTimeOffset.FromUnixTimeSeconds(until).UtcDateTime;
+        return DateTimeOffset.UtcNow.ToUnixTimeSeconds() < until;
+    }
 
     public bool Start(string movieId, string youtubeUrl)
     {
@@ -114,6 +137,15 @@ public class DownloadService(
             db.SetMovieStatus(movieId, "downloaded");
             db.AddThemeHistory(movieId, title, year, themeTitle, url);
             _jobs[movieId] = new JobState(false, true, null);
+        }
+        catch (QuotaExceededException ex)
+        {
+            var until = DateTimeOffset.UtcNow.Add(QuotaCooldown);
+            _quotaCooldownUntilUnix = (int)until.ToUnixTimeSeconds();
+            log.LogWarning("RapidAPI quota exhausted — pausing downloads until {Until:o}. {Detail}",
+                until.UtcDateTime, ex.Message);
+            AddLog(movieId, $"[themearr] RapidAPI quota exhausted — pausing downloads until {until.UtcDateTime:HH:mm} UTC.");
+            _jobs[movieId] = new JobState(false, true, ex.Message);
         }
         catch (Exception ex)
         {

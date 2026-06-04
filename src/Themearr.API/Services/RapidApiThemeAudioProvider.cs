@@ -72,7 +72,13 @@ public class RapidApiThemeAudioProvider(
             var body = await resp.Content.ReadAsStringAsync(ct);
 
             if (!resp.IsSuccessStatusCode)
+            {
+                // 429 == free-tier quota exhausted: distinguish it so callers can
+                // back off / circuit-break instead of retrying every movie.
+                if ((int)resp.StatusCode == 429)
+                    throw new QuotaExceededException($"RapidAPI quota exceeded (HTTP 429): {body}");
                 throw new InvalidOperationException($"RapidAPI error ({(int)resp.StatusCode}): {body}");
+            }
 
             using var doc = JsonDocument.Parse(body);
             var root = doc.RootElement;

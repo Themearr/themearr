@@ -31,3 +31,9 @@ public interface IThemeAudioProvider
 /// missing API credentials). The message is safe to surface directly to the user.
 /// </summary>
 public class ProviderNotConfiguredException(string message) : Exception(message);
+
+/// <summary>
+/// Thrown when the provider reports its request quota is exhausted (e.g. an HTTP 429
+/// from the RapidAPI free tier). Signals callers to back off rather than retry.
+/// </summary>
+public class QuotaExceededException(string message) : Exception(message);

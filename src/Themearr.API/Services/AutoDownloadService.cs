@@ -38,6 +38,8 @@ public class AutoDownloadService(
             enabled            = db.GetSetting("auto_download", "false") == "true",
             setupComplete      = db.IsSetupComplete(),
             rapidApiConfigured = provider.CheckConfiguration() == null,
+            quotaCoolingDown   = download.IsQuotaCoolingDown(out var quotaUntil),
+            quotaCooldownUntil = quotaUntil == DateTime.MinValue ? (DateTime?)null : quotaUntil,
             downloadInProgress = download.IsAnyInProgress(),
             lastStartedMovieId = _lastStartedMovieId,
             lastTickAt         = _lastTickAt,
@@ -100,6 +102,14 @@ public class AutoDownloadService(
         if (provider.CheckConfiguration() is { } notReady)
         {
             _lastTickResult = $"skipped: {notReady}";
+            return;
+        }
+
+        // Circuit-breaker: after a quota 429 the provider sets a cooldown. Stop
+        // hammering the API until it clears.
+        if (download.IsQuotaCoolingDown(out var quotaUntil))
+        {
+            _lastTickResult = $"skipped: RapidAPI quota cooldown until {quotaUntil:o}";
             return;
         }
 
