@@ -1,12 +1,10 @@
 using System.Collections.Concurrent;
-using System.Security.Cryptography;
-using System.Text;
-using System.Text.Json;
 using Themearr.API.Data;
 
 namespace Themearr.API.Services;
 
-public class DownloadService(Database db, IHttpClientFactory httpClientFactory, ILogger<DownloadService> log)
+public class DownloadService(
+    IThemeAudioProvider provider, Database db, IHttpClientFactory httpClientFactory, ILogger<DownloadService> log)
 {
     private sealed record JobState(bool InProgress, bool Finished, string? Error);
     private readonly ConcurrentDictionary<string, JobState>          _jobs    = new();
@@ -75,90 +73,8 @@ public class DownloadService(Database db, IHttpClientFactory httpClientFactory, 
 
             if (videoId != null)
             {
-                // YouTube URL — use youtube-mp36 RapidAPI, poll until ready then download immediately
-                var apiKey   = db.GetSetting("rapidapi_key", "");
-                var username = db.GetSetting("rapidapi_username", "");
-                if (string.IsNullOrWhiteSpace(apiKey) || string.IsNullOrWhiteSpace(username))
-                    throw new InvalidOperationException("RapidAPI key and username are not configured. Please add them in Settings.");
-
-                var usernameMd5 = Convert.ToHexString(MD5.HashData(Encoding.UTF8.GetBytes(username))).ToLower();
-
-                AddLog(movieId, $"[themearr] Fetching download link for video {videoId}…");
-                log.LogInformation("Fetching RapidAPI download link for {MovieId}: {VideoId}", movieId, videoId);
-
-                var http = httpClientFactory.CreateClient();
-                http.Timeout = TimeSpan.FromMinutes(10);
-
-                var deadline = DateTime.UtcNow.AddMinutes(5);
-                var attempt = 0;
-                // Cap retries on CDN 4xx to avoid burning RapidAPI quota when a bad
-                // video (private/age-gated) returns links that 403 every time.
-                const int MaxCdnRetries = 3;
-                var cdnRetries = 0;
-
-                while (true)
-                {
-                    if (DateTime.UtcNow >= deadline)
-                        throw new InvalidOperationException("RapidAPI timed out waiting for processing to complete.");
-
-                    attempt++;
-                    using var req = new HttpRequestMessage(HttpMethod.Get, $"https://youtube-mp36.p.rapidapi.com/dl?id={videoId}");
-                    req.Headers.Add("X-RapidAPI-Key", apiKey);
-                    req.Headers.Add("X-RapidAPI-Host", "youtube-mp36.p.rapidapi.com");
-
-                    using var resp = await http.SendAsync(req);
-                    var body = await resp.Content.ReadAsStringAsync();
-
-                    if (!resp.IsSuccessStatusCode)
-                        throw new InvalidOperationException($"RapidAPI error ({(int)resp.StatusCode}): {body}");
-
-                    using var doc = JsonDocument.Parse(body);
-                    var root = doc.RootElement;
-
-                    var status = root.TryGetProperty("status", out var st) ? st.GetString() : null;
-
-                    if (status == "processing")
-                    {
-                        AddLog(movieId, $"[themearr] Processing… (attempt {attempt})");
-                        await Task.Delay(1000);
-                        continue;
-                    }
-
-                    if (status != "ok")
-                    {
-                        var msg = root.TryGetProperty("msg", out var m) ? m.GetString() : body;
-                        throw new InvalidOperationException($"RapidAPI error (status={status}): {msg}");
-                    }
-
-                    var link = root.TryGetProperty("link", out var lnk) ? lnk.GetString() : null;
-                    if (string.IsNullOrEmpty(link))
-                        throw new InvalidOperationException($"RapidAPI returned ok but missing link: {body}");
-
-                    themeTitle = root.TryGetProperty("title", out var t) ? t.GetString() : null;
-                    AddLog(movieId, "[themearr] Got download link. Downloading immediately…");
-
-                    // Download immediately while the link is fresh, with whitelist headers
-                    using var dlReq = new HttpRequestMessage(HttpMethod.Get, link);
-                    dlReq.Headers.TryAddWithoutValidation("User-Agent", $"Mozilla/5.0 {username}");
-                    dlReq.Headers.Add("X-RUN", usernameMd5);
-                    using var dlResp = await http.SendAsync(dlReq, HttpCompletionOption.ResponseHeadersRead);
-                    if (!dlResp.IsSuccessStatusCode)
-                    {
-                        cdnRetries++;
-                        if (cdnRetries > MaxCdnRetries)
-                            throw new InvalidOperationException($"CDN download kept failing after {MaxCdnRetries} retries (last status {(int)dlResp.StatusCode}). Giving up to preserve RapidAPI quota.");
-                        // Exponential backoff: 2s, 4s, 8s
-                        var backoff = TimeSpan.FromSeconds(Math.Pow(2, cdnRetries));
-                        AddLog(movieId, $"[themearr] Link 4xx ({(int)dlResp.StatusCode}), retry {cdnRetries}/{MaxCdnRetries} in {backoff.TotalSeconds:0}s…");
-                        await Task.Delay(backoff);
-                        continue;
-                    }
-
-                    await using var fileStream = File.Create(outputPath);
-                    await dlResp.Content.CopyToAsync(fileStream);
-                    await fileStream.FlushAsync();
-                    break;
-                }
+                // YouTube URL — delegate to the configured theme-audio provider.
+                themeTitle = await provider.DownloadAsync(videoId, outputPath, msg => AddLog(movieId, msg));
             }
             else
             {

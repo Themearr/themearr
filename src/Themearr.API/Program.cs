@@ -18,6 +18,9 @@ builder.Services.AddSingleton<SyncService>();
 builder.Services.AddSingleton<UpdateService>();
 builder.Services.AddHttpClient<PlexService>();
 builder.Services.AddTransient<YoutubeService>();
+// Theme-audio download backend behind an interface so the provider can be swapped
+// without touching DownloadService (stateless — reads its config from the DB per call).
+builder.Services.AddSingleton<IThemeAudioProvider, RapidApiThemeAudioProvider>();
 builder.Services.AddSingleton<DownloadService>();
 builder.Services.AddHostedService<AutoSyncService>();
 // Register AutoDownloadService as a singleton AND wire its hosted-service lifecycle
