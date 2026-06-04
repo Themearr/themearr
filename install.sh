@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Themearr fresh-install script
 # Called by the ProxmoxVE install script after system deps are in place.
-# Also suitable for any fresh Linux install where .NET runtime, ffmpeg,
-# and yt-dlp are already available.
+# Also suitable for any fresh Linux install where the .NET runtime is available.
+# (Theme downloads use the youtube-mp36 RapidAPI — no ffmpeg/yt-dlp needed.)
 #
 # Usage: bash install.sh [version]  (defaults to latest GitHub release)
 #
