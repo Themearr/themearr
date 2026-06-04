@@ -125,9 +125,18 @@ public class DownloadService(
                     throw new InvalidOperationException($"Download failed ({(int)dlResp.StatusCode}): {snippet}");
                 }
 
-                await using var fileStream = File.Create(outputPath);
-                await dlResp.Content.CopyToAsync(fileStream);
-                await fileStream.FlushAsync();
+                try
+                {
+                    await using var fileStream = File.Create(outputPath);
+                    await StreamLimits.CopyWithLimitAsync(
+                        await dlResp.Content.ReadAsStreamAsync(), fileStream, StreamLimits.MaxThemeBytes);
+                    await fileStream.FlushAsync();
+                }
+                catch
+                {
+                    try { if (File.Exists(outputPath)) File.Delete(outputPath); } catch { /* best effort */ }
+                    throw;
+                }
             }
 
             AddLog(movieId, "[themearr] Download complete.");

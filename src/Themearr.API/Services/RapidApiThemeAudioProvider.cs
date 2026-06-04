@@ -64,7 +64,7 @@ public class RapidApiThemeAudioProvider(
                 throw new InvalidOperationException("RapidAPI timed out waiting for processing to complete.");
 
             attempt++;
-            using var req = new HttpRequestMessage(HttpMethod.Get, $"https://youtube-mp36.p.rapidapi.com/dl?id={videoId}");
+            using var req = new HttpRequestMessage(HttpMethod.Get, $"https://youtube-mp36.p.rapidapi.com/dl?id={Uri.EscapeDataString(videoId)}");
             req.Headers.Add("X-RapidAPI-Key", apiKey);
             req.Headers.Add("X-RapidAPI-Host", "youtube-mp36.p.rapidapi.com");
 
@@ -122,9 +122,19 @@ public class RapidApiThemeAudioProvider(
                 continue;
             }
 
-            await using var fileStream = File.Create(outputPath);
-            await dlResp.Content.CopyToAsync(fileStream, ct);
-            await fileStream.FlushAsync(ct);
+            try
+            {
+                await using var fileStream = File.Create(outputPath);
+                await StreamLimits.CopyWithLimitAsync(
+                    await dlResp.Content.ReadAsStreamAsync(ct), fileStream, StreamLimits.MaxThemeBytes, ct);
+                await fileStream.FlushAsync(ct);
+            }
+            catch
+            {
+                // Don't leave a truncated theme.mp3 behind on size-limit/IO failure.
+                try { if (File.Exists(outputPath)) File.Delete(outputPath); } catch { /* best effort */ }
+                throw;
+            }
             break;
         }
 
