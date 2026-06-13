@@ -1,26 +1,27 @@
 using Microsoft.AspNetCore.Mvc;
 using Themearr.API.Data;
+using Themearr.API.Services;
 
 namespace Themearr.API.Controllers;
 
 [ApiController]
 [Route("api/stats")]
-public class StatsController(Database db) : ControllerBase
+public class StatsController(Database db, PosterUrlSigner posterSigner) : ControllerBase
 {
     [HttpGet]
     public IActionResult GetStats()
     {
         var stats     = db.GetStats();
-        var serverMap = db.GetPlexServersDict();
+        var posterExpiry = DateTimeOffset.UtcNow.AddHours(12);
 
-        // Attach poster URLs to recently-added movies (same logic as MoviesController)
+        // Attach signed, token-free poster URLs (same as MoviesController).
         foreach (var movie in stats.RecentlyAdded)
         {
+            var id  = movie.GetValueOrDefault("id")?.ToString()           ?? "";
             var sid = movie.GetValueOrDefault("plexServerId")?.ToString()  ?? "";
             var rk  = movie.GetValueOrDefault("plexRatingKey")?.ToString() ?? "";
-            movie["posterUrl"] = (!string.IsNullOrEmpty(sid) && !string.IsNullOrEmpty(rk)
-                && serverMap.TryGetValue(sid, out var srv))
-                ? $"{srv.Url}/library/metadata/{rk}/thumb?X-Plex-Token={srv.Token}"
+            movie["posterUrl"] = (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(sid) && !string.IsNullOrEmpty(rk))
+                ? posterSigner.PosterPath(id, posterExpiry)
                 : null;
         }
 

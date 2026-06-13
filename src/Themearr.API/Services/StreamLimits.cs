@@ -6,13 +6,16 @@ internal static class StreamLimits
     // while bounding a malicious or mis-pointed URL from filling the data volume.
     public const long MaxThemeBytes = 100L * 1024 * 1024;
 
+    // Poster thumbnails are tens of KB; 20 MB bounds a malicious/oversized image body.
+    public const long MaxPosterBytes = 20L * 1024 * 1024;
+
     /// <summary>
     /// Copies <paramref name="source"/> to <paramref name="destination"/>, throwing
     /// an <see cref="InvalidOperationException"/> as soon as more than
     /// <paramref name="maxBytes"/> have been read (so an oversized body never fully
-    /// lands on disk).
+    /// lands on disk). Returns the total number of bytes copied.
     /// </summary>
-    public static async Task CopyWithLimitAsync(
+    public static async Task<long> CopyWithLimitAsync(
         Stream source, Stream destination, long maxBytes, CancellationToken ct = default)
     {
         var buffer = new byte[81920];
@@ -26,5 +29,6 @@ internal static class StreamLimits
                     $"Download exceeded the {maxBytes / (1024 * 1024)} MB limit — aborting.");
             await destination.WriteAsync(buffer.AsMemory(0, read), ct);
         }
+        return total;
     }
 }

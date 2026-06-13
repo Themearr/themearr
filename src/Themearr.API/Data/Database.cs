@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
+using Themearr.API.Services;
 
 namespace Themearr.API.Data;
 
@@ -177,6 +178,46 @@ public class Database(string dbPath)
 
     public void SetPlexServers(List<Dictionary<string, object?>> servers) =>
         SetJsonSetting("plex_selected_servers", servers);
+
+    // Same servers but with the Plex access token blanked, for echoing back in GET
+    // responses — the token is write-only and must never leave the server in JSON.
+    public List<Dictionary<string, object?>> GetPlexServersRedacted() =>
+        GetPlexServers()
+            .Select(srv =>
+            {
+                var copy = new Dictionary<string, object?>(srv) { ["token"] = "" };
+                return copy;
+            })
+            .ToList();
+
+    // Persists an incoming server list while preserving any stored token for a server
+    // whose incoming token is blank. Lets the UI load redacted servers and save them
+    // back without wiping the token it was never shown.
+    public void SetPlexServersMergingTokens(List<Dictionary<string, object?>> incoming)
+    {
+        var storedTokens = GetPlexServersDict();
+        var merged = incoming.Select(srv =>
+        {
+            var copy = new Dictionary<string, object?>(srv);
+            var token = copy.GetValueOrDefault("token")?.ToString() ?? "";
+            if (string.IsNullOrEmpty(token))
+            {
+                var id = copy.GetValueOrDefault("id")?.ToString() ?? "";
+                if (!string.IsNullOrEmpty(id) && storedTokens.TryGetValue(id, out var s) && !string.IsNullOrEmpty(s.Token))
+                    copy["token"] = s.Token;
+            }
+            return copy;
+        }).ToList();
+        SetPlexServers(merged);
+    }
+
+    // The stored token for the primary server, or "" — used to preserve plex_server_token
+    // when a redacted save omits it.
+    public string GetPrimaryServerToken()
+    {
+        var first = GetPlexServers().FirstOrDefault();
+        return first?.GetValueOrDefault("token")?.ToString() ?? "";
+    }
 
     public Dictionary<string, List<string>> GetSelectedLibraries() =>
         GetJsonSetting("plex_selected_libraries", new Dictionary<string, List<string>>());
@@ -409,9 +450,9 @@ public class Database(string dbPath)
             status = "ignored";
         else
         {
-            var hasTheme = Directory.EnumerateFiles(folder, "theme.*")
-                                     .Any(f => Path.GetExtension(f) is not (".part" or ".ytdl"));
-            status = hasTheme ? "downloaded" : "pending";
+            // A zero-byte/truncated theme.* is treated as not-downloaded so it gets
+            // retried rather than being marked done forever (see ThemeFiles).
+            status = ThemeFiles.HasUsableTheme(folder) ? "downloaded" : "pending";
         }
 
         return new Dictionary<string, object?>

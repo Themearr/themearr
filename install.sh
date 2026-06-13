@@ -49,11 +49,18 @@ esac
 
 ASSET_URL=$(echo "$RELEASE_JSON" \
   | grep '"browser_download_url"' \
-  | grep "$ARCH_SUFFIX" \
+  | grep "${ARCH_SUFFIX}.tar.gz\"" \
   | head -1 \
   | cut -d'"' -f4)
 
 [[ -z "$ASSET_URL" ]] && error "No release asset found for $ARCH_SUFFIX in $TAG. Check that the GitHub release includes a $ARCH_SUFFIX.tar.gz artifact."
+
+# Published SHA-256 checksum asset (themearr-<arch>.tar.gz.sha256), if present.
+SHA_URL=$(echo "$RELEASE_JSON" \
+  | grep '"browser_download_url"' \
+  | grep "${ARCH_SUFFIX}.tar.gz.sha256" \
+  | head -1 \
+  | cut -d'"' -f4)
 
 info "Installing Themearr $TAG ($ARCH_SUFFIX)"
 
@@ -69,6 +76,20 @@ mkdir -p "$DATA_DIR"
 TMP=$(mktemp /tmp/themearr-XXXXXX.tar.gz)
 info "Downloading release..."
 curl -fsSL "$ASSET_URL" -o "$TMP"
+
+# Verify the tarball against the published SHA-256 before extracting.
+if [[ -n "$SHA_URL" ]]; then
+  EXPECTED=$(curl -fsSL "$SHA_URL" | awk '{print $1}' | head -1)
+  ACTUAL=$(sha256sum "$TMP" | awk '{print $1}')
+  if [[ -z "$EXPECTED" || "$EXPECTED" != "$ACTUAL" ]]; then
+    rm -f "$TMP"
+    error "Checksum mismatch for $TAG ($ARCH_SUFFIX) — refusing to install. expected=$EXPECTED actual=$ACTUAL"
+  fi
+  ok "Checksum verified ($ACTUAL)"
+else
+  info "No published checksum for $TAG — skipping verification (older release)."
+fi
+
 tar -xzf "$TMP" -C "$INSTALL_DIR" --strip-components=1 --no-same-owner --no-same-permissions
 rm -f "$TMP"
 ok "Extracted to $INSTALL_DIR"
@@ -158,9 +179,19 @@ EOF
 # ── Updater helper ─────────────────────────────────────────────────────────────
 # Fixed path so the in-app updater (UpdateService.cs) can always find it.
 
+# Prefer the deploy.sh shipped inside the installed (checksum-verified) release; only
+# fall back to fetching it, pinned to the installed tag — never the mutable main HEAD.
 cat > "$UPDATER" << 'UPDATER_EOF'
 #!/usr/bin/env bash
-curl -fsSL https://raw.githubusercontent.com/Themearr/themearr/main/deploy.sh | bash
+set -euo pipefail
+REPO="Themearr/themearr"
+LOCAL="/opt/themearr/deploy.sh"
+if [[ -f "$LOCAL" ]]; then
+  exec bash "$LOCAL"
+fi
+REF="$(cat /opt/themearr/VERSION 2>/dev/null || echo main)"
+[[ "$REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || REF="main"
+curl -fsSL "https://raw.githubusercontent.com/${REPO}/${REF}/deploy.sh" | bash
 UPDATER_EOF
 chmod 755 "$UPDATER"
 chown root:root "$UPDATER"

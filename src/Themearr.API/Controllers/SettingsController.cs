@@ -11,7 +11,8 @@ public class SettingsController(Database db) : ControllerBase
     [HttpGet]
     public IActionResult Get() => Ok(new
     {
-        selectedServers   = db.GetPlexServers(),
+        // Plex token is write-only — never echo it back in a GET response.
+        selectedServers   = db.GetPlexServersRedacted(),
         selectedLibraries = db.GetSelectedLibraries(),
         pathMappings      = db.GetPathMappings(),
         libraryPaths      = db.GetLibraryPaths(),
@@ -25,10 +26,14 @@ public class SettingsController(Database db) : ControllerBase
         lastAutoSyncAt = db.GetSetting("last_auto_sync_at", ""),
     });
 
+    // [Consumes] forces a JSON content-type (and thus a CORS preflight), which — on top
+    // of the header-only bearer auth — blocks simple cross-site POSTs from forging this.
     [HttpPost]
+    [Consumes("application/json")]
     public IActionResult Save([FromBody] SettingsPayload req)
     {
-        db.SetPlexServers(req.SelectedServers);
+        // Merge so a save that omits the redacted token keeps the stored one.
+        db.SetPlexServersMergingTokens(req.SelectedServers);
         db.SetSelectedLibraries(req.SelectedLibraries);
         db.SetPathMappings(req.PathMappings);
         db.SetLibraryPaths(req.LibraryPaths);
@@ -45,7 +50,10 @@ public class SettingsController(Database db) : ControllerBase
             var p = req.SelectedServers[0];
             db.SetSetting("plex_server_name",  p.GetValueOrDefault("name",  "")?.ToString() ?? "");
             db.SetSetting("plex_server_url",   p.GetValueOrDefault("url",   "")?.ToString() ?? "");
-            db.SetSetting("plex_server_token", p.GetValueOrDefault("token", "")?.ToString() ?? "");
+            // Preserve the stored token when the save omits it (redacted round-trip).
+            var incomingToken = p.GetValueOrDefault("token", "")?.ToString() ?? "";
+            db.SetSetting("plex_server_token",
+                string.IsNullOrEmpty(incomingToken) ? db.GetPrimaryServerToken() : incomingToken);
         }
         if (req.SelectedServers.Count > 0 && req.SelectedLibraries.Values.Sum(v => v.Count) > 0)
             db.MarkSetupComplete();
@@ -64,6 +72,7 @@ public class SettingsController(Database db) : ControllerBase
     }
 
     [HttpPost("rapidapi")]
+    [Consumes("application/json")]
     public IActionResult SaveRapidApiKey([FromBody] RapidApiKeyPayload payload)
     {
         if (string.IsNullOrWhiteSpace(payload.Key))

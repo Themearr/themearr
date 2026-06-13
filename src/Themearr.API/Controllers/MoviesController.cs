@@ -1,5 +1,3 @@
-using System.Net;
-using System.Net.Sockets;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Net.Http.Headers;
 using Themearr.API.Data;
@@ -10,19 +8,22 @@ namespace Themearr.API.Controllers;
 [ApiController]
 [Route("api")]
 public class MoviesController(
-    Database db, YoutubeService youtube, DownloadService download, ILogger<MoviesController> log) : ControllerBase
+    Database db, YoutubeService youtube, DownloadService download, PosterUrlSigner posterSigner,
+    ILogger<MoviesController> log) : ControllerBase
 {
     [HttpGet("movies")]
     public IActionResult ListMovies()
     {
         var movies = db.GetAllMovies();
-        var serverMap = db.GetPlexServersDict();
+        var posterExpiry = DateTimeOffset.UtcNow.AddHours(12);
         foreach (var movie in movies)
         {
+            var id  = movie.GetValueOrDefault("id")?.ToString() ?? "";
             var sid = movie.GetValueOrDefault("plexServerId")?.ToString() ?? "";
             var rk  = movie.GetValueOrDefault("plexRatingKey")?.ToString() ?? "";
-            movie["posterUrl"] = (!string.IsNullOrEmpty(sid) && !string.IsNullOrEmpty(rk) && serverMap.TryGetValue(sid, out var srv))
-                ? $"{srv.Url}/library/metadata/{rk}/thumb?X-Plex-Token={srv.Token}"
+            // Signed, token-free poster URL — the Plex token stays server-side (see PosterController).
+            movie["posterUrl"] = (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(sid) && !string.IsNullOrEmpty(rk))
+                ? posterSigner.PosterPath(id, posterExpiry)
                 : null;
         }
         return Ok(movies);
@@ -61,9 +62,15 @@ public class MoviesController(
         if (string.IsNullOrEmpty(folder))
             return BadRequest(new { detail = "Movie has no folder" });
 
+        // Confine deletes to the configured library roots (see DownloadService).
+        var roots = db.GetLibraryPaths();
+        if (roots.Count > 0 && !ThemeFiles.IsWithinRoots(folder, roots))
+            return BadRequest(new { detail = "Refusing to delete outside the configured library roots." });
+
         var deleted = false;
         foreach (var f in Directory.EnumerateFiles(folder, "theme.*"))
         {
+            if (Path.GetExtension(f) is ".part" or ".ytdl") continue;
             System.IO.File.Delete(f);
             deleted = true;
         }
@@ -144,7 +151,7 @@ public class MoviesController(
         if (best == null)
             return UnprocessableEntity(new { detail = "No suitable match found — please select manually." });
 
-        if (download.CheckProviderReadiness() is { } notReady)
+        if (download.DownloadBlockedReason(isProviderUrl: true) is { } notReady)
         {
             log.LogWarning("Auto-download for {MovieId} blocked: {Reason}", movieId, notReady);
             return UnprocessableEntity(new { detail = notReady });
@@ -158,12 +165,13 @@ public class MoviesController(
     }
 
     [HttpPost("download")]
+    [Consumes("application/json")]
     public IActionResult Download([FromBody] DownloadRequest req)
     {
         if (db.GetMovie(req.MovieId) == null)
             return NotFound(new { detail = "Movie not found" });
 
-        if (download.CheckProviderReadiness() is { } notReady)
+        if (download.DownloadBlockedReason(isProviderUrl: true) is { } notReady)
         {
             log.LogWarning("Download for {MovieId} blocked: {Reason}", req.MovieId, notReady);
             return UnprocessableEntity(new { detail = notReady });
@@ -175,6 +183,7 @@ public class MoviesController(
     }
 
     [HttpPost("download-url")]
+    [Consumes("application/json")]
     public IActionResult DownloadUrl([FromBody] DownloadUrlRequest req)
     {
         if (string.IsNullOrEmpty(req.Url) ||
@@ -184,14 +193,15 @@ public class MoviesController(
         if (uri.Scheme is not ("http" or "https"))
             return BadRequest(new { detail = "Only http and https URLs are supported." });
 
-        if (IsPrivateOrLoopbackHost(uri.Host))
+        if (HostGuard.IsPrivateOrLoopback(uri.Host))
             return BadRequest(new { detail = "Refusing to download from a private or loopback address." });
 
         if (db.GetMovie(req.MovieId) == null)
             return NotFound(new { detail = "Movie not found" });
 
-        // A pasted YouTube URL still goes through the provider, so pre-flight it.
-        if (DownloadService.IsProviderUrl(req.Url) && download.CheckProviderReadiness() is { } notReady)
+        // A pasted YouTube URL still goes through the provider, so pre-flight it
+        // (config + quota cooldown). Direct URLs are not gated.
+        if (download.DownloadBlockedReason(DownloadService.IsProviderUrl(req.Url)) is { } notReady)
         {
             log.LogWarning("Download-url for {MovieId} blocked: {Reason}", req.MovieId, notReady);
             return UnprocessableEntity(new { detail = notReady });
@@ -199,50 +209,6 @@ public class MoviesController(
 
         download.Start(req.MovieId, req.Url);
         return Accepted(new { started = true, movieId = req.MovieId });
-    }
-
-    // ── SSRF guard ────────────────────────────────────────────────────────────
-    // Blocks IP literals and resolved hostnames that fall into private, loopback,
-    // link-local, or IPv6-unique-local ranges. Best-effort: a TOCTOU between DNS
-    // resolution here and the actual HTTP GET remains, but this rejects the easy
-    // cases (127.0.0.1, 10.x, 169.254.x, ::1, localhost).
-    private static bool IsPrivateOrLoopbackHost(string host)
-    {
-        if (string.IsNullOrWhiteSpace(host)) return true;
-        if (host.Equals("localhost", StringComparison.OrdinalIgnoreCase)) return true;
-
-        IPAddress[] addresses;
-        if (IPAddress.TryParse(host, out var literal))
-            addresses = [literal];
-        else
-            try { addresses = Dns.GetHostAddresses(host); }
-            catch { return true; } // fail-closed on DNS errors
-
-        return addresses.Any(IsPrivateAddress);
-    }
-
-    private static bool IsPrivateAddress(IPAddress ip)
-    {
-        if (IPAddress.IsLoopback(ip)) return true;
-        if (ip.AddressFamily == AddressFamily.InterNetwork)
-        {
-            var b = ip.GetAddressBytes();
-            // 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, 100.64.0.0/10 (CGNAT), 0.0.0.0/8
-            if (b[0] == 10) return true;
-            if (b[0] == 172 && b[1] >= 16 && b[1] <= 31) return true;
-            if (b[0] == 192 && b[1] == 168) return true;
-            if (b[0] == 169 && b[1] == 254) return true;
-            if (b[0] == 100 && b[1] >= 64 && b[1] <= 127) return true;
-            if (b[0] == 0) return true;
-        }
-        else if (ip.AddressFamily == AddressFamily.InterNetworkV6)
-        {
-            if (ip.IsIPv6LinkLocal || ip.IsIPv6SiteLocal) return true;
-            var b = ip.GetAddressBytes();
-            // fc00::/7 unique-local
-            if ((b[0] & 0xFE) == 0xFC) return true;
-        }
-        return false;
     }
 
     [HttpGet("download/status/{movieId}")]

@@ -87,8 +87,12 @@ public class RapidApiThemeAudioProvider(
 
             if (status == "processing")
             {
-                progress($"[themearr] Processing… (attempt {attempt})");
-                await Task.Delay(1000, ct);
+                // Each poll is a billed RapidAPI request — back off exponentially
+                // (1s, 2s, 4s, 8s, … capped 15s) instead of polling at 1 Hz, which
+                // could burn hundreds of quota units on one slow conversion.
+                var wait = PollBackoff.ForAttempt(attempt);
+                progress($"[themearr] Processing… (attempt {attempt}, next check in {wait.TotalSeconds:0}s)");
+                await Task.Delay(wait, ct);
                 continue;
             }
 
@@ -122,19 +126,10 @@ public class RapidApiThemeAudioProvider(
                 continue;
             }
 
-            try
-            {
-                await using var fileStream = File.Create(outputPath);
-                await StreamLimits.CopyWithLimitAsync(
-                    await dlResp.Content.ReadAsStreamAsync(ct), fileStream, StreamLimits.MaxThemeBytes, ct);
-                await fileStream.FlushAsync(ct);
-            }
-            catch
-            {
-                // Don't leave a truncated theme.mp3 behind on size-limit/IO failure.
-                try { if (File.Exists(outputPath)) File.Delete(outputPath); } catch { /* best effort */ }
-                throw;
-            }
+            // Atomic: stream to theme.mp3.part then move into place, so a truncated,
+            // empty, or size-capped download never lands as a corrupt theme.mp3.
+            await ThemeFiles.WriteAtomicAsync(
+                await dlResp.Content.ReadAsStreamAsync(ct), outputPath, StreamLimits.MaxThemeBytes, ct);
             break;
         }
 
