@@ -36,11 +36,18 @@ esac
 
 ASSET_URL=$(echo "$RELEASE_JSON" \
   | grep '"browser_download_url"' \
-  | grep "$ARCH_SUFFIX" \
+  | grep "${ARCH_SUFFIX}.tar.gz\"" \
   | head -1 \
   | cut -d'"' -f4)
 
 [[ -z "$ASSET_URL" ]] && error "No release asset found for $ARCH_SUFFIX in $TAG"
+
+# Published SHA-256 checksum asset (themearr-<arch>.tar.gz.sha256), if present.
+SHA_URL=$(echo "$RELEASE_JSON" \
+  | grep '"browser_download_url"' \
+  | grep "${ARCH_SUFFIX}.tar.gz.sha256" \
+  | head -1 \
+  | cut -d'"' -f4)
 
 info "Deploying Themearr $TAG ($ARCH_SUFFIX)"
 
@@ -66,6 +73,22 @@ mkdir -p "$INSTALL_DIR"
 TMP=$(mktemp /tmp/themearr-XXXXXX.tar.gz)
 info "Downloading release..."
 curl -fsSL "$ASSET_URL" -o "$TMP"
+
+# Verify the tarball against the published SHA-256 before trusting it. This is the
+# integrity check that makes piping the bootstrap script into a shell safe(r): even
+# if the script is tampered with, a tampered/oversized tarball is rejected here.
+if [[ -n "$SHA_URL" ]]; then
+  EXPECTED=$(curl -fsSL "$SHA_URL" | awk '{print $1}' | head -1)
+  ACTUAL=$(sha256sum "$TMP" | awk '{print $1}')
+  if [[ -z "$EXPECTED" || "$EXPECTED" != "$ACTUAL" ]]; then
+    rm -f "$TMP"
+    error "Checksum mismatch for $TAG ($ARCH_SUFFIX) — refusing to install. expected=$EXPECTED actual=$ACTUAL"
+  fi
+  ok "Checksum verified ($ACTUAL)"
+else
+  info "No published checksum for $TAG — skipping verification (older release)."
+fi
+
 tar -xzf "$TMP" -C "$INSTALL_DIR" --strip-components=1 --no-same-owner --no-same-permissions
 rm -f "$TMP"
 ok "Extracted to $INSTALL_DIR"

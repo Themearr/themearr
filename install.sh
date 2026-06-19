@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Themearr fresh-install script
 # Called by the ProxmoxVE install script after system deps are in place.
-# Also suitable for any fresh Linux install where .NET runtime, ffmpeg,
-# and yt-dlp are already available.
+# Also suitable for any fresh Linux install where the .NET runtime is available.
+# (Theme downloads use the youtube-mp36 RapidAPI — no ffmpeg/yt-dlp needed.)
 #
 # Usage: bash install.sh [version]  (defaults to latest GitHub release)
 #
@@ -49,33 +49,24 @@ esac
 
 ASSET_URL=$(echo "$RELEASE_JSON" \
   | grep '"browser_download_url"' \
-  | grep "$ARCH_SUFFIX" \
+  | grep "${ARCH_SUFFIX}.tar.gz\"" \
   | head -1 \
   | cut -d'"' -f4)
 
 [[ -z "$ASSET_URL" ]] && error "No release asset found for $ARCH_SUFFIX in $TAG. Check that the GitHub release includes a $ARCH_SUFFIX.tar.gz artifact."
 
+# Published SHA-256 checksum asset (themearr-<arch>.tar.gz.sha256), if present.
+SHA_URL=$(echo "$RELEASE_JSON" \
+  | grep '"browser_download_url"' \
+  | grep "${ARCH_SUFFIX}.tar.gz.sha256" \
+  | head -1 \
+  | cut -d'"' -f4)
+
 info "Installing Themearr $TAG ($ARCH_SUFFIX)"
 
 # ── System dependencies ───────────────────────────────────────────────────────
-
-if command -v apt-get &>/dev/null; then
-  info "Installing system dependencies (ffmpeg, nodejs)..."
-  apt-get install -y --no-install-recommends ffmpeg nodejs 2>&1 | grep -v "^$" || true
-  # yt-dlp looks for "node" but Debian/Ubuntu installs it as "nodejs"
-  if ! command -v node &>/dev/null && command -v nodejs &>/dev/null; then
-    ln -sf "$(command -v nodejs)" /usr/local/bin/node
-    info "Created node → nodejs symlink"
-  fi
-  ok "System dependencies installed"
-fi
-
-# ── yt-dlp (always install latest from GitHub — apt package is typically years out of date) ──
-info "Installing latest yt-dlp from GitHub..."
-curl -fsSL "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp" \
-  -o /usr/local/bin/yt-dlp
-chmod a+rx /usr/local/bin/yt-dlp
-ok "yt-dlp $(yt-dlp --version) installed"
+# None required: theme audio is fetched over HTTP from the youtube-mp36 RapidAPI
+# (configured in-app under Settings → RapidAPI), so yt-dlp/ffmpeg are not needed.
 
 # ── Download and extract ──────────────────────────────────────────────────────
 
@@ -85,6 +76,20 @@ mkdir -p "$DATA_DIR"
 TMP=$(mktemp /tmp/themearr-XXXXXX.tar.gz)
 info "Downloading release..."
 curl -fsSL "$ASSET_URL" -o "$TMP"
+
+# Verify the tarball against the published SHA-256 before extracting.
+if [[ -n "$SHA_URL" ]]; then
+  EXPECTED=$(curl -fsSL "$SHA_URL" | awk '{print $1}' | head -1)
+  ACTUAL=$(sha256sum "$TMP" | awk '{print $1}')
+  if [[ -z "$EXPECTED" || "$EXPECTED" != "$ACTUAL" ]]; then
+    rm -f "$TMP"
+    error "Checksum mismatch for $TAG ($ARCH_SUFFIX) — refusing to install. expected=$EXPECTED actual=$ACTUAL"
+  fi
+  ok "Checksum verified ($ACTUAL)"
+else
+  info "No published checksum for $TAG — skipping verification (older release)."
+fi
+
 tar -xzf "$TMP" -C "$INSTALL_DIR" --strip-components=1 --no-same-owner --no-same-permissions
 rm -f "$TMP"
 ok "Extracted to $INSTALL_DIR"
@@ -174,9 +179,19 @@ EOF
 # ── Updater helper ─────────────────────────────────────────────────────────────
 # Fixed path so the in-app updater (UpdateService.cs) can always find it.
 
+# Prefer the deploy.sh shipped inside the installed (checksum-verified) release; only
+# fall back to fetching it, pinned to the installed tag — never the mutable main HEAD.
 cat > "$UPDATER" << 'UPDATER_EOF'
 #!/usr/bin/env bash
-curl -fsSL https://raw.githubusercontent.com/Themearr/themearr/main/deploy.sh | bash
+set -euo pipefail
+REPO="Themearr/themearr"
+LOCAL="/opt/themearr/deploy.sh"
+if [[ -f "$LOCAL" ]]; then
+  exec bash "$LOCAL"
+fi
+REF="$(cat /opt/themearr/VERSION 2>/dev/null || echo main)"
+[[ "$REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || REF="main"
+curl -fsSL "https://raw.githubusercontent.com/${REPO}/${REF}/deploy.sh" | bash
 UPDATER_EOF
 chmod 755 "$UPDATER"
 chown root:root "$UPDATER"
@@ -184,6 +199,11 @@ chown root:root "$UPDATER"
 systemctl daemon-reload
 systemctl enable --now "$SERVICE"
 ok "Service started — Themearr $TAG is running on $BIND_ADDR:$LISTEN_PORT"
+echo
+echo "  Next step — enable downloads:"
+echo "    Theme downloads use the youtube-mp36 RapidAPI. After signing in,"
+echo "    open Settings → RapidAPI and add your RapidAPI key + username."
+echo "    Browsing works without it; downloads stay disabled until both are set."
 if [[ "$BIND_ADDR" == "0.0.0.0" ]]; then
   echo "  [WARN]  Bound to 0.0.0.0 — the API is reachable from the LAN without TLS."
   echo "          The bearer token is still required, but consider putting a reverse"

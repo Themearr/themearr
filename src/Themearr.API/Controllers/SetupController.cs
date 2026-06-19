@@ -16,6 +16,7 @@ public class SetupController(Database db, PlexService plex) : ControllerBase
     // ── Plex PIN login ────────────────────────────────────────────────────────
 
     [HttpPost("plex/login")]
+    [Consumes("application/json")]
     public async Task<IActionResult> StartPlexLogin([FromBody] PlexLoginRequest req)
     {
         var result = await plex.CreateLoginPinAsync(req.ForwardUrl?.Trim() ?? "");
@@ -76,6 +77,7 @@ public class SetupController(Database db, PlexService plex) : ControllerBase
     }
 
     [HttpPost("plex/libraries")]
+    [Consumes("application/json")]
     public async Task<IActionResult> PlexLibraries([FromBody] PlexLibrariesRequest req)
     {
         var payload = new Dictionary<string, object>();
@@ -107,6 +109,7 @@ public class SetupController(Database db, PlexService plex) : ControllerBase
     // ── Save selection ────────────────────────────────────────────────────────
 
     [HttpPost("plex/selection")]
+    [Consumes("application/json")]
     public IActionResult SaveSelection([FromBody] PlexSelectionRequest req)
     {
         if (req.Servers == null || req.Servers.Count == 0)
@@ -116,7 +119,8 @@ public class SetupController(Database db, PlexService plex) : ControllerBase
         if (total == 0)
             return BadRequest(new { detail = "Select at least one movie library" });
 
-        db.SetPlexServers(req.Servers);
+        // Merge so a re-save that omits the redacted token keeps the stored one.
+        db.SetPlexServersMergingTokens(req.Servers);
         db.SetSelectedLibraries(req.SelectedLibraries ?? []);
         db.SetPathMappings(req.PathMappings ?? []);
         db.SetLibraryPaths(req.LibraryPaths ?? []);
@@ -124,7 +128,9 @@ public class SetupController(Database db, PlexService plex) : ControllerBase
         var primary = req.Servers[0];
         db.SetSetting("plex_server_name", primary.GetValueOrDefault("name", "")?.ToString() ?? "");
         db.SetSetting("plex_server_url",  primary.GetValueOrDefault("url",  "")?.ToString() ?? "");
-        db.SetSetting("plex_server_token",primary.GetValueOrDefault("token","")?.ToString() ?? "");
+        var incomingToken = primary.GetValueOrDefault("token", "")?.ToString() ?? "";
+        db.SetSetting("plex_server_token",
+            string.IsNullOrEmpty(incomingToken) ? db.GetPrimaryServerToken() : incomingToken);
         db.MarkSetupComplete();
 
         return Ok(SetupPayload());
@@ -154,7 +160,8 @@ public class SetupController(Database db, PlexService plex) : ControllerBase
     private object SetupPayload()
     {
         var plexConnected = !string.IsNullOrEmpty(db.GetSetting("plex_access_token").Trim());
-        var selectedServers = db.GetPlexServers();
+        // Plex token is write-only — never echo it back in a GET response.
+        var selectedServers = db.GetPlexServersRedacted();
         var selectedLibraries = db.GetSelectedLibraries();
         var libCount = selectedLibraries.Values.Sum(v => v.Count);
 

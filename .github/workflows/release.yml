@@ -98,6 +98,13 @@ jobs:
           cp -r src/Themearr.Web/out _publish/linux-x64/wwwroot
           cp -r src/Themearr.Web/out _publish/linux-arm64/wwwroot
 
+      # Ship deploy.sh inside the release so the in-app updater runs the
+      # checksum-verified, already-installed script instead of curl|bash from main.
+      - name: Inject deploy script
+        run: |
+          cp deploy.sh _publish/linux-x64/deploy.sh
+          cp deploy.sh _publish/linux-arm64/deploy.sh
+
       # ── Create tarballs ───────────────────────────────────────────────────────
       - name: Create tarballs
         run: |
@@ -107,6 +114,10 @@ jobs:
           mv _publish/linux-arm64 _publish/themearr-${TAG}-linux-arm64
           tar -czf _dist/themearr-linux-x64.tar.gz   -C _publish themearr-${TAG}-linux-x64
           tar -czf _dist/themearr-linux-arm64.tar.gz -C _publish themearr-${TAG}-linux-arm64
+          # Publish SHA-256 checksums so install.sh / deploy.sh can verify the
+          # tarball before extracting it (supply-chain integrity).
+          ( cd _dist && sha256sum themearr-linux-x64.tar.gz   > themearr-linux-x64.tar.gz.sha256 )
+          ( cd _dist && sha256sum themearr-linux-arm64.tar.gz > themearr-linux-arm64.tar.gz.sha256 )
 
       # ── Create GitHub release with binary assets ──────────────────────────────
       - name: Create release
@@ -121,4 +132,6 @@ jobs:
             Previous tag: `${{ steps.semver.outputs.latest_tag }}`
           files: |
             _dist/themearr-linux-x64.tar.gz
+            _dist/themearr-linux-x64.tar.gz.sha256
             _dist/themearr-linux-arm64.tar.gz
+            _dist/themearr-linux-arm64.tar.gz.sha256

@@ -1,18 +1,52 @@
 using System.Collections.Concurrent;
-using System.Security.Cryptography;
-using System.Text;
-using System.Text.Json;
 using Themearr.API.Data;
 
 namespace Themearr.API.Services;
 
-public class DownloadService(Database db, IHttpClientFactory httpClientFactory, ILogger<DownloadService> log)
+public class DownloadService(
+    IThemeAudioProvider provider, Database db, IHttpClientFactory httpClientFactory,
+    IConfiguration config, ILogger<DownloadService> log)
 {
-    private sealed record JobState(bool InProgress, bool Finished, string? Error);
+    private sealed record JobState(bool InProgress, bool Finished, string? Error, DateTime StartedAtUtc = default);
     private readonly ConcurrentDictionary<string, JobState>          _jobs    = new();
     private readonly ConcurrentDictionary<string, ConcurrentQueue<string>> _jobLogs = new();
 
     private const int MaxLogLines = 300;
+
+    // After a provider quota-exhaustion (HTTP 429) we pause downloads until this time
+    // so the auto-download loop stops hammering the API. Volatile single-writer state.
+    private volatile int _quotaCooldownUntilUnix;
+
+    private TimeSpan QuotaCooldown
+    {
+        get
+        {
+            var raw = Environment.GetEnvironmentVariable("THEMEARR_QUOTA_COOLDOWN_MINUTES")
+                      ?? config["Themearr:QuotaCooldownMinutes"];
+            return int.TryParse(raw, out var m) && m > 0 ? TimeSpan.FromMinutes(m) : TimeSpan.FromHours(1);
+        }
+    }
+
+    // Hard ceiling on a single download. A stalled CDN connection (silent TCP drop)
+    // can leave the response-stream read hanging forever; without this bound the job
+    // stays "in progress" and wedges the auto-download loop until a restart.
+    private TimeSpan DownloadTimeout
+    {
+        get
+        {
+            var raw = Environment.GetEnvironmentVariable("THEMEARR_DOWNLOAD_TIMEOUT_SECONDS")
+                      ?? config["Themearr:DownloadTimeoutSeconds"];
+            return int.TryParse(raw, out var s) && s > 0 ? TimeSpan.FromSeconds(s) : TimeSpan.FromMinutes(15);
+        }
+    }
+
+    // True while a quota cooldown is active; `untilUtc` is the (UTC) resume time.
+    public bool IsQuotaCoolingDown(out DateTime untilUtc)
+    {
+        var until = _quotaCooldownUntilUnix;
+        untilUtc = until == 0 ? DateTime.MinValue : DateTimeOffset.FromUnixTimeSeconds(until).UtcDateTime;
+        return DateTimeOffset.UtcNow.ToUnixTimeSeconds() < until;
+    }
 
     public bool Start(string movieId, string youtubeUrl)
     {
@@ -23,12 +57,48 @@ public class DownloadService(Database db, IHttpClientFactory httpClientFactory, 
         var logs = _jobLogs.GetOrAdd(movieId, _ => new ConcurrentQueue<string>());
         while (logs.TryDequeue(out _)) { }   // clear previous run's logs
 
-        _jobs[movieId] = new JobState(true, false, null);
+        _jobs[movieId] = new JobState(true, false, null, DateTime.UtcNow);
         _ = Task.Run(() => RunAsync(movieId, url));
         return true;
     }
 
-    public bool IsAnyInProgress() => _jobs.Values.Any(j => j.InProgress);
+    // Defense-in-depth beyond the per-job timeout: if a job somehow stays "in progress"
+    // past the timeout plus a grace margin (e.g. a backend that ignores cancellation),
+    // stop counting it as blocking so a single pathological download can't wedge the
+    // auto-download loop until a restart.
+    private TimeSpan WatchdogGrace
+    {
+        get
+        {
+            var raw = Environment.GetEnvironmentVariable("THEMEARR_DOWNLOAD_WATCHDOG_GRACE_SECONDS")
+                      ?? config["Themearr:DownloadWatchdogGraceSeconds"];
+            return int.TryParse(raw, out var s) && s > 0 ? TimeSpan.FromSeconds(s) : TimeSpan.FromSeconds(30);
+        }
+    }
+
+    public bool IsAnyInProgress()
+    {
+        var staleBefore = DateTime.UtcNow - (DownloadTimeout + WatchdogGrace);
+        return _jobs.Values.Any(j => j.InProgress && j.StartedAtUtc > staleBefore);
+    }
+
+    // Single gate for provider-bound downloads, shared by the manual/UI endpoints AND
+    // the auto-download loop so they behave identically: blocks when the provider is
+    // unconfigured or while a 429 quota cooldown is active (so a manual retry doesn't
+    // just burn another billed request). Direct (non-provider) URLs are never gated.
+    public string? DownloadBlockedReason(bool isProviderUrl)
+    {
+        if (!isProviderUrl) return null;
+        if (provider.CheckConfiguration() is { } notReady) return notReady;
+        if (IsQuotaCoolingDown(out var until))
+            return $"RapidAPI quota is exhausted — downloads are paused until {until:HH:mm} UTC. Try again later.";
+        return null;
+    }
+
+    // True if this URL would be handled by the theme-audio provider (a YouTube URL)
+    // rather than fetched directly. Used to decide whether a provider readiness
+    // check applies before starting a download.
+    public static bool IsProviderUrl(string url) => ExtractVideoId(url) != null;
 
     public object GetStatus(string movieId)
     {
@@ -67,119 +137,63 @@ public class DownloadService(Database db, IHttpClientFactory httpClientFactory, 
 
             string? themeTitle = null;
 
+            // Confine writes to the configured library roots so a malicious/compromised
+            // Plex server can't redirect a theme write to an arbitrary directory (e.g.
+            // /opt/themearr). Enforced only when roots are configured, to preserve
+            // behaviour on installs that rely solely on direct path resolution.
+            var roots = db.GetLibraryPaths();
+            if (roots.Count > 0 && !ThemeFiles.IsWithinRoots(folder, roots))
+                throw new UnauthorizedAccessException(
+                    $"Refusing to write outside the configured library roots: \"{folder}\".");
+
             var outputPath = Path.Combine(folder, "theme.mp3");
 
-            // Remove any existing theme files before writing
-            foreach (var f in Directory.EnumerateFiles(folder, "theme.*"))
-                File.Delete(f);
+            // Fail fast with an actionable message if the folder isn't writable — the
+            // common Proxmox/LXC case where the themearr service user lacks permission
+            // on a bind-mounted media folder. Without this the download fails opaquely
+            // for every movie and the auto-loop just silently cools each one down.
+            if (!ThemeFiles.IsDirectoryWritable(folder))
+                throw new UnauthorizedAccessException(
+                    $"Cannot write to \"{folder}\". The themearr service user needs write permission on " +
+                    "this movie folder — on Proxmox/LXC, add the themearr user to your media group.");
+
+            // Bound the whole download (incl. the response-stream read, which
+            // HttpClient.Timeout does NOT cover once streaming) so a stalled
+            // connection can't hang the job forever.
+            using var cts = new CancellationTokenSource(DownloadTimeout);
+            var token = cts.Token;
 
             if (videoId != null)
             {
-                // YouTube URL — use youtube-mp36 RapidAPI, poll until ready then download immediately
-                var apiKey   = db.GetSetting("rapidapi_key", "");
-                var username = db.GetSetting("rapidapi_username", "");
-                if (string.IsNullOrWhiteSpace(apiKey) || string.IsNullOrWhiteSpace(username))
-                    throw new InvalidOperationException("RapidAPI key and username are not configured. Please add them in Settings.");
-
-                var usernameMd5 = Convert.ToHexString(MD5.HashData(Encoding.UTF8.GetBytes(username))).ToLower();
-
-                AddLog(movieId, $"[themearr] Fetching download link for video {videoId}…");
-                log.LogInformation("Fetching RapidAPI download link for {MovieId}: {VideoId}", movieId, videoId);
-
-                var http = httpClientFactory.CreateClient();
-                http.Timeout = TimeSpan.FromMinutes(10);
-
-                var deadline = DateTime.UtcNow.AddMinutes(5);
-                var attempt = 0;
-                // Cap retries on CDN 4xx to avoid burning RapidAPI quota when a bad
-                // video (private/age-gated) returns links that 403 every time.
-                const int MaxCdnRetries = 3;
-                var cdnRetries = 0;
-
-                while (true)
-                {
-                    if (DateTime.UtcNow >= deadline)
-                        throw new InvalidOperationException("RapidAPI timed out waiting for processing to complete.");
-
-                    attempt++;
-                    using var req = new HttpRequestMessage(HttpMethod.Get, $"https://youtube-mp36.p.rapidapi.com/dl?id={videoId}");
-                    req.Headers.Add("X-RapidAPI-Key", apiKey);
-                    req.Headers.Add("X-RapidAPI-Host", "youtube-mp36.p.rapidapi.com");
-
-                    using var resp = await http.SendAsync(req);
-                    var body = await resp.Content.ReadAsStringAsync();
-
-                    if (!resp.IsSuccessStatusCode)
-                        throw new InvalidOperationException($"RapidAPI error ({(int)resp.StatusCode}): {body}");
-
-                    using var doc = JsonDocument.Parse(body);
-                    var root = doc.RootElement;
-
-                    var status = root.TryGetProperty("status", out var st) ? st.GetString() : null;
-
-                    if (status == "processing")
-                    {
-                        AddLog(movieId, $"[themearr] Processing… (attempt {attempt})");
-                        await Task.Delay(1000);
-                        continue;
-                    }
-
-                    if (status != "ok")
-                    {
-                        var msg = root.TryGetProperty("msg", out var m) ? m.GetString() : body;
-                        throw new InvalidOperationException($"RapidAPI error (status={status}): {msg}");
-                    }
-
-                    var link = root.TryGetProperty("link", out var lnk) ? lnk.GetString() : null;
-                    if (string.IsNullOrEmpty(link))
-                        throw new InvalidOperationException($"RapidAPI returned ok but missing link: {body}");
-
-                    themeTitle = root.TryGetProperty("title", out var t) ? t.GetString() : null;
-                    AddLog(movieId, "[themearr] Got download link. Downloading immediately…");
-
-                    // Download immediately while the link is fresh, with whitelist headers
-                    using var dlReq = new HttpRequestMessage(HttpMethod.Get, link);
-                    dlReq.Headers.TryAddWithoutValidation("User-Agent", $"Mozilla/5.0 {username}");
-                    dlReq.Headers.Add("X-RUN", usernameMd5);
-                    using var dlResp = await http.SendAsync(dlReq, HttpCompletionOption.ResponseHeadersRead);
-                    if (!dlResp.IsSuccessStatusCode)
-                    {
-                        cdnRetries++;
-                        if (cdnRetries > MaxCdnRetries)
-                            throw new InvalidOperationException($"CDN download kept failing after {MaxCdnRetries} retries (last status {(int)dlResp.StatusCode}). Giving up to preserve RapidAPI quota.");
-                        // Exponential backoff: 2s, 4s, 8s
-                        var backoff = TimeSpan.FromSeconds(Math.Pow(2, cdnRetries));
-                        AddLog(movieId, $"[themearr] Link 4xx ({(int)dlResp.StatusCode}), retry {cdnRetries}/{MaxCdnRetries} in {backoff.TotalSeconds:0}s…");
-                        await Task.Delay(backoff);
-                        continue;
-                    }
-
-                    await using var fileStream = File.Create(outputPath);
-                    await dlResp.Content.CopyToAsync(fileStream);
-                    await fileStream.FlushAsync();
-                    break;
-                }
+                // YouTube URL — delegate to the configured theme-audio provider.
+                themeTitle = await provider.DownloadAsync(videoId, outputPath, msg => AddLog(movieId, msg), token);
             }
             else
             {
                 // Non-YouTube URL — download directly
                 AddLog(movieId, "[themearr] Downloading from URL…");
 
-                var http = httpClientFactory.CreateClient();
-                http.Timeout = TimeSpan.FromMinutes(15);
-                using var dlResp = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
+                using var dlResp = await FetchFollowingSafeRedirectsAsync(url, token);
 
                 if (!dlResp.IsSuccessStatusCode)
                 {
-                    var errBody = await dlResp.Content.ReadAsStringAsync();
+                    var errBody = await dlResp.Content.ReadAsStringAsync(token);
                     var snippet = errBody.Length > 300 ? errBody[..300] : errBody;
                     throw new InvalidOperationException($"Download failed ({(int)dlResp.StatusCode}): {snippet}");
                 }
 
-                await using var fileStream = File.Create(outputPath);
-                await dlResp.Content.CopyToAsync(fileStream);
-                await fileStream.FlushAsync();
+                // Atomic: stream to theme.mp3.part then move into place, so a failed or
+                // empty download never clobbers a previously-good theme.
+                await ThemeFiles.WriteAtomicAsync(
+                    await dlResp.Content.ReadAsStreamAsync(token), outputPath, StreamLimits.MaxThemeBytes, token);
             }
+
+            // Remove stale alternate-extension theme files (e.g. an old theme.m4a) now
+            // that the new theme.mp3 is safely in place — never before the download.
+            foreach (var f in Directory.EnumerateFiles(folder, "theme.*"))
+                if (!string.Equals(f, outputPath, StringComparison.Ordinal)
+                    && Path.GetExtension(f) is not (".part" or ".ytdl"))
+                    try { File.Delete(f); } catch { /* best effort */ }
 
             AddLog(movieId, "[themearr] Download complete.");
 
@@ -189,10 +203,56 @@ public class DownloadService(Database db, IHttpClientFactory httpClientFactory, 
             db.AddThemeHistory(movieId, title, year, themeTitle, url);
             _jobs[movieId] = new JobState(false, true, null);
         }
+        catch (QuotaExceededException ex)
+        {
+            var until = DateTimeOffset.UtcNow.Add(QuotaCooldown);
+            _quotaCooldownUntilUnix = (int)until.ToUnixTimeSeconds();
+            log.LogWarning("RapidAPI quota exhausted — pausing downloads until {Until:o}. {Detail}",
+                until.UtcDateTime, ex.Message);
+            AddLog(movieId, $"[themearr] RapidAPI quota exhausted — pausing downloads until {until.UtcDateTime:HH:mm} UTC.");
+            _jobs[movieId] = new JobState(false, true, ex.Message);
+        }
+        catch (OperationCanceledException)
+        {
+            var msg = $"Download timed out after {DownloadTimeout.TotalSeconds:0}s and was aborted.";
+            log.LogWarning("Download for {MovieId} timed out after {Timeout}", movieId, DownloadTimeout);
+            AddLog(movieId, $"[themearr] {msg}");
+            _jobs[movieId] = new JobState(false, true, msg);
+        }
         catch (Exception ex)
         {
             log.LogError(ex, "Download failed for {MovieId}", movieId);
             _jobs[movieId] = new JobState(false, true, ex.Message);
+        }
+    }
+
+    // Fetches `url`, following redirects manually so EVERY hop is re-validated against
+    // the SSRF guard. A 3xx to an internal address (169.254.x, 10.x, …) is the classic
+    // bypass of an initial-host-only check; the download-url endpoint validates the
+    // first host, and this closes the redirect gap. Uses the "no-redirect" client.
+    private async Task<HttpResponseMessage> FetchFollowingSafeRedirectsAsync(string url, CancellationToken ct)
+    {
+        const int MaxRedirects = 5;
+        var http = httpClientFactory.CreateClient("no-redirect");
+        http.Timeout = Timeout.InfiniteTimeSpan; // the CTS bounds the whole operation
+
+        var current = new Uri(url);
+        for (var hop = 0; ; hop++)
+        {
+            var resp = await http.GetAsync(current, HttpCompletionOption.ResponseHeadersRead, ct);
+            if ((int)resp.StatusCode is >= 300 and < 400 && resp.Headers.Location is { } location)
+            {
+                resp.Dispose();
+                if (hop >= MaxRedirects)
+                    throw new InvalidOperationException("Too many redirects while downloading.");
+                var next = location.IsAbsoluteUri ? location : new Uri(current, location);
+                if (next.Scheme is not ("http" or "https") || HostGuard.IsPrivateOrLoopback(next.Host))
+                    throw new InvalidOperationException(
+                        "Refusing to follow a redirect to a private, loopback, or non-http(s) address.");
+                current = next;
+                continue;
+            }
+            return resp;
         }
     }
 

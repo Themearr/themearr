@@ -20,14 +20,8 @@ RUN dotnet publish -c Release -o /app/publish --no-restore
 # ── Stage 3: Runtime ──────────────────────────────────────────────────────────
 FROM mcr.microsoft.com/dotnet/aspnet:9.0 AS runtime
 
-# Install yt-dlp, ffmpeg
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg curl python3 \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN curl -sSL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp \
-    -o /usr/local/bin/yt-dlp \
-    && chmod +x /usr/local/bin/yt-dlp
+# No extra system packages: theme audio is fetched over HTTP from the
+# youtube-mp36 RapidAPI (see DownloadService), so yt-dlp/ffmpeg are not needed.
 
 WORKDIR /app
 

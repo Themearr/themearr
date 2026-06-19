@@ -200,7 +200,14 @@ public class UpdateService(Database db, IConfiguration config)
         // deploy.sh handles its own restart via systemd-run --no-block, so we
         // must NOT append "systemctl restart" here — that would kill this process
         // (exit 143) before the command is recorded as finished.
-        var deployUrl = "https://raw.githubusercontent.com/Themearr/themearr/main/deploy.sh";
+        //
+        // Pin the bootstrap script to the installed release tag (an immutable ref)
+        // instead of the mutable `main` HEAD, so a push to main can't change what
+        // gets piped into a root shell. Falls back to `main` only for dev builds with
+        // no tagged VERSION.
+        var deployRef = NormaliseSemver(CurrentVersion());
+        if (!Regex.IsMatch(deployRef, @"^v\d+\.\d+\.\d+$")) deployRef = "main";
+        var deployUrl = $"https://raw.githubusercontent.com/{GithubRepo}/{deployRef}/deploy.sh";
         return IsRoot()
             ? $"curl -fsSL {deployUrl} | bash"
             : $"curl -fsSL {deployUrl} | sudo bash";
