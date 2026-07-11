@@ -12,6 +12,7 @@ on:
       - 'LICENSE'
       - '**/obj/**'
       - '**/bin/**'
+      - '.serena/**'
   workflow_dispatch:
 
 permissions:
