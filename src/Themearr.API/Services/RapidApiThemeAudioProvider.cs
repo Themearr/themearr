@@ -44,7 +44,7 @@ public class RapidApiThemeAudioProvider(
         var usernameMd5 = Convert.ToHexString(MD5.HashData(Encoding.UTF8.GetBytes(username))).ToLower();
 
         progress($"[themearr] Fetching download link for video {videoId}…");
-        log.LogInformation("Fetching RapidAPI download link for {VideoId}", videoId);
+        log.LogInformation("Fetching RapidAPI download link for {VideoId}", LogSanitizer.Clean(videoId));
 
         var http = httpClientFactory.CreateClient();
         http.Timeout = TimeSpan.FromMinutes(10);

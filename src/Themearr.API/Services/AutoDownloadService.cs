@@ -157,7 +157,7 @@ public class AutoDownloadService(
         }
         catch (Exception ex)
         {
-            log.LogWarning(ex, "AutoDownload: YouTube search failed for {Title}", title);
+            log.LogWarning(ex, "AutoDownload: YouTube search failed for {Title}", LogSanitizer.Clean(title));
             _cooldownUntil[movieId] = DateTime.UtcNow + ErrorCooldown;
             _lastTickResult = $"search failed for '{title}': {ex.Message}";
             return;
@@ -167,7 +167,7 @@ public class AutoDownloadService(
         if (best == null)
         {
             log.LogInformation("AutoDownload: no confident match for '{Title}' — backing off {Hrs}h",
-                title, NoMatchCooldown.TotalHours);
+                LogSanitizer.Clean(title), NoMatchCooldown.TotalHours);
             _cooldownUntil[movieId] = DateTime.UtcNow + NoMatchCooldown;
             _lastTickResult = $"no confident match for '{title}'; cooldown {NoMatchCooldown.TotalHours}h";
             return;
@@ -176,7 +176,7 @@ public class AutoDownloadService(
         var videoId = best["videoId"]?.ToString() ?? "";
         var url = $"https://www.youtube.com/watch?v={videoId}";
 
-        log.LogInformation("AutoDownload: starting '{Title}' ({Year}) → {VideoId}", title, year, videoId);
+        log.LogInformation("AutoDownload: starting '{Title}' ({Year}) → {VideoId}", LogSanitizer.Clean(title), year, LogSanitizer.Clean(videoId));
         if (!download.Start(movieId, url))
         {
             // Raced with another starter — try again next tick.

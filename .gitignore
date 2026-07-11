@@ -11,6 +11,9 @@ src/Themearr.Web/.next/
 src/Themearr.Web/out/
 src/Themearr.Web/next-env.d.ts
 
+# TypeScript incremental build cache
+*.tsbuildinfo
+
 # Data / secrets
 *.db
 *.db-shm
