@@ -55,7 +55,7 @@ public class PosterController(
         }
         catch (Exception ex)
         {
-            log.LogDebug(ex, "Poster fetch failed for {Id}", id);
+            log.LogDebug(ex, "Poster fetch failed for {Id}", LogSanitizer.Clean(id));
             return NotFound();
         }
     }

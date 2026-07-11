@@ -153,7 +153,7 @@ public class MoviesController(
 
         if (download.DownloadBlockedReason(isProviderUrl: true) is { } notReady)
         {
-            log.LogWarning("Auto-download for {MovieId} blocked: {Reason}", movieId, notReady);
+            log.LogWarning("Auto-download for {MovieId} blocked: {Reason}", LogSanitizer.Clean(movieId), notReady);
             return UnprocessableEntity(new { detail = notReady });
         }
 
@@ -173,7 +173,7 @@ public class MoviesController(
 
         if (download.DownloadBlockedReason(isProviderUrl: true) is { } notReady)
         {
-            log.LogWarning("Download for {MovieId} blocked: {Reason}", req.MovieId, notReady);
+            log.LogWarning("Download for {MovieId} blocked: {Reason}", LogSanitizer.Clean(req.MovieId), notReady);
             return UnprocessableEntity(new { detail = notReady });
         }
 
@@ -203,7 +203,7 @@ public class MoviesController(
         // (config + quota cooldown). Direct URLs are not gated.
         if (download.DownloadBlockedReason(DownloadService.IsProviderUrl(req.Url)) is { } notReady)
         {
-            log.LogWarning("Download-url for {MovieId} blocked: {Reason}", req.MovieId, notReady);
+            log.LogWarning("Download-url for {MovieId} blocked: {Reason}", LogSanitizer.Clean(req.MovieId), notReady);
             return UnprocessableEntity(new { detail = notReady });
         }
 

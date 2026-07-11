@@ -215,13 +215,13 @@ public class DownloadService(
         catch (OperationCanceledException)
         {
             var msg = $"Download timed out after {DownloadTimeout.TotalSeconds:0}s and was aborted.";
-            log.LogWarning("Download for {MovieId} timed out after {Timeout}", movieId, DownloadTimeout);
+            log.LogWarning("Download for {MovieId} timed out after {Timeout}", LogSanitizer.Clean(movieId), DownloadTimeout);
             AddLog(movieId, $"[themearr] {msg}");
             _jobs[movieId] = new JobState(false, true, msg);
         }
         catch (Exception ex)
         {
-            log.LogError(ex, "Download failed for {MovieId}", movieId);
+            log.LogError(ex, "Download failed for {MovieId}", LogSanitizer.Clean(movieId));
             _jobs[movieId] = new JobState(false, true, ex.Message);
         }
     }
