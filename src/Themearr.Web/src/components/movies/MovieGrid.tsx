@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { Movie } from '@/lib/types'
 import { moviesApi } from '@/lib/api'
 import { Button, EmptyState, Spinner } from '@/components/ui'
@@ -33,6 +33,31 @@ export function MovieGrid({ movies, onMovieUpdated }: MovieGridProps) {
     }
     return true
   })
+
+  // Render the grid in windows so a large library (1000s of movies) never mounts
+  // every card at once — that DOM/layout cost, not the data, is what made these
+  // pages slow. Grow the window as a bottom sentinel scrolls into view.
+  const BATCH = 120
+  const [limit, setLimit] = useState(BATCH)
+  const sentinelRef = useRef<HTMLDivElement | null>(null)
+
+  // Reset paging whenever the filtered set changes.
+  useEffect(() => { setLimit(BATCH) }, [filter, search])
+
+  const shown   = visible.slice(0, limit)
+  const hasMore = limit < visible.length
+
+  useEffect(() => {
+    if (!hasMore) return
+    const el = sentinelRef.current
+    if (!el) return
+    const io = new IntersectionObserver(
+      entries => { if (entries[0].isIntersecting) setLimit(l => l + BATCH) },
+      { rootMargin: '800px' },   // preload before the user reaches the bottom
+    )
+    io.observe(el)
+    return () => io.disconnect()
+  }, [hasMore, visible.length])
 
   return (
     <>
@@ -84,15 +109,22 @@ export function MovieGrid({ movies, onMovieUpdated }: MovieGridProps) {
           description={search ? 'Try a different search term' : 'Sync your Plex library to get started'}
         />
       ) : (
-        <div className="grid grid-cols-3 gap-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-8 2xl:grid-cols-10">
-          {visible.map(movie => (
-            <MovieCard
-              key={movie.id}
-              movie={movie}
-              onClick={() => setSelected(movie)}
-            />
-          ))}
-        </div>
+        <>
+          <div className="grid grid-cols-3 gap-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-8 2xl:grid-cols-10">
+            {shown.map(movie => (
+              <MovieCard
+                key={movie.id}
+                movie={movie}
+                onClick={() => setSelected(movie)}
+              />
+            ))}
+          </div>
+          {hasMore && (
+            <div ref={sentinelRef} className="flex justify-center py-8 text-xs text-[#475467]">
+              Loading more… ({shown.length} of {visible.length})
+            </div>
+          )}
+        </>
       )}
 
       {selected && (
