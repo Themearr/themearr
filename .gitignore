@@ -1,6 +1,6 @@
-# .NET
-src/Themearr.API/bin/
-src/Themearr.API/obj/
+# .NET (all projects, incl. tests)
+**/bin/
+**/obj/
 *.user
 *.suo
 .vs/
@@ -9,6 +9,7 @@ src/Themearr.API/obj/
 src/Themearr.Web/node_modules/
 src/Themearr.Web/.next/
 src/Themearr.Web/out/
+src/Themearr.Web/next-env.d.ts
 
 # Data / secrets
 *.db

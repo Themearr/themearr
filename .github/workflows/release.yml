@@ -4,6 +4,14 @@ on:
   push:
     branches:
       - main
+    # Don't cut a release for changes that don't affect the shipped app.
+    paths-ignore:
+      - '**.md'
+      - '.gitignore'
+      - '.github/**'
+      - 'LICENSE'
+      - '**/obj/**'
+      - '**/bin/**'
   workflow_dispatch:
 
 permissions:
@@ -121,7 +129,7 @@ jobs:
 
       # ── Create GitHub release with binary assets ──────────────────────────────
       - name: Create release
-        uses: softprops/action-gh-release@v2.3.2
+        uses: softprops/action-gh-release@72f2c25fcb47643c292f7107632f7a47c1df5cd8 # v2.3.2
         with:
           tag_name: ${{ steps.semver.outputs.next_tag }}
           target_commitish: ${{ github.sha }}
