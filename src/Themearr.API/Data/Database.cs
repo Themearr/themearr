@@ -117,16 +117,18 @@ public class Database(string dbPath)
             """);
         if (new[] { "id", "title", "year", "folderName", "status" }.All(c => columns.Contains(c)))
         {
-            using var r2 = conn.Query("SELECT id, title, year, folderName, status FROM movies_legacy");
-            while (r2.Read())
+            conn.Query("SELECT id, title, year, folderName, status FROM movies_legacy", r2 =>
             {
-                var legacyId = r2.GetString(0);
-                conn.Execute(
-                    "INSERT INTO movies (id, plex_server_id, plex_rating_key, title, year, sourcePath, folderName, status) VALUES (@id, 'legacy', @rk, @t, @y, '', @f, @s)",
-                    ("@id", $"legacy:{legacyId}"), ("@rk", legacyId),
-                    ("@t", r2.GetString(1)), ("@y", r2.IsDBNull(2) ? null : r2.GetInt32(2)),
-                    ("@f", r2.GetString(3)), ("@s", r2.GetString(4)));
-            }
+                while (r2.Read())
+                {
+                    var legacyId = r2.GetString(0);
+                    conn.Execute(
+                        "INSERT INTO movies (id, plex_server_id, plex_rating_key, title, year, sourcePath, folderName, status) VALUES (@id, 'legacy', @rk, @t, @y, '', @f, @s)",
+                        ("@id", $"legacy:{legacyId}"), ("@rk", legacyId),
+                        ("@t", r2.GetString(1)), ("@y", r2.IsDBNull(2) ? null : r2.GetInt32(2)),
+                        ("@f", r2.GetString(3)), ("@s", r2.GetString(4)));
+                }
+            });
         }
         conn.Execute("DROP TABLE movies_legacy");
     }
@@ -136,8 +138,10 @@ public class Database(string dbPath)
     public string GetSetting(string key, string @default = "")
     {
         using var conn = Open();
-        using var r = conn.Query("SELECT value FROM settings WHERE key = @k", ("@k", key));
-        return r.Read() ? r.GetString(0) : @default;
+        var result = @default;
+        conn.Query("SELECT value FROM settings WHERE key = @k",
+            r => { if (r.Read()) result = r.GetString(0); }, ("@k", key));
+        return result;
     }
 
     public void SetSetting(string key, string value)
@@ -288,23 +292,26 @@ public class Database(string dbPath)
     public List<Dictionary<string, object?>> GetAllMovies()
     {
         using var conn = Open();
-        using var r = conn.Query("SELECT id, plex_server_id, plex_rating_key, title, year, sourcePath, folderName, status, ignored FROM movies ORDER BY status, title");
         var result = new List<Dictionary<string, object?>>();
-        while (r.Read())
+        conn.Query("SELECT id, plex_server_id, plex_rating_key, title, year, sourcePath, folderName, status, ignored FROM movies ORDER BY status, title", r =>
         {
-            var row = ReadMovieRow(r);
-            if (row != null) result.Add(row);
-        }
+            while (r.Read())
+            {
+                var row = ReadMovieRow(r);
+                if (row != null) result.Add(row);
+            }
+        });
         return result;
     }
 
     public Dictionary<string, object?>? GetMovie(string id)
     {
         using var conn = Open();
-        using var r = conn.Query(
+        Dictionary<string, object?>? result = null;
+        conn.Query(
             "SELECT id, plex_server_id, plex_rating_key, title, year, sourcePath, folderName, status, ignored FROM movies WHERE id = @id",
-            ("@id", id));
-        return r.Read() ? ReadMovieRow(r) : null;
+            r => { if (r.Read()) result = ReadMovieRow(r); }, ("@id", id));
+        return result;
     }
 
     public void SetMovieStatus(string id, string status)
@@ -335,35 +342,36 @@ public class Database(string dbPath)
         // Total = entire Plex library (all rows, including ignored and movies whose
         // folders aren't yet mapped), so coverage reflects the full library, not just
         // the subset the app has processed.
-        int total;
-        using (var r = conn.Query("SELECT COUNT(*) FROM movies"))
-            total = r.Read() ? (int)r.GetInt64(0) : 0;
+        var total = 0;
+        conn.Query("SELECT COUNT(*) FROM movies",
+            r => { if (r.Read()) total = (int)r.GetInt64(0); });
 
         var coverage = total > 0 ? Math.Round(downloaded * 100.0 / total, 1) : 0.0;
 
         // Themes added in the last 7 days
         int addedThisWeek = 0;
         var weekAgo = DateTime.UtcNow.AddDays(-7).ToString("o");
-        using (var r = conn.Query("SELECT COUNT(*) FROM theme_history WHERE downloaded_at >= @w", ("@w", weekAgo)))
-            if (r.Read()) addedThisWeek = (int)r.GetInt64(0);
+        conn.Query("SELECT COUNT(*) FROM theme_history WHERE downloaded_at >= @w",
+            r => { if (r.Read()) addedThisWeek = (int)r.GetInt64(0); }, ("@w", weekAgo));
 
         // Last 5 downloaded themes
         var recentActivity = new List<Dictionary<string, object?>>();
-        using (var r = conn.Query(
-            "SELECT id, movie_id, movie_title, movie_year, theme_title, source_url, downloaded_at FROM theme_history ORDER BY id DESC LIMIT 5"))
-        {
-            while (r.Read())
-                recentActivity.Add(new Dictionary<string, object?>
-                {
-                    ["id"]           = r.GetInt64(0),
-                    ["movieId"]      = r.GetString(1),
-                    ["movieTitle"]   = r.GetString(2),
-                    ["movieYear"]    = r.IsDBNull(3) ? null : r.GetInt32(3),
-                    ["themeTitle"]   = r.IsDBNull(4) ? null : r.GetString(4),
-                    ["sourceUrl"]    = r.IsDBNull(5) ? null : r.GetString(5),
-                    ["downloadedAt"] = r.GetString(6),
-                });
-        }
+        conn.Query(
+            "SELECT id, movie_id, movie_title, movie_year, theme_title, source_url, downloaded_at FROM theme_history ORDER BY id DESC LIMIT 5",
+            r =>
+            {
+                while (r.Read())
+                    recentActivity.Add(new Dictionary<string, object?>
+                    {
+                        ["id"]           = r.GetInt64(0),
+                        ["movieId"]      = r.GetString(1),
+                        ["movieTitle"]   = r.GetString(2),
+                        ["movieYear"]    = r.IsDBNull(3) ? null : r.GetInt32(3),
+                        ["themeTitle"]   = r.IsDBNull(4) ? null : r.GetString(4),
+                        ["sourceUrl"]    = r.IsDBNull(5) ? null : r.GetString(5),
+                        ["downloadedAt"] = r.GetString(6),
+                    });
+            });
 
         // Last 5 recently-synced movies that are still pending (filesystem-verified).
         // Pull extra candidates from DB ordered by syncedAt, then cross-reference with
@@ -374,12 +382,12 @@ public class Database(string dbPath)
             .ToHashSet();
 
         var recentlyAdded = new List<Dictionary<string, object?>>();
-        using (var r = conn.Query("""
+        conn.Query("""
             SELECT id, plex_server_id, plex_rating_key, title, year, synced_at
             FROM movies
             WHERE ignored = 0 AND status = 'pending' AND synced_at IS NOT NULL
             ORDER BY synced_at DESC LIMIT 20
-            """))
+            """, r =>
         {
             while (r.Read() && recentlyAdded.Count < 5)
             {
@@ -395,7 +403,7 @@ public class Database(string dbPath)
                     ["syncedAt"]      = r.IsDBNull(5) ? null : r.GetString(5),
                 });
             }
-        }
+        });
 
         return new StatsResult(total, downloaded, pending, ignored, coverage, addedThisWeek, recentActivity, recentlyAdded);
     }
@@ -417,21 +425,23 @@ public class Database(string dbPath)
     public List<Dictionary<string, object?>> GetThemeHistory(int limit = 200)
     {
         using var conn = Open();
-        using var r = conn.Query(
-            "SELECT id, movie_id, movie_title, movie_year, theme_title, source_url, downloaded_at FROM theme_history ORDER BY id DESC LIMIT @lim",
-            ("@lim", limit));
         var result = new List<Dictionary<string, object?>>();
-        while (r.Read())
-            result.Add(new Dictionary<string, object?>
+        conn.Query(
+            "SELECT id, movie_id, movie_title, movie_year, theme_title, source_url, downloaded_at FROM theme_history ORDER BY id DESC LIMIT @lim",
+            r =>
             {
-                ["id"]           = r.GetInt64(0),
-                ["movieId"]      = r.GetString(1),
-                ["movieTitle"]   = r.GetString(2),
-                ["movieYear"]    = r.IsDBNull(3) ? null : r.GetInt32(3),
-                ["themeTitle"]   = r.IsDBNull(4) ? null : r.GetString(4),
-                ["sourceUrl"]    = r.IsDBNull(5) ? null : r.GetString(5),
-                ["downloadedAt"] = r.GetString(6),
-            });
+                while (r.Read())
+                    result.Add(new Dictionary<string, object?>
+                    {
+                        ["id"]           = r.GetInt64(0),
+                        ["movieId"]      = r.GetString(1),
+                        ["movieTitle"]   = r.GetString(2),
+                        ["movieYear"]    = r.IsDBNull(3) ? null : r.GetInt32(3),
+                        ["themeTitle"]   = r.IsDBNull(4) ? null : r.GetString(4),
+                        ["sourceUrl"]    = r.IsDBNull(5) ? null : r.GetString(5),
+                        ["downloadedAt"] = r.GetString(6),
+                    });
+            }, ("@lim", limit));
         return result;
     }
 
@@ -482,13 +492,18 @@ file static class SqliteExtensions
         cmd.ExecuteNonQuery();
     }
 
-    public static SqliteDataReader Query(this SqliteConnection conn, string sql, params (string name, object? value)[] parameters)
+    // Callback form: the command and reader are disposed here, so no SqliteCommand
+    // is leaked to the caller (the reader can't outlive its command anyway).
+    public static void Query(
+        this SqliteConnection conn, string sql, Action<SqliteDataReader> read,
+        params (string name, object? value)[] parameters)
     {
-        var cmd = conn.CreateCommand();
+        using var cmd = conn.CreateCommand();
         cmd.CommandText = sql; // nosemgrep: csharp-sqli — literal SQL only; all values bound via SqliteParameter
         foreach (var (name, value) in parameters)
             cmd.Parameters.AddWithValue(name, value ?? DBNull.Value);
-        return cmd.ExecuteReader();
+        using var r = cmd.ExecuteReader();
+        read(r);
     }
 }
 
