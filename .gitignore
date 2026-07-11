@@ -20,7 +20,7 @@ src/Themearr.Web/next-env.d.ts
 *.db-wal
 .env
 .env.local
-data/
+/data/          # root-level runtime data dir only — must NOT match src/Themearr.API/Data/
 
 # Build outputs
 _publish/
