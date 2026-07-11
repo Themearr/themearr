@@ -14,8 +14,14 @@ public class PosterController(
     // never placed in a client-visible URL. This route is exempt from bearer auth (an
     // <img> can't send an Authorization header) and instead self-authenticates via the
     // signed, expiring query string produced by PosterUrlSigner.
+    // Poster grid thumbnails: clamp to a small width so we never proxy multi-MB
+    // full-resolution artwork for a tiny card. 300px covers retina grid cells.
+    private const int DefaultWidth = 300;
+    private const int MaxWidth = 600;
+
     [HttpGet("poster")]
-    public async Task<IActionResult> Get([FromQuery] string id, [FromQuery] long exp, [FromQuery] string sig)
+    public async Task<IActionResult> Get(
+        [FromQuery] string id, [FromQuery] long exp, [FromQuery] string sig, [FromQuery] int? w = null)
     {
         if (string.IsNullOrEmpty(id) || !signer.Verify(id, exp, sig, DateTimeOffset.UtcNow))
             return Unauthorized();
@@ -29,7 +35,9 @@ public class PosterController(
         if (!db.GetPlexServersDict().TryGetValue(serverId, out var srv))
             return NotFound();
 
-        var thumbUrl = $"{srv.Url}/library/metadata/{ratingKey}/thumb?X-Plex-Token={srv.Token}";
+        var width = Math.Clamp(w ?? DefaultWidth, 40, MaxWidth);
+        var height = (int)Math.Round(width * 1.5);   // 2:3 poster aspect
+        var thumbUrl = PlexImageUrl.Transcode(srv.Url, ratingKey, srv.Token, width, height);
         try
         {
             var http = httpFactory.CreateClient();
