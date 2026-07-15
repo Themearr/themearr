@@ -262,7 +262,7 @@ public class PlexService(HttpClient http, Database db)
                     var year = int.TryParse(yearStr, out var y) ? y : (int?)null;
 
                     var (folder, mode) = ResolveLocalFolder(filePath);
-                    if (string.IsNullOrEmpty(folder)) { logFn?.Invoke($"Skipping {title} — unresolved path"); continue; }
+                    if (string.IsNullOrEmpty(folder)) { logFn?.Invoke($"Skipping {title} — unresolved path: {filePath}  (add a Path Mapping from this path's folder to where it's mounted in Themearr)"); continue; }
 
                     logFn?.Invoke($"Matched: {title} ({year}) -> {folder} [{mode}]");
                     result.Add(new MovieRecord(movieId, serverId, ratingKey, title, year, filePath, folder));
@@ -309,7 +309,9 @@ public class PlexService(HttpClient http, Database db)
 
     private (string folder, string mode) ResolveLocalFolder(string sourceFilePath)
     {
-        var parent = Path.GetDirectoryName(sourceFilePath)?.TrimEnd('/') ?? "";
+        // Normalize '\' → '/' so a Windows Plex server's paths resolve when Themearr
+        // runs in a Linux container (otherwise the parent dir comes back empty).
+        var parent = PlexPath.ParentDir(sourceFilePath);
         if (!string.IsNullOrEmpty(parent) && Directory.Exists(parent))
             return (parent, "direct");
 
@@ -325,15 +327,14 @@ public class PlexService(HttpClient http, Database db)
 
     private string ApplyPathMappings(string sourceFilePath)
     {
-        var sourceParent = (Path.GetDirectoryName(sourceFilePath) ?? "").TrimEnd('/');
+        var sourceParent = PlexPath.ParentDir(sourceFilePath);
         foreach (var mapping in db.GetPathMappings())
         {
-            var src = mapping.GetValueOrDefault("source", "").TrimEnd('/');
-            var tgt = mapping.GetValueOrDefault("target", "").TrimEnd('/');
-            if (string.IsNullOrEmpty(src) || string.IsNullOrEmpty(tgt)) continue;
-            if (sourceParent == src) return tgt;
-            if (sourceParent.StartsWith(src + "/"))
-                return tgt + sourceParent[src.Length..];
+            var mapped = PlexPath.ApplyMapping(
+                sourceParent,
+                mapping.GetValueOrDefault("source", ""),
+                mapping.GetValueOrDefault("target", ""));
+            if (!string.IsNullOrEmpty(mapped)) return mapped;
         }
         return "";
     }
@@ -343,8 +344,7 @@ public class PlexService(HttpClient http, Database db)
         var roots = db.GetLibraryPaths().Where(Directory.Exists).ToList();
         if (roots.Count == 0) return "";
 
-        var sourceParts = (Path.GetDirectoryName(sourceFilePath) ?? "")
-            .TrimEnd('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var sourceParts = PlexPath.Segments(PlexPath.ParentDir(sourceFilePath));
         if (sourceParts.Length == 0) return "";
 
         var maxSuffix = Math.Min(6, sourceParts.Length);
