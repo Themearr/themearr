@@ -15,7 +15,7 @@
 - **No health check may consume RapidAPI quota.** youtube-mp36 has no free quota endpoint, so probing it spends a real request. `RapidApiCheck` is passive: it reads `IThemeAudioProvider.CheckConfiguration()` and `DownloadService.IsQuotaCoolingDown()` only.
 - **Never surface raw exception text from a check.** Plex requests carry `X-Plex-Token` and exception messages can echo request URLs. Every check returns a hand-written message; anything logged goes through `LogSanitizer.Clean()`.
 - **No false alarms.** When `Database.IsSetupComplete()` is false, `LibraryPathsCheck`, `PlexReachableCheck` and `RapidApiCheck` return `Healthy`. When the `auto_download` setting is not `"true"`, `DownloadWorkerCheck` returns `Healthy`.
-- **Additive only.** No existing service is restructured. `ApiAuthMiddleware` is not modified — it guards only `/api/*`, and `/health` sits outside that prefix.
+- **Additive in scope — no opportunistic refactoring.** Three existing files change, each because the feature requires it: `AutoSyncService`'s wait loop is restructured to race the sleep against a trigger (Task 2), `PlexService` gains unresolved-path counters (Task 3), and `AutoDownloadService`/`DownloadService` each gain a narrow interface declaration (Tasks 6–7). Nothing else may be reorganised, renamed, or "cleaned up". `ApiAuthMiddleware` is not modified — it guards only `/api/*`, and `/health` sits outside that prefix.
 - Target framework is `net10.0` for both projects. C# nullable reference types are enabled; use primary constructors, matching surrounding style.
 - Run backend tests with `dotnet test` from the repository root.
 
