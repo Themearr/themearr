@@ -9,7 +9,7 @@ namespace Themearr.API.Controllers;
 public class SystemController(HealthCache health, TaskRegistry tasks) : ControllerBase
 {
     [HttpGet("health")]
-    public Task<HealthResponse> Health(CancellationToken ct) => health.GetAsync(ct);
+    public async Task<HealthResponse> Health(CancellationToken ct) => (await health.GetAsync(ct)).Response;
 
     [HttpGet("tasks")]
     public IReadOnlyList<TaskState> Tasks() => tasks.Snapshot();

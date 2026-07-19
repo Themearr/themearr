@@ -148,14 +148,12 @@ app.UseStaticFiles(new StaticFileOptions
 // Unauthenticated monitoring endpoint for Uptime Kuma / Gatus. Deliberately
 // detail-free: a single status word, no check names, no messages, no version.
 // ApiAuthMiddleware guards only /api/*, so this needs no allowlist entry.
-app.MapHealthChecks("/health", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
-{
-    ResponseWriter = async (ctx, report) =>
-    {
-        ctx.Response.ContentType = "application/json";
-        await ctx.Response.WriteAsJsonAsync(new { status = report.Status.ToString() });
-    }
-});
+//
+// It MUST go through HealthCache rather than MapHealthChecks: the built-in
+// middleware re-runs every check on each request, which would let an anonymous
+// caller drive unbounded outbound probes of the user's Plex server.
+app.MapGet("/health", async (Themearr.API.Services.Health.HealthCache cache, CancellationToken ct) =>
+    Results.Json(new { status = (await cache.GetAsync(ct)).Status.ToString() }));
 
 app.MapControllers();
 
