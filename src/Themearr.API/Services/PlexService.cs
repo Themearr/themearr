@@ -221,6 +221,12 @@ public class PlexService(HttpClient http, Database db)
         var result    = new List<MovieRecord>();
         var seen      = new HashSet<string>();
 
+        // Movies skipped because no local folder could be resolved. Recorded into
+        // settings at the end so LibraryPathsCheck can warn about a broken Path
+        // Mapping — these movies never enter the DB, so they cannot be counted later.
+        var unresolvedCount  = 0;
+        var unresolvedSample = "";
+
         foreach (var srv in servers)
         {
             var serverId  = srv.GetValueOrDefault("id", "")?.ToString()?.Trim() ?? "";
@@ -262,13 +268,25 @@ public class PlexService(HttpClient http, Database db)
                     var year = int.TryParse(yearStr, out var y) ? y : (int?)null;
 
                     var (folder, mode) = ResolveLocalFolder(filePath);
-                    if (string.IsNullOrEmpty(folder)) { logFn?.Invoke($"Skipping {title} — unresolved path: {filePath}  (add a Path Mapping from this path's folder to where it's mounted in Themearr)"); continue; }
+                    if (string.IsNullOrEmpty(folder))
+                    {
+                        unresolvedCount++;
+                        if (unresolvedSample.Length == 0) unresolvedSample = filePath;
+                        logFn?.Invoke($"Skipping {title} — unresolved path: {filePath}  (add a Path Mapping from this path's folder to where it's mounted in Themearr)");
+                        continue;
+                    }
 
                     logFn?.Invoke($"Matched: {title} ({year}) -> {folder} [{mode}]");
                     result.Add(new MovieRecord(movieId, serverId, ratingKey, title, year, filePath, folder));
                 }
             }
         }
+
+        // Overwritten every sync, so fixing a mapping clears the health warning
+        // on the next run.
+        db.SetSetting("last_sync_unresolved_count",  unresolvedCount.ToString());
+        db.SetSetting("last_sync_unresolved_sample", unresolvedSample);
+
         return result;
     }
 
