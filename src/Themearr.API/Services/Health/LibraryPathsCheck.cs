@@ -19,7 +19,8 @@ public sealed class LibraryPathsCheck(Database db) : IHealthCheck
         var paths = db.GetLibraryPaths();
         if (paths.Count == 0)
             return Task.FromResult(HealthCheckResult.Unhealthy(
-                "No library paths are configured — Themearr has nowhere to write theme.mp3."));
+                "No library paths are configured — Themearr has nowhere to write theme.mp3. " +
+                "Add one under Settings → Local Library Paths."));
 
         foreach (var path in paths)
         {
