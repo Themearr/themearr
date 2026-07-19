@@ -53,16 +53,25 @@ public class PassiveHealthCheckTests
         Assert.Equal(HealthStatus.Healthy, (await Run(check)).Status);
     }
 
+    // Mirrors RapidApiThemeAudioProvider.CheckConfiguration()'s actual wording (missing
+    // key only) rather than an invented short string — a FakeProvider returning
+    // something unlike the real message let a doubled "Theme downloads are
+    // disabled: Theme downloads are disabled: …" prefix slip past four reviews.
+    private const string RealUnconfiguredMessage =
+        "Theme downloads are disabled: RapidAPI key is not set. " +
+        "Add your youtube-mp36 credentials under Settings → RapidAPI.";
+
     [Fact]
     public async Task RapidApi_without_a_key_is_an_error_carrying_the_reason()
     {
         using var dir = new TempDir();
-        var check = new RapidApiCheck(NewDb(dir, setupComplete: true), new FakeProvider("RapidAPI key is not set"), new FakeQuota(null));
+        var check = new RapidApiCheck(NewDb(dir, setupComplete: true), new FakeProvider(RealUnconfiguredMessage), new FakeQuota(null));
 
         var result = await Run(check);
 
         Assert.Equal(HealthStatus.Unhealthy, result.Status);
-        Assert.Contains("RapidAPI key is not set", result.Description);
+        // Exact match (not Contains) so a re-introduced double prefix fails this test.
+        Assert.Equal(RealUnconfiguredMessage, result.Description);
     }
 
     [Fact]

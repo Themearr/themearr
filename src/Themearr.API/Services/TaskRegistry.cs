@@ -34,8 +34,16 @@ public sealed class TaskRegistry
 
     private sealed class Entry
     {
-        public required string   Name     { get; init; }
-        public required TimeSpan Interval { get; init; }
+        public required string     Name       { get; init; }
+        public required TimeSpan   Interval   { get; init; }
+
+        // Optional probe supplied at Register() time, e.g. backed by SyncService.InProgress.
+        // When present it is the source of truth for IsRunning: it reflects reality even
+        // for a fire-and-forget worker where MarkRunning(true) would otherwise be cleared
+        // by RecordRun microseconds later. MarkRunning still updates State.IsRunning for
+        // tasks registered without a probe, so callers with no probe keep working exactly
+        // as before.
+        public Func<bool>? IsRunningProbe { get; init; }
 
         private RunState _state = RunState.Initial;
 
@@ -57,8 +65,15 @@ public sealed class TaskRegistry
 
     private readonly ConcurrentDictionary<string, Entry> _tasks = new();
 
-    public void Register(string id, string name, TimeSpan interval) =>
-        _tasks[id] = new Entry { Name = name, Interval = interval };
+    /// <summary>
+    /// Registers a task. <paramref name="isRunning"/> is an optional probe (e.g.
+    /// <c>() => syncService.InProgress</c>) that, when supplied, is the source of truth
+    /// for <see cref="TaskState.IsRunning"/> instead of the value <see cref="MarkRunning"/>
+    /// sets — needed for workers that start their real work fire-and-forget, where
+    /// MarkRunning(true) would otherwise be overwritten by RecordRun microseconds later.
+    /// </summary>
+    public void Register(string id, string name, TimeSpan interval, Func<bool>? isRunning = null) =>
+        _tasks[id] = new Entry { Name = name, Interval = interval, IsRunningProbe = isRunning };
 
     public bool Exists(string id) => _tasks.ContainsKey(id);
 
@@ -93,6 +108,10 @@ public sealed class TaskRegistry
             .Select(kv =>
             {
                 var state = kv.Value.State;
+                // Prefer the probe when one is supplied — it reflects the worker's actual
+                // in-progress flag, unlike State.IsRunning which a fire-and-forget worker's
+                // RecordRun can clear before anyone observes it.
+                var isRunning = kv.Value.IsRunningProbe?.Invoke() ?? state.IsRunning;
                 return new TaskState(
                     kv.Key,
                     kv.Value.Name,
@@ -101,7 +120,7 @@ public sealed class TaskRegistry
                     state.LastDurationMs,
                     state.LastResult,
                     state.LastRunUtc is { } last ? last + kv.Value.Interval : null,
-                    state.IsRunning);
+                    isRunning);
             })
             .OrderBy(t => t.Name, StringComparer.Ordinal)
             .ToList();

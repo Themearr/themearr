@@ -91,7 +91,7 @@ public class DownloadService(
         if (!isProviderUrl) return null;
         if (provider.CheckConfiguration() is { } notReady) return notReady;
         if (IsQuotaCoolingDown(out var until))
-            return $"RapidAPI quota is exhausted — downloads are paused until {until:HH:mm} UTC. Try again later.";
+            return $"{Health.QuotaMessages.CooldownUntil(until)}. Try again later.";
         return null;
     }
 

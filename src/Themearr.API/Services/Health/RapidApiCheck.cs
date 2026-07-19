@@ -17,13 +17,11 @@ public sealed class RapidApiCheck(Database db, IThemeAudioProvider provider, IQu
             return Task.FromResult(HealthCheckResult.Healthy("Setup not complete"));
 
         if (provider.CheckConfiguration() is { } notReady)
-            return Task.FromResult(HealthCheckResult.Unhealthy(
-                $"Theme downloads are disabled: {notReady}"));
+            return Task.FromResult(HealthCheckResult.Unhealthy(notReady));
 
         // A 429 sets a cooldown. Report it rather than probing, which would cost quota.
         if (quota.IsQuotaCoolingDown(out var until))
-            return Task.FromResult(HealthCheckResult.Degraded(
-                $"RapidAPI quota is exhausted — downloads are paused until {until:HH:mm} UTC"));
+            return Task.FromResult(HealthCheckResult.Degraded(QuotaMessages.CooldownUntil(until)));
 
         return Task.FromResult(HealthCheckResult.Healthy("RapidAPI is configured"));
     }

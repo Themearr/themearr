@@ -21,7 +21,13 @@ public class AutoSyncService(IServiceProvider services, TaskRegistry registry, I
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
-        registry.Register(SyncTaskId, "Sync Library", SyncInterval);
+        // SyncService is a singleton, so this reference stays valid for the process
+        // lifetime and always reflects the sync that's actually running (if any) —
+        // unlike TaskRegistry's own IsRunning flag, which StartAsync's fire-and-forget
+        // shape (see SyncService.StartAsync) would otherwise make momentarily true at
+        // best, since RecordRun clears it again microseconds later.
+        var sync = services.GetRequiredService<SyncService>();
+        registry.Register(SyncTaskId, "Sync Library", SyncInterval, () => sync.InProgress);
         SeedLastRunFromDatabase();
 
         // Delay startup by 2 minutes so the API is fully warmed up first
@@ -100,10 +106,13 @@ public class AutoSyncService(IServiceProvider services, TaskRegistry registry, I
 
         if (!forced && db.GetSetting("auto_sync", "false") != "true") return;
 
-        // Never forced past setup — there is no Plex server to sync from yet.
+        // Never forced past setup — there is no Plex server to sync from yet. No sync
+        // ran, so RecordRun must NOT be called: lastRunUtc only ever advances when a
+        // sync genuinely starts, otherwise nextRunUtc (derived from it) diverges from
+        // the real schedule driven by the last_auto_sync_at setting.
         if (!db.IsSetupComplete())
         {
-            if (forced) registry.RecordRun(SyncTaskId, DateTime.UtcNow, TimeSpan.Zero, "skipped: setup not complete");
+            if (forced) log.LogInformation("AutoSync: 'Run now' ignored — setup not complete");
             return;
         }
 
@@ -122,7 +131,6 @@ public class AutoSyncService(IServiceProvider services, TaskRegistry registry, I
 
         var startedAt = DateTime.UtcNow;
         var sw = Stopwatch.StartNew();
-        registry.MarkRunning(SyncTaskId, true);
         try
         {
             var started = await sync.StartAsync();
@@ -135,16 +143,20 @@ public class AutoSyncService(IServiceProvider services, TaskRegistry registry, I
             }
             else
             {
+                // A sync was already running, so nothing new started here — lastRunUtc
+                // must not move (that would silently desync the displayed schedule from
+                // the real one, driven by last_auto_sync_at, by up to a full interval).
+                // IsRunning is read straight from SyncService via TaskRegistry's probe,
+                // so there is nothing here that needs to be cleared either.
                 log.LogInformation("AutoSync: sync already in progress, skipping");
-                registry.RecordRun(SyncTaskId, startedAt, sw.Elapsed, "skipped: a sync was already running");
             }
         }
         catch
         {
             sw.Stop();
-            // RecordRun also clears IsRunning, so the Run now button recovers.
-            registry.RecordRun(SyncTaskId, startedAt, sw.Elapsed, "failed to start — see the application log");
-            throw;   // ExecuteAsync still logs the exception with its stack trace
+            // Starting failed, so no sync ran here either — lastRunUtc must not move.
+            // ExecuteAsync still logs the exception (with its stack trace) one level up.
+            throw;
         }
     }
 }

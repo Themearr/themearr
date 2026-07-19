@@ -89,4 +89,37 @@ public class TaskRegistryTests
         r.RecordRun("syncLibrary", DateTime.UtcNow, TimeSpan.Zero, "done");
         Assert.False(Assert.Single(r.Snapshot()).IsRunning);
     }
+
+    [Fact]
+    public void A_task_registered_with_a_probe_reports_the_probes_value()
+    {
+        var r = new TaskRegistry();
+        var running = false;
+        r.Register("syncLibrary", "Sync Library", TimeSpan.FromHours(24), isRunning: () => running);
+
+        Assert.False(Assert.Single(r.Snapshot()).IsRunning);
+
+        running = true;
+        Assert.True(Assert.Single(r.Snapshot()).IsRunning);
+
+        running = false;
+        Assert.False(Assert.Single(r.Snapshot()).IsRunning);
+    }
+
+    [Fact]
+    public void The_probe_takes_precedence_over_MarkRunning()
+    {
+        var r = new TaskRegistry();
+        var probeSaysRunning = true;
+        r.Register("syncLibrary", "Sync Library", TimeSpan.FromHours(24), isRunning: () => probeSaysRunning);
+
+        // MarkRunning(false) must not be able to override a probe that says "running".
+        r.MarkRunning("syncLibrary", false);
+        Assert.True(Assert.Single(r.Snapshot()).IsRunning);
+
+        // And vice versa: MarkRunning(true) must not override a probe that says "idle".
+        probeSaysRunning = false;
+        r.MarkRunning("syncLibrary", true);
+        Assert.False(Assert.Single(r.Snapshot()).IsRunning);
+    }
 }
