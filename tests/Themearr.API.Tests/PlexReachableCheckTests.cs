@@ -46,6 +46,26 @@ public class PlexReachableCheckTests
             .CheckHealthAsync(new HealthCheckContext(), CancellationToken.None);
 
     [Fact]
+    public async Task Before_setup_completes_it_is_healthy_even_with_a_server_configured()
+    {
+        using var dir = new TempDir();
+        var db = new Database(Path.Combine(dir.Path, "test.db"));
+        db.Init();
+        db.SetPlexServers([new Dictionary<string, object?>
+        {
+            ["id"]    = "srv1",
+            ["name"]  = "Tower",
+            ["url"]   = "http://plex.local:32400",
+            ["token"] = "secret-token-value",
+        }]);
+        // Deliberately no MarkSetupComplete(): a fresh install is not broken.
+
+        var handler = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.InternalServerError));
+
+        Assert.Equal(HealthStatus.Healthy, (await Run(db, handler)).Status);
+    }
+
+    [Fact]
     public async Task No_configured_server_is_healthy()
     {
         using var dir = new TempDir();

@@ -11,7 +11,7 @@ namespace Themearr.API.Services.Health;
 /// </summary>
 public sealed class PlexReachableCheck(Database db, IHttpClientFactory factory) : IHealthCheck
 {
-    /// <summary>Named client, configured in Program.cs with a 3-second timeout.</summary>
+    /// <summary>Named client, configured in Program.cs with a short timeout.</summary>
     public const string ClientName = "plex-health";
 
     public async Task<HealthCheckResult> CheckHealthAsync(
@@ -46,9 +46,10 @@ public sealed class PlexReachableCheck(Database db, IHttpClientFactory factory) 
 
             return HealthCheckResult.Healthy("Plex server is reachable");
         }
-        catch (TaskCanceledException)
+        catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            return HealthCheckResult.Unhealthy("The Plex server did not respond within 3 seconds.");
+            return HealthCheckResult.Unhealthy(
+                $"The Plex server did not respond within {http.Timeout.TotalSeconds:0} seconds.");
         }
         catch (HttpRequestException)
         {
