@@ -1,5 +1,3 @@
-'use client'
-
 import { useEffect, useState } from 'react'
 import { historyApi } from '@/lib/api'
 import type { HistoryEntry } from '@/lib/types'

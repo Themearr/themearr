@@ -102,7 +102,8 @@ Also make sure the movie mount is **writable** — a read-only mount resolves fi
 | Layer | Technology |
 |---|---|
 | API | .NET 9 Web API (ASP.NET Core) |
-| Frontend | Next.js 16 (static export, served by .NET) |
+| Frontend | React 19 + Vite (static SPA, served by .NET) |
+| Routing | React Router |
 | Database | SQLite via `Microsoft.Data.Sqlite` |
 | YouTube search | `YoutubeExplode` |
 | Theme download | [youtube-mp36 RapidAPI](https://rapidapi.com/ytjar/api/youtube-mp36) |
@@ -125,7 +126,7 @@ THEMEARR_AUTH_TOKEN=dev-token-at-least-16-chars dotnet run --project src/Themear
 # Terminal 2 — Frontend (dev server with proxy to API)
 cd src/Themearr.Web
 npm install
-NEXT_PUBLIC_API_URL=http://localhost:5000 npm run dev
+npm run dev   # proxies /api to the .NET backend on :5000
 ```
 
 Open `http://localhost:3000`.
@@ -141,7 +142,7 @@ dotnet test
 Push to `main` — GitHub Actions will automatically:
 
 1. Detect the semver bump from commit messages (`feat:` → minor, `major:` → major, else patch)
-2. Build the Next.js frontend and publish .NET for `linux-x64` and `linux-arm64`
+2. Build the frontend (Vite) and publish .NET for `linux-x64` and `linux-arm64`
 3. Bundle the frontend into each publish output
 4. Create a GitHub release with both tarballs **plus SHA-256 checksums** (verified by `install.sh` / `deploy.sh`)
 5. Build and push the multi-arch Docker image to `ghcr.io/themearr/themearr` (`:latest` and `:vX.Y.Z`)

@@ -3,7 +3,7 @@ import type {
   SetupStatus, Settings, SyncStatus, VersionInfo, HistoryEntry, DashboardStats,
 } from './types'
 
-const BASE = (process.env.NEXT_PUBLIC_API_URL ?? '').replace(/\/$/, '')
+const BASE = (import.meta.env.VITE_API_URL ?? '').replace(/\/$/, '')
 
 const TOKEN_KEY = 'themearr_token'
 

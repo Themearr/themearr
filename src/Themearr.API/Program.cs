@@ -51,7 +51,7 @@ builder.Services.AddHostedService<AutoSyncService>();
 builder.Services.AddSingleton<AutoDownloadService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<AutoDownloadService>());
 
-// CORS for dev (Next.js dev server on :3000) — only in Development
+// CORS for dev (Vite dev server on :3000) — only in Development
 if (builder.Environment.IsDevelopment())
 {
     builder.Services.AddCors(o => o.AddDefaultPolicy(p =>

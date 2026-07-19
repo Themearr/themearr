@@ -1,5 +1,3 @@
-'use client'
-
 import { useEffect, useRef, useState } from 'react'
 import type { Movie } from '@/lib/types'
 import { moviesApi } from '@/lib/api'

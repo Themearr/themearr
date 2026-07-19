@@ -1,7 +1,8 @@
 {
   "compilerOptions": {
-    "target": "ES2017",
+    "target": "ES2022",
     "lib": ["dom", "dom.iterable", "esnext"],
+    "useDefineForClassFields": true,
     "allowJs": true,
     "skipLibCheck": true,
     "strict": true,
@@ -11,11 +12,11 @@
     "moduleResolution": "bundler",
     "resolveJsonModule": true,
     "isolatedModules": true,
-    "jsx": "preserve",
-    "incremental": true,
-    "plugins": [{ "name": "next" }],
+    // Vite/React automatic runtime (Next used "preserve" + its own plugin).
+    "jsx": "react-jsx",
+    "types": ["vite/client"],
     "paths": { "@/*": ["./src/*"] }
   },
-  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
-  "exclude": ["node_modules"]
+  "include": ["src", "vite.config.ts"],
+  "exclude": ["node_modules", "out"]
 }

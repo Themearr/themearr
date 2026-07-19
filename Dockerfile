@@ -1,5 +1,5 @@
-# ── Stage 1: Build Next.js frontend ─────────────────────────────────────────
-# Pin build stages to the native BUILDPLATFORM: the outputs (static export +
+# ── Stage 1: Build Vite/React frontend ─────────────────────────────────────────
+# Pin build stages to the native BUILDPLATFORM: the outputs (static SPA bundle +
 # portable .NET IL) are architecture-independent, so multi-arch images build
 # fast without emulating npm/dotnet under QEMU for arm64.
 FROM --platform=$BUILDPLATFORM node:22-slim AS frontend-build
@@ -10,7 +10,7 @@ RUN npm ci
 
 COPY src/Themearr.Web/ .
 RUN npm run build
-# Output is in /frontend/out (static export)
+# Output is in /frontend/out (static SPA bundle)
 
 # ── Stage 2: Build .NET API ───────────────────────────────────────────────────
 FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:9.0 AS api-build
@@ -31,7 +31,7 @@ WORKDIR /app
 # Copy .NET publish output
 COPY --from=api-build /app/publish ./
 
-# Copy Next.js static export into wwwroot (served by .NET)
+# Copy the static SPA bundle into wwwroot (served by .NET, with SPA fallback)
 COPY --from=frontend-build /frontend/out ./wwwroot/
 
 # Non-root user — the service does not need root inside the container.

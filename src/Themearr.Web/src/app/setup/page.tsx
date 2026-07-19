@@ -1,18 +1,16 @@
-'use client'
-
 import { useEffect } from 'react'
-import { useRouter } from 'next/navigation'
+import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/lib/auth'
 import { SetupWizard } from '@/components/setup/SetupWizard'
 import { Spinner } from '@/components/ui'
 
 export default function SetupPage() {
-  const router = useRouter()
+  const navigate = useNavigate()
   const { loading, connected } = useAuth()
 
   useEffect(() => {
-    if (!loading && !connected) router.replace('/login')
-  }, [loading, connected, router])
+    if (!loading && !connected) navigate('/login', { replace: true })
+  }, [loading, connected, navigate])
 
   if (loading) {
     return (
