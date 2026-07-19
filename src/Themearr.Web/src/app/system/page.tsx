@@ -34,6 +34,26 @@ function relative(iso: string | null): string {
   return `${Math.round(hours / 24)}d ${suffix}`
 }
 
+// Turns a .NET constant-format TimeSpan ("[d.]hh:mm:ss[.fffffff]") into a
+// short human phrase, e.g. "1.00:00:00" -> "Every 24 hours". Anything that
+// doesn't match the expected shape is returned unchanged, so an unexpected
+// value degrades to the raw string instead of rendering NaN or blank.
+function formatInterval(interval: string): string {
+  const match = /^(?:(\d+)\.)?(\d+):(\d{2}):(\d{2})(?:\.\d+)?$/.exec(interval)
+  if (!match) return interval
+
+  const [, days, hours, minutes, seconds] = match
+  const totalSeconds =
+    Number(days ?? 0) * 86400 + Number(hours) * 3600 + Number(minutes) * 60 + Number(seconds)
+
+  const [value, unit] =
+    totalSeconds < 60 ? [totalSeconds, 'second'] :
+    totalSeconds < 3600 ? [Math.round(totalSeconds / 60), 'minute'] :
+    [Math.round(totalSeconds / 3600), 'hour']
+
+  return `Every ${value} ${unit}${value === 1 ? '' : 's'}`
+}
+
 export default function SystemPage() {
   const [tab,         setTab]         = useState<Tab>('health')
   const [health,      setHealth]      = useState<HealthResponse | null>(null)
@@ -87,10 +107,14 @@ export default function SystemPage() {
 
   return (
     <AppShell title="System">
-      <div className="mb-5 flex gap-1 border-b border-[#1D2939]">
+      <div role="tablist" className="mb-5 flex gap-1 border-b border-[#1D2939]">
         {(['health', 'tasks'] as Tab[]).map(t => (
           <button
             key={t}
+            id={`system-tab-${t}`}
+            role="tab"
+            aria-selected={tab === t}
+            aria-controls={`system-panel-${t}`}
             onClick={() => setTab(t)}
             className={`px-4 py-2 text-sm font-medium capitalize transition-colors ${
               tab === t
@@ -108,111 +132,115 @@ export default function SystemPage() {
       )}
 
       {tab === 'health' && (
-        healthError ? (
-          <EmptyState
-            icon={ERROR_ICON}
-            title="Couldn't load health checks"
-            description="The server didn't respond. Reload the page to try again."
-          />
-        ) : health === null ? (
-          <div className="flex justify-center py-24">
-            <Spinner size={28} className="text-[#BB0000]" />
-          </div>
-        ) : health.checks.length === 0 ? (
-          <div className="rounded-xl border border-[#1D2939] bg-[#101828] px-4 py-8 text-center">
-            <p className="text-sm font-medium text-[#6CE9A6]">All health checks are passing</p>
-            <p className="mt-1 text-xs text-[#667085]">
-              Only problems are listed here, so an empty page is good news.
-            </p>
-          </div>
-        ) : (
-          <div className="space-y-2">
-            {health.checks.map(c => {
-              const style = TYPE_STYLES[c.type] ?? TYPE_STYLES.error
-              return (
-                <div
-                  key={c.source}
-                  className="flex items-start gap-3 rounded-xl border border-[#1D2939] bg-[#101828] px-4 py-3"
-                >
-                  <span
-                    className="mt-1.5 h-2 w-2 flex-shrink-0 rounded-full"
-                    style={{ background: style.dot }}
-                  />
-                  <div className="min-w-0 flex-1">
-                    <p className="text-xs font-semibold uppercase tracking-wide" style={{ color: style.text }}>
-                      {style.label} · {c.source}
-                    </p>
-                    <p className="mt-1 text-sm text-[#D0D5DD]">{c.message}</p>
-                    {c.wikiUrl && (
-                      <a
-                        href={c.wikiUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="mt-1.5 inline-block text-xs text-[#E07777] hover:underline"
-                      >
-                        How to fix this →
-                      </a>
-                    )}
+        <div id="system-panel-health" role="tabpanel" aria-labelledby="system-tab-health">
+          {healthError ? (
+            <EmptyState
+              icon={ERROR_ICON}
+              title="Couldn't load health checks"
+              description="The server didn't respond. Reload the page to try again."
+            />
+          ) : health === null ? (
+            <div className="flex justify-center py-24">
+              <Spinner size={28} className="text-[#BB0000]" />
+            </div>
+          ) : health.checks.length === 0 ? (
+            <div className="rounded-xl border border-[#1D2939] bg-[#101828] px-4 py-8 text-center">
+              <p className="text-sm font-medium text-[#6CE9A6]">All health checks are passing</p>
+              <p className="mt-1 text-xs text-[#667085]">
+                Only problems are listed here, so an empty page is good news.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {health.checks.map(c => {
+                const style = TYPE_STYLES[c.type] ?? TYPE_STYLES.error
+                return (
+                  <div
+                    key={c.source}
+                    className="flex items-start gap-3 rounded-xl border border-[#1D2939] bg-[#101828] px-4 py-3"
+                  >
+                    <span
+                      className="mt-1.5 h-2 w-2 flex-shrink-0 rounded-full"
+                      style={{ background: style.dot }}
+                    />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-semibold uppercase tracking-wide" style={{ color: style.text }}>
+                        {style.label} · {c.source}
+                      </p>
+                      <p className="mt-1 text-sm text-[#D0D5DD]">{c.message}</p>
+                      {c.wikiUrl && (
+                        <a
+                          href={c.wikiUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="mt-1.5 inline-block text-xs text-[#E07777] hover:underline"
+                        >
+                          How to fix this →
+                        </a>
+                      )}
+                    </div>
                   </div>
-                </div>
-              )
-            })}
-          </div>
-        )
+                )
+              })}
+            </div>
+          )}
+        </div>
       )}
 
       {tab === 'tasks' && (
-        tasksError ? (
-          <EmptyState
-            icon={ERROR_ICON}
-            title="Couldn't load scheduled tasks"
-            description="The server didn't respond. Reload the page to try again."
-          />
-        ) : tasks === null ? (
-          <div className="flex justify-center py-24">
-            <Spinner size={28} className="text-[#BB0000]" />
-          </div>
-        ) : tasks.length === 0 ? (
-          <p className="text-sm text-[#667085]">No scheduled tasks are registered yet.</p>
-        ) : (
-          <div className="overflow-x-auto rounded-xl border border-[#1D2939]">
-            <table className="w-full min-w-[640px] text-sm">
-              <thead className="bg-[#101828] text-left text-xs uppercase tracking-wide text-[#667085]">
-                <tr>
-                  <th className="px-4 py-3 font-medium">Name</th>
-                  <th className="px-4 py-3 font-medium">Interval</th>
-                  <th className="px-4 py-3 font-medium">Last run</th>
-                  <th className="px-4 py-3 font-medium">Next run</th>
-                  <th className="px-4 py-3 font-medium" />
-                </tr>
-              </thead>
-              <tbody>
-                {tasks.map(t => (
-                  <tr key={t.id} className="border-t border-[#1D2939]">
-                    <td className="px-4 py-3">
-                      <p className="text-[#F9FAFB]">{t.name}</p>
-                      {t.lastResult && <p className="mt-0.5 text-xs text-[#667085]">{t.lastResult}</p>}
-                    </td>
-                    <td className="px-4 py-3 text-[#D0D5DD]">{t.interval}</td>
-                    <td className="px-4 py-3 text-[#D0D5DD]">{relative(t.lastRunUtc)}</td>
-                    <td className="px-4 py-3 text-[#D0D5DD]">{relative(t.nextRunUtc)}</td>
-                    <td className="px-4 py-3 text-right">
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        loading={running === t.id}
-                        disabled={t.isRunning || running === t.id}
-                        onClick={() => runTask(t.id)}
-                      >
-                        {t.isRunning ? 'Running' : 'Run now'}
-                      </Button>
-                    </td>
+        <div id="system-panel-tasks" role="tabpanel" aria-labelledby="system-tab-tasks">
+          {tasksError ? (
+            <EmptyState
+              icon={ERROR_ICON}
+              title="Couldn't load scheduled tasks"
+              description="The server didn't respond. Reload the page to try again."
+            />
+          ) : tasks === null ? (
+            <div className="flex justify-center py-24">
+              <Spinner size={28} className="text-[#BB0000]" />
+            </div>
+          ) : tasks.length === 0 ? (
+            <p className="text-sm text-[#667085]">No scheduled tasks are registered yet.</p>
+          ) : (
+            <div className="overflow-x-auto rounded-xl border border-[#1D2939]">
+              <table className="w-full min-w-[640px] text-sm">
+                <thead className="bg-[#101828] text-left text-xs uppercase tracking-wide text-[#667085]">
+                  <tr>
+                    <th className="px-4 py-3 font-medium">Name</th>
+                    <th className="px-4 py-3 font-medium">Interval</th>
+                    <th className="px-4 py-3 font-medium">Last run</th>
+                    <th className="px-4 py-3 font-medium">Next run</th>
+                    <th className="px-4 py-3 font-medium" />
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )
+                </thead>
+                <tbody>
+                  {tasks.map(t => (
+                    <tr key={t.id} className="border-t border-[#1D2939]">
+                      <td className="px-4 py-3">
+                        <p className="text-[#F9FAFB]">{t.name}</p>
+                        {t.lastResult && <p className="mt-0.5 text-xs text-[#667085]">{t.lastResult}</p>}
+                      </td>
+                      <td className="px-4 py-3 text-[#D0D5DD]">{formatInterval(t.interval)}</td>
+                      <td className="px-4 py-3 text-[#D0D5DD]">{relative(t.lastRunUtc)}</td>
+                      <td className="px-4 py-3 text-[#D0D5DD]">{relative(t.nextRunUtc)}</td>
+                      <td className="px-4 py-3 text-right">
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          loading={running === t.id}
+                          disabled={t.isRunning || running === t.id}
+                          onClick={() => runTask(t.id)}
+                        >
+                          {t.isRunning ? 'Running' : 'Run now'}
+                        </Button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
       )}
     </AppShell>
   )

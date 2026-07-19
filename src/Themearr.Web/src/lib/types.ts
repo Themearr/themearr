@@ -121,7 +121,11 @@ export interface HealthResponse {
 export interface SystemTask {
   id: string
   name: string
-  /** Serialized TimeSpan, e.g. "24:00:00". */
+  /**
+   * Serialized .NET TimeSpan in the constant format `[d.]hh:mm:ss`, e.g.
+   * "1.00:00:00" for 24 hours (the leading "1." is a day component, not
+   * an hour count).
+   */
   interval: string
   lastRunUtc: string | null
   lastDurationMs: number | null
