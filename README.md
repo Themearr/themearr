@@ -129,12 +129,17 @@ npm install
 npm run dev   # proxies /api to the .NET backend on :5000
 ```
 
-Open `http://localhost:3000`.
+Open `http://localhost:3000`. The frontend is a static SPA — in production it's built to `src/Themearr.Web/out/` and served by the .NET app from `wwwroot` (with an SPA fallback, so deep links like `/movies` work).
 
-### Tests
+### Checks
 
 ```bash
-dotnet test
+dotnet test                  # .NET test suite
+
+cd src/Themearr.Web
+npm run lint                 # ESLint
+npx tsc --noEmit             # typecheck
+npm run build                # production build -> out/
 ```
 
 ## Building a release
