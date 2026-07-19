@@ -44,6 +44,28 @@ settings for choosing and configuring the source.
 authentication; a native Jellyfin/Emby client; running Plex and Radarr as sources
 simultaneously.
 
+## Delivery: two plans, two releases
+
+This spec is implemented in two stages, each with its own implementation plan.
+
+| Stage | Contents | User-visible change |
+|---|---|---|
+| **B1** | `ILibrarySource` + `LibrarySourceResolver`, `PlexLibrarySource`, the `LocalFolderResolver` extraction, folder identity, the schema migration, pruning, `TaskRegistry.UpdateInterval` | **none** — Plex remains the only source |
+| **B2** | `RadarrLibrarySource`, settings and secret handling, the setup-wizard branch, source-aware posters, `LibrarySourceCheck` | Radarr becomes selectable |
+
+The split is about blast radius, not tidiness. B1 migrates every existing user's
+`movies` table while changing nothing they can see, so a post-upgrade problem has
+exactly one plausible cause. Bundled with B2, the same symptom could be the
+migration, the extracted resolver, the Radarr client or the wizard — four
+suspects at once, on a live install.
+
+B1 must therefore leave behaviour identical: same movies, same statuses, same
+history, same poster URLs, same sync cadence. Its success criterion is that a
+user cannot tell it shipped.
+
+Everything below describes the finished system. Section headings note which stage
+owns them where it is not obvious.
+
 ## Decisions
 
 **One source at a time.** A setting selects Plex or Radarr. Merging both was
