@@ -83,8 +83,19 @@ public class MoviesMigrationTests
         var db = new Database(path);
         var heat = db.GetMovie(MovieFolderId.For(heatFolder));
         Assert.NotNull(heat);
-        Assert.Equal("downloaded", heat!["status"]?.ToString());
-        Assert.Equal(heatFolder, heat["folderName"]?.ToString());
+        Assert.Equal(heatFolder, heat!["folderName"]?.ToString());
+
+        // The migration's job is to carry the status column across; GetMovie/ReadMovieRow
+        // recomputes "status" from whether a usable theme file exists on disk, so that's the
+        // wrong layer to assert a migrated column through. Query the column directly instead.
+        using var conn = new SqliteConnection($"Data Source={path}");
+        conn.Open();
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = "SELECT status FROM movies WHERE id = @id";
+            cmd.Parameters.AddWithValue("@id", MovieFolderId.For(heatFolder));
+            Assert.Equal("downloaded", (string)cmd.ExecuteScalar()!);
+        }
 
         var ronin = db.GetMovie(MovieFolderId.For(roninFolder));
         Assert.NotNull(ronin);
@@ -166,8 +177,16 @@ public class MoviesMigrationTests
         new Database(path).Init();
         new Database(path).Init();
 
-        var movie = Assert.Single(new Database(path).GetAllMovies());
-        Assert.Equal("downloaded", movie["status"]?.ToString());
+        Assert.Single(new Database(path).GetAllMovies());
+
+        // The status column, not GetAllMovies' recomputed-from-disk "status", is what the
+        // migration (and re-running it) is responsible for preserving.
+        using var conn = new SqliteConnection($"Data Source={path}");
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT status FROM movies WHERE id = @id";
+        cmd.Parameters.AddWithValue("@id", MovieFolderId.For(heatFolder));
+        Assert.Equal("downloaded", (string)cmd.ExecuteScalar()!);
     }
 
     /// <summary>
