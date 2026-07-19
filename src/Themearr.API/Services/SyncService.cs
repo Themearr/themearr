@@ -10,9 +10,17 @@ public class SyncService(Database db, PlexService plex, ILogger<SyncService> log
     private volatile bool _inProgress;
     private volatile bool _finished;
     private volatile int  _synced;
-    private string _error = "";
+    private volatile string _error = "";
 
-    public bool InProgress => _inProgress;
+    // Handle on the running sync so a caller can await the outcome instead of only
+    // learning that one was launched. Completed by default, so awaiting before the
+    // first sync returns immediately rather than hanging.
+    private volatile Task _current = Task.CompletedTask;
+
+    public bool   InProgress => _inProgress;
+    public Task   Current    => _current;
+    public string Error      => _error;
+    public int    Synced     => _synced;
 
     public async Task<bool> StartAsync()
     {
@@ -25,7 +33,7 @@ public class SyncService(Database db, PlexService plex, ILogger<SyncService> log
         _synced     = 0;
         while (_logs.TryDequeue(out _)) { }
 
-        _ = Task.Run(RunAsync).ContinueWith(_ => _lock.Release());
+        _current = Task.Run(RunAsync).ContinueWith(_ => _lock.Release());
         return true;
     }
 
