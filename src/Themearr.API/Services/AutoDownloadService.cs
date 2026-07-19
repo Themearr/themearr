@@ -177,7 +177,7 @@ public class AutoDownloadService(
         {
             log.LogWarning(ex, "AutoDownload: YouTube search failed for {Title}", LogSanitizer.Clean(title));
             _cooldownUntil[movieId] = DateTime.UtcNow + ErrorCooldown;
-            Tick = Tick with { Result = $"search failed for '{title}': {ex.Message}" };
+            Tick = Tick with { Result = $"search failed for '{title}' — see the application log" };
             return;
         }
 
