@@ -1,7 +1,7 @@
 export interface Movie {
   id: string
-  plexServerId: string
-  plexRatingKey: string
+  source: string
+  sourceRef: string
   title: string
   year: number | null
   sourcePath: string | null

@@ -74,7 +74,7 @@ public class SyncService(Database db, LibrarySourceResolver sources, ILogger<Syn
         {
             _error = ex.Message;
             AddLog($"Sync failed: {ex.Message}");
-            log.LogError(ex, "Plex sync failed");
+            log.LogError(ex, "Library sync failed");
         }
         finally
         {
