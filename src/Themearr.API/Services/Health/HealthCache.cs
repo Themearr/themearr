@@ -38,6 +38,21 @@ public sealed class HealthCache(HealthCheckService health, IConfiguration? confi
     private CachedHealth? _cached;
     private DateTime _expiresAt = DateTime.MinValue;
 
+    // Cancellation is cooperative, but the failure mode this guards against is
+    // not: LibraryPathsCheck is fully synchronous and never observes its token,
+    // and ThemeFiles.IsDirectoryWritable's File.Create on a wedged NFS/SMB mount
+    // is an uninterruptible syscall. So a timed-out probe is ABANDONED, not
+    // cancelled — WaitAsync below hands control back to the caller regardless,
+    // but the CheckHealthAsync Task keeps running (or hanging) in the
+    // background for as long as the mount stays wedged. If every TTL expiry
+    // during that window started a brand new probe, those would accumulate
+    // without bound. Instead we hold the one outstanding probe (and the
+    // CancellationTokenSource bounding its cooperative parts) here and reuse it
+    // across refreshes until it actually completes — capping the leak at
+    // exactly one probe no matter how long the mount stays hung.
+    private Task<HealthReport>? _pendingProbe;
+    private CancellationTokenSource? _pendingCts;
+
     public async Task<CachedHealth> GetAsync(CancellationToken ct = default)
     {
         // Only waiting for the lock is cancellable by an individual caller. Once a
@@ -53,19 +68,39 @@ public sealed class HealthCache(HealthCheckService health, IConfiguration? confi
         {
             if (_cached is not null && DateTime.UtcNow < _expiresAt) return _cached;
 
-            using var timeoutCts = new CancellationTokenSource(_refreshTimeout);
+            // Reuse the outstanding probe if the previous refresh's is still running
+            // (see the field comments above); otherwise start a fresh one.
+            if (_pendingProbe is null || _pendingProbe.IsCompleted)
+            {
+                _pendingCts?.Dispose();
+                _pendingCts    = new CancellationTokenSource(_refreshTimeout);
+                _pendingProbe  = health.CheckHealthAsync(_pendingCts.Token);
+            }
+
             CachedHealth result;
             try
             {
-                var report = await health.CheckHealthAsync(timeoutCts.Token);
+                var report = await _pendingProbe.WaitAsync(_refreshTimeout);
                 result = new CachedHealth(report.Status, HealthDto.From(report, _config));
             }
-            catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
+            catch (Exception ex) when (ex is OperationCanceledException or TimeoutException)
             {
-                // Do not propagate a raw cancellation/exception to the caller, and do
-                // not leave the cache empty: cache a degraded-but-useful result for the
-                // normal TTL so a wedged mount can't cause a probe storm either.
+                // WaitAsync gave up on THIS attempt only — do not propagate a raw
+                // cancellation/timeout to the caller, and do not leave the cache
+                // empty: cache a degraded-but-useful result for the normal TTL so a
+                // wedged mount can't cause a probe storm either. _pendingProbe is
+                // deliberately left set (see field comments) so the next refresh
+                // reuses it instead of piling on a second stuck probe.
                 result = TimedOutResult();
+            }
+            catch (Exception)
+            {
+                // A HealthCheckRegistration whose factory throws (e.g. bad DI
+                // config) must not escape as a 500 from the unauthenticated,
+                // unrate-limited /health endpoint — that would leave the cache
+                // unpopulated and reopen the exact probe storm this cache exists to
+                // prevent. Cache a degraded (never "healthy") result instead.
+                result = ErrorResult();
             }
 
             _cached    = result;
@@ -75,14 +110,16 @@ public sealed class HealthCache(HealthCheckService health, IConfiguration? confi
         finally { _lock.Release(); }
     }
 
-    private CachedHealth TimedOutResult()
+    private CachedHealth TimedOutResult() => DegradedResult(
+        $"Health checks did not complete within {_refreshTimeout.TotalSeconds:0}s — a dependency " +
+        "(e.g. a network mount) may be hung. See the application log.");
+
+    private static CachedHealth ErrorResult() => DegradedResult(
+        "Health checks failed unexpectedly. See the application log.");
+
+    private static CachedHealth DegradedResult(string message)
     {
-        var item = new HealthItem(
-            "health",
-            HealthDto.MapType(HealthStatus.Unhealthy),
-            $"Health checks did not complete within {_refreshTimeout.TotalSeconds:0}s — a dependency " +
-            "(e.g. a network mount) may be hung. See the application log.",
-            null);
+        var item = new HealthItem("health", HealthDto.MapType(HealthStatus.Unhealthy), message, null);
         return new CachedHealth(HealthStatus.Unhealthy, new HealthResponse("error", [item]));
     }
 }

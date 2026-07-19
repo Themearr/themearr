@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Themearr.API.Services.Health;
 
@@ -55,15 +56,29 @@ public class HealthCacheTests
     }
 
     // Simulates a hung dependency (e.g. ThemeFiles.IsDirectoryWritable blocking on a
-    // wedged NFS/SMB mount): CheckHealthAsync never completes on its own and only
-    // returns once its cancellation token fires.
+    // wedged NFS/SMB mount): CheckHealthAsync never completes on its own, and —
+    // critically — Thread.Sleep is NON-cooperative, so it ignores the cancellation
+    // token entirely, exactly like the real File.Create syscall it stands in for.
+    //
+    // An earlier version of this fake used Task.Delay(Timeout.Infinite,
+    // cancellationToken), which is COOPERATIVE: it returns as soon as the token
+    // fires. That made a broken fix (a bare `await health.CheckHealthAsync(...)`
+    // with no independent bound) look correct, because the fake honored
+    // cancellation the real blocking call never would — the test gave false
+    // confidence. Thread.Sleep closes that gap.
     private sealed class HangingHealthCheckService : HealthCheckService
     {
         public override async Task<HealthReport> CheckHealthAsync(
             Func<HealthCheckRegistration, bool>? predicate, CancellationToken cancellationToken = default)
         {
-            await Task.Delay(Timeout.Infinite, cancellationToken);
-            throw new InvalidOperationException("unreachable — Task.Delay(Infinite) only returns via cancellation");
+            // Verified empirically that the real DefaultHealthCheckService.CheckHealthAsync
+            // yields before invoking a check's delegate (it returns a pending Task
+            // promptly even when the check blocks synchronously) — Task.Yield here
+            // reproduces that so this fake is called the same way GetAsync calls the
+            // real thing, rather than blocking the caller synchronously at the call site.
+            await Task.Yield();
+            Thread.Sleep(Timeout.Infinite);
+            throw new InvalidOperationException("unreachable — Thread.Sleep(Infinite) never returns");
         }
     }
 
@@ -73,10 +88,17 @@ public class HealthCacheTests
         // Use a short refresh timeout so the test itself stays fast; production uses 10s.
         var cache = new HealthCache(new HangingHealthCheckService(), refreshTimeout: TimeSpan.FromMilliseconds(200));
 
+        var sw = Stopwatch.StartNew();
+        // The 5s WaitAsync here is only a CI safety valve (fail fast instead of
+        // hanging the suite if this regresses) — the real proof that GetAsync is
+        // bounded by the refresh timeout, not by luck, is the elapsed-time assert
+        // below.
         var cached = await cache.GetAsync().WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.Equal(HealthStatus.Unhealthy, cached.Status);
         Assert.NotEmpty(cached.Response.Checks);
+        Assert.True(sw.ElapsedMilliseconds < 2000,
+            $"expected GetAsync to return promptly (~200ms refreshTimeout), took {sw.ElapsedMilliseconds}ms");
     }
 
     [Fact]

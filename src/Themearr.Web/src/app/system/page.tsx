@@ -111,6 +111,7 @@ export default function SystemPage() {
         {(['health', 'tasks'] as Tab[]).map(t => (
           <button
             key={t}
+            type="button"
             id={`system-tab-${t}`}
             role="tab"
             aria-selected={tab === t}

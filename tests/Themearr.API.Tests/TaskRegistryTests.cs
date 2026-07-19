@@ -91,6 +91,23 @@ public class TaskRegistryTests
     }
 
     [Fact]
+    public void RecordFailure_updates_the_result_but_does_not_move_lastRunUtc_or_nextRunUtc()
+    {
+        var r = WithSync();
+        var started = new DateTime(2026, 7, 19, 2, 0, 0, DateTimeKind.Utc);
+        r.RecordRun("syncLibrary", started, TimeSpan.FromMilliseconds(4210), "1451 movies");
+        r.MarkRunning("syncLibrary", true);
+
+        r.RecordFailure("syncLibrary", "failed to start — see the application log");
+
+        var t = Assert.Single(r.Snapshot());
+        Assert.Equal("failed to start — see the application log", t.LastResult);
+        Assert.Equal(started, t.LastRunUtc);
+        Assert.Equal(started.AddHours(24), t.NextRunUtc);
+        Assert.False(t.IsRunning);
+    }
+
+    [Fact]
     public void A_task_registered_with_a_probe_reports_the_probes_value()
     {
         var r = new TaskRegistry();

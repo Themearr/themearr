@@ -103,6 +103,18 @@ public sealed class TaskRegistry
         e.State = new RunState(startedUtc, (long)duration.TotalMilliseconds, result, false);
     }
 
+    /// <summary>
+    /// Records that a run failed to even start (e.g. an exception while kicking off
+    /// the worker). Unlike <see cref="RecordRun"/> this deliberately leaves
+    /// LastRunUtc (and therefore NextRunUtc, derived from it) untouched — a run
+    /// that never started must not advance the displayed schedule.
+    /// </summary>
+    public void RecordFailure(string id, string result)
+    {
+        if (!_tasks.TryGetValue(id, out var e)) return;
+        e.State = e.State with { LastResult = result, IsRunning = false };
+    }
+
     public IReadOnlyList<TaskState> Snapshot() =>
         _tasks
             .Select(kv =>

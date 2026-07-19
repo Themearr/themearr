@@ -155,7 +155,11 @@ public class AutoSyncService(IServiceProvider services, TaskRegistry registry, I
         {
             sw.Stop();
             // Starting failed, so no sync ran here either — lastRunUtc must not move.
-            // ExecuteAsync still logs the exception (with its stack trace) one level up.
+            // RecordFailure updates lastResult without touching lastRunUtc, so the
+            // Tasks tab stops showing a stale "sync started" as if nothing went
+            // wrong. No exception text goes in the fixed string here — ExecuteAsync
+            // still logs the exception itself (with its stack trace) one level up.
+            registry.RecordFailure(SyncTaskId, "failed to start — see the application log");
             throw;
         }
     }
