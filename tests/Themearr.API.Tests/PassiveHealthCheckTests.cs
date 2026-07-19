@@ -89,7 +89,7 @@ public class PassiveHealthCheckTests
         var result = await Run(new DownloadWorkerCheck(db, worker));
 
         Assert.Equal(HealthStatus.Unhealthy, result.Status);
-        Assert.Contains("30", result.Description);
+        Assert.Contains("30 minutes", result.Description);
     }
 
     [Fact]
