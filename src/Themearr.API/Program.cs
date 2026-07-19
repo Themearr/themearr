@@ -51,6 +51,26 @@ builder.Services.AddHostedService<AutoSyncService>();
 builder.Services.AddSingleton<AutoDownloadService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<AutoDownloadService>());
 
+// ── System page: health checks + scheduled tasks ──────────────────────────────
+builder.Services.AddSingleton<TaskRegistry>();
+builder.Services.AddSingleton<Themearr.API.Services.Health.HealthCache>();
+// The download worker's status is read by DownloadWorkerCheck through a narrow
+// interface; resolve it from the same singleton the hosted service uses.
+builder.Services.AddSingleton<Themearr.API.Services.Health.IDownloadWorkerStatus>(
+    sp => sp.GetRequiredService<AutoDownloadService>());
+builder.Services.AddSingleton<Themearr.API.Services.Health.IQuotaStatus>(
+    sp => sp.GetRequiredService<DownloadService>());
+// A short timeout matters: an unreachable Plex server is the expected case here,
+// and without it the whole health page waits on a TCP hang.
+builder.Services.AddHttpClient(Themearr.API.Services.Health.PlexReachableCheck.ClientName,
+    c => c.Timeout = TimeSpan.FromSeconds(3));
+
+builder.Services.AddHealthChecks()
+    .AddCheck<Themearr.API.Services.Health.LibraryPathsCheck>("libraryPaths")
+    .AddCheck<Themearr.API.Services.Health.PlexReachableCheck>("plex")
+    .AddCheck<Themearr.API.Services.Health.RapidApiCheck>("rapidapi")
+    .AddCheck<Themearr.API.Services.Health.DownloadWorkerCheck>("autoDownload");
+
 // CORS for dev (Vite dev server on :3000) — only in Development
 if (builder.Environment.IsDevelopment())
 {
@@ -122,6 +142,18 @@ app.UseStaticFiles(new StaticFileOptions
             ctx.Context.Response.Headers["Cache-Control"] = "no-cache, no-store, must-revalidate";
             ctx.Context.Response.Headers["Pragma"] = "no-cache";
         }
+    }
+});
+
+// Unauthenticated monitoring endpoint for Uptime Kuma / Gatus. Deliberately
+// detail-free: a single status word, no check names, no messages, no version.
+// ApiAuthMiddleware guards only /api/*, so this needs no allowlist entry.
+app.MapHealthChecks("/health", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
+{
+    ResponseWriter = async (ctx, report) =>
+    {
+        ctx.Response.ContentType = "application/json";
+        await ctx.Response.WriteAsJsonAsync(new { status = report.Status.ToString() });
     }
 });
 
