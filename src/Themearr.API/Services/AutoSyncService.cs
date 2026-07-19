@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Themearr.API.Data;
+using Themearr.API.Services.Sources;
 
 namespace Themearr.API.Services;
 
@@ -8,7 +9,8 @@ namespace Themearr.API.Services;
 /// Also serves the System → Tasks "Sync Library" row: it reports each run into the
 /// <see cref="TaskRegistry"/> and wakes early when the user clicks "Run now".
 /// </summary>
-public class AutoSyncService(IServiceProvider services, TaskRegistry registry, ILogger<AutoSyncService> log)
+public class AutoSyncService(
+    IServiceProvider services, TaskRegistry registry, LibrarySourceResolver sources, ILogger<AutoSyncService> log)
     : BackgroundService
 {
     public const string SyncTaskId = "syncLibrary";
@@ -17,7 +19,9 @@ public class AutoSyncService(IServiceProvider services, TaskRegistry registry, I
     // retries from all firing on the same second after a Plex outage recovers.
     private static readonly TimeSpan CheckInterval = TimeSpan.FromMinutes(30);
     private static readonly TimeSpan JitterMax     = TimeSpan.FromMinutes(5);
-    private static readonly TimeSpan SyncInterval  = TimeSpan.FromHours(24);
+
+    // How often a sync is due is a property of the source, not of Themearr.
+    private TimeSpan SyncInterval => sources.Active.SyncInterval;
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {

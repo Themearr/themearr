@@ -1,9 +1,10 @@
 using System.Collections.Concurrent;
 using Themearr.API.Data;
+using Themearr.API.Services.Sources;
 
 namespace Themearr.API.Services;
 
-public class SyncService(Database db, PlexService plex, ILogger<SyncService> log)
+public class SyncService(Database db, LibrarySourceResolver sources, ILogger<SyncService> log)
 {
     private readonly SemaphoreSlim _lock = new(1, 1);
     private readonly ConcurrentQueue<string> _logs = new();
@@ -50,11 +51,23 @@ public class SyncService(Database db, PlexService plex, ILogger<SyncService> log
     {
         try
         {
-            AddLog("Starting Plex sync...");
-            var movies = await plex.FetchMoviesAsync(AddLog);
+            var source = sources.Active;
+            AddLog($"Starting {source.Name} sync...");
+            var movies = await source.FetchAsync(AddLog, CancellationToken.None);
             AddLog($"Upserting {movies.Count} matched movies into the local database");
             db.UpsertMovies(movies);
             _synced = movies.Count;
+
+            // Only prune after a sync that actually returned something: identity is the
+            // folder now, so a mapping change re-keys everything and would otherwise
+            // leave the old rows as permanent phantoms. Pruning on an empty result
+            // would instead delete the entire library.
+            if (movies.Count > 0)
+            {
+                var removed = db.PruneMoviesExcept(movies.Select(m => m.Folder));
+                if (removed > 0) AddLog($"Removed {removed} movies no longer in the library");
+            }
+
             AddLog($"Sync complete. {movies.Count} movies available locally.");
         }
         catch (Exception ex)
