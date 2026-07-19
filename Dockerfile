@@ -1,5 +1,8 @@
 # ── Stage 1: Build Next.js frontend ─────────────────────────────────────────
-FROM node:22-slim AS frontend-build
+# Pin build stages to the native BUILDPLATFORM: the outputs (static export +
+# portable .NET IL) are architecture-independent, so multi-arch images build
+# fast without emulating npm/dotnet under QEMU for arm64.
+FROM --platform=$BUILDPLATFORM node:22-slim AS frontend-build
 WORKDIR /frontend
 
 COPY src/Themearr.Web/package.json src/Themearr.Web/package-lock.json* ./
@@ -10,7 +13,7 @@ RUN npm run build
 # Output is in /frontend/out (static export)
 
 # ── Stage 2: Build .NET API ───────────────────────────────────────────────────
-FROM mcr.microsoft.com/dotnet/sdk:9.0 AS api-build
+FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:9.0 AS api-build
 WORKDIR /src
 
 COPY src/Themearr.API/ ./

@@ -1,10 +1,13 @@
 services:
   themearr:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        APP_VERSION: dev
+    # Pull the published multi-arch image — updates are just `docker compose pull`.
+    image: ghcr.io/themearr/themearr:latest
+    # To build from source instead, comment out `image:` above and uncomment:
+    # build:
+    #   context: .
+    #   dockerfile: Dockerfile
+    #   args:
+    #     APP_VERSION: dev
     container_name: themearr
     ports:
       # Bound to loopback only — put a reverse proxy (caddy/nginx) in front for
@@ -14,7 +17,8 @@ services:
       # Persist database and config
       - themearr-data:/opt/themearr/data
       # Mount your movie library — REQUIRED: edit the host path before `docker compose up`.
-      - /path/to/your/movies:/movies:ro
+      # Must be writable (no `:ro`) — Themearr writes theme.mp3 into each movie folder.
+      - /path/to/your/movies:/movies
     environment:
       - DB_PATH=/opt/themearr/data/themearr.db
       - ASPNETCORE_ENVIRONMENT=Production
