@@ -5,7 +5,7 @@ using Themearr.API.Services.Sources;
 namespace Themearr.API.Services;
 
 /// <summary>
-/// Background service that triggers a Plex sync once per day when auto-sync is enabled.
+/// Background service that triggers a library sync once per day when auto-sync is enabled.
 /// Also serves the System → Tasks "Sync Library" row: it reports each run into the
 /// <see cref="TaskRegistry"/> and wakes early when the user clicks "Run now".
 /// </summary>
@@ -131,7 +131,7 @@ public class AutoSyncService(
             }
         }
 
-        log.LogInformation("AutoSync: starting {Kind} Plex sync", forced ? "manual" : "scheduled");
+        log.LogInformation("AutoSync: starting {Kind} library sync", forced ? "manual" : "scheduled");
 
         var startedAt = DateTime.UtcNow;
         var sw = Stopwatch.StartNew();

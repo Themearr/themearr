@@ -62,10 +62,22 @@ public class SyncService(Database db, LibrarySourceResolver sources, ILogger<Syn
             // folder now, so a mapping change re-keys everything and would otherwise
             // leave the old rows as permanent phantoms. Pruning on an empty result
             // would instead delete the entire library.
-            if (movies.Count > 0)
+            //
+            // Also skip pruning when the source could not resolve everything (e.g. a
+            // library mount is down). An unresolved movie is silently absent from
+            // `movies` rather than reported as missing, so a partial outage would
+            // otherwise look identical to a real removal and prune the movie away —
+            // including ones the user had explicitly ignored. PlexService records how
+            // many it could not resolve; only prune once that count is back to zero.
+            var unresolved = int.TryParse(db.GetSetting("last_sync_unresolved_count", "0"), out var n) ? n : 0;
+            if (movies.Count > 0 && unresolved == 0)
             {
                 var removed = db.PruneMoviesExcept(movies.Select(m => m.Folder));
                 if (removed > 0) AddLog($"Removed {removed} movies no longer in the library");
+            }
+            else if (movies.Count > 0)
+            {
+                AddLog($"Skipped pruning: {unresolved} movie(s) could not be resolved this sync");
             }
 
             AddLog($"Sync complete. {movies.Count} movies available locally.");

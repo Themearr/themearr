@@ -1,4 +1,5 @@
 using Themearr.API.Data;
+using Themearr.API.Services;
 
 namespace Themearr.API.Tests;
 
@@ -81,6 +82,51 @@ public class PruneTests
             new MovieRecord(dir2.Path, "test", "2", "Movie Two", 2021, ""),
         ]);
 
+        var deleted = db.PruneMoviesExcept([dir1.Path]);
+
+        Assert.Equal(1, deleted);
+        var remaining = Assert.Single(db.GetAllMovies());
+        Assert.Equal(dir1.Path, remaining["folderName"]?.ToString());
+    }
+
+    [Fact]
+    public void An_ignored_movie_absent_from_the_kept_set_is_not_deleted()
+    {
+        using var dir1 = new TempDir();
+        using var dir2 = new TempDir();
+
+        var db = NewDb();
+        db.UpsertMovies(
+        [
+            new MovieRecord(dir1.Path, "test", "1", "Movie One", 2020, ""),
+            new MovieRecord(dir2.Path, "test", "2", "Movie Two", 2021, ""),
+        ]);
+
+        // The user has explicitly ignored dir2's movie. A sync that no longer sees it
+        // (e.g. a down library mount) must not silently reverse that decision.
+        db.SetMovieIgnored(MovieFolderId.For(dir2.Path), true);
+
+        var deleted = db.PruneMoviesExcept([dir1.Path]);
+
+        Assert.Equal(0, deleted);
+        Assert.Equal(2, db.GetAllMovies().Count);
+    }
+
+    [Fact]
+    public void A_non_ignored_movie_absent_from_the_kept_set_is_still_deleted()
+    {
+        using var dir1 = new TempDir();
+        using var dir2 = new TempDir();
+
+        var db = NewDb();
+        db.UpsertMovies(
+        [
+            new MovieRecord(dir1.Path, "test", "1", "Movie One", 2020, ""),
+            new MovieRecord(dir2.Path, "test", "2", "Movie Two", 2021, ""),
+        ]);
+
+        // The ignored guard must protect only ignored rows — pruning of ordinary
+        // removed movies must still work, or the guard would disable pruning entirely.
         var deleted = db.PruneMoviesExcept([dir1.Path]);
 
         Assert.Equal(1, deleted);

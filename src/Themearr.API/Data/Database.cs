@@ -96,8 +96,9 @@ public class Database(string dbPath)
     ///
     /// Runs in a transaction: the earlier rebuild-style migration in this file renames
     /// the table before recreating it, so a failure partway would leave an install with
-    /// no movies table at all. SQLite supports transactional DDL, so a failure here
-    /// rolls back and the app starts on the old schema instead.
+    /// no movies table at all. SQLite supports transactional DDL, so a failure here rolls
+    /// back and the table is never left half-migrated — the upgrade can simply be retried
+    /// against intact data.
     /// </summary>
     private static void MigrateMoviesTableV4(SqliteConnection conn)
     {
@@ -407,7 +408,11 @@ public class Database(string dbPath)
     /// <summary>
     /// Deletes movies whose folder was not in the most recent sync. Callers MUST only
     /// invoke this after a sync that both succeeded and returned results — pruning on a
-    /// failed or empty sync would empty the library. Returns the number removed.
+    /// failed or empty sync would empty the library. Rows with <c>ignored = 1</c> are
+    /// never deleted, even when absent from the kept set: an ignored movie reflects an
+    /// explicit user decision, and silently reversing that (only for the movie to
+    /// re-sync as pending and get auto-downloaded into a folder the user opted out of)
+    /// is worse than leaving a harmless phantom row behind. Returns the number removed.
     /// </summary>
     public int PruneMoviesExcept(IEnumerable<string> keptFolders)
     {
@@ -423,10 +428,10 @@ public class Database(string dbPath)
 
         using var conn = Open();
         var doomed = new List<string>();
-        conn.Query("SELECT id FROM movies", r =>
+        conn.Query("SELECT id, ignored FROM movies", r =>
         {
             while (r.Read())
-                if (!keep.Contains(r.GetString(0))) doomed.Add(r.GetString(0));
+                if (!keep.Contains(r.GetString(0)) && r.GetInt64(1) == 0) doomed.Add(r.GetString(0));
         });
 
         using var tx = conn.BeginTransaction();

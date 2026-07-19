@@ -50,8 +50,8 @@ This spec is implemented in two stages, each with its own implementation plan.
 
 | Stage | Contents | User-visible change |
 |---|---|---|
-| **B1** | `ILibrarySource` + `LibrarySourceResolver`, `PlexLibrarySource`, the `LocalFolderResolver` extraction, folder identity, the schema migration, pruning, `TaskRegistry.UpdateInterval` | **none** — Plex remains the only source |
-| **B2** | `RadarrLibrarySource`, settings and secret handling, the setup-wizard branch, source-aware posters, `LibrarySourceCheck` | Radarr becomes selectable |
+| **B1** | `ILibrarySource` + `LibrarySourceResolver`, `PlexLibrarySource`, the `LocalFolderResolver` extraction, folder identity, the schema migration, pruning | **none** — Plex remains the only source |
+| **B2** | `RadarrLibrarySource`, settings and secret handling, the setup-wizard branch, source-aware posters, `LibrarySourceCheck`, `TaskRegistry.UpdateInterval` | Radarr becomes selectable |
 
 The split is about blast radius, not tidiness. B1 migrates every existing user's
 `movies` table while changing nothing they can see, so a post-upgrade problem has
