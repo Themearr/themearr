@@ -77,6 +77,18 @@ export default function QueuePage() {
       .finally(() => setSearching(false))
   }
 
+  // Declared before its first use — a hoisted call from above reads as a stale
+  // reference to React's compiler lint (react-hooks/immutability).
+  function advanceQueue() {
+    setCurrentIdx((i: number) => i + 1)
+    setResults([])
+    setError('')
+    setManualUrl('')
+    setDownloading(false)
+    setDownloadLogs([])
+    downloadingMovieId.current = null
+  }
+
   async function skipForever() {
     if (!current) return
     try { await moviesApi.ignoreMovie(current.id) } catch { /* ignore */ }
@@ -132,18 +144,7 @@ export default function QueuePage() {
     }, 1000)
 
     return () => clearInterval(id)
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [downloading])
-
-  function advanceQueue() {
-    setCurrentIdx((i: number) => i + 1)
-    setResults([])
-    setError('')
-    setManualUrl('')
-    setDownloading(false)
-    setDownloadLogs([])
-    downloadingMovieId.current = null
-  }
 
   async function doDownload(videoId: string) {
     if (!current) return

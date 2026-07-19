@@ -41,8 +41,14 @@ export function MovieGrid({ movies, onMovieUpdated }: MovieGridProps) {
   const [limit, setLimit] = useState(BATCH)
   const sentinelRef = useRef<HTMLDivElement | null>(null)
 
-  // Reset paging whenever the filtered set changes.
-  useEffect(() => { setLimit(BATCH) }, [filter, search])
+  // Reset paging whenever the filtered set changes. Done during render (React's
+  // "adjusting state when props change" pattern) rather than in an effect, which
+  // would trigger an extra cascading render.
+  const [pagedFor, setPagedFor] = useState({ filter, search })
+  if (pagedFor.filter !== filter || pagedFor.search !== search) {
+    setPagedFor({ filter, search })
+    setLimit(BATCH)
+  }
 
   const shown   = visible.slice(0, limit)
   const hasMore = limit < visible.length
@@ -223,7 +229,7 @@ function MovieActionModal({ movie, onClose, onUpdated }: {
 
           {movie.status === 'ignored' && (
             <div className="space-y-3">
-              <p className="text-sm text-[#667085]">This movie is ignored and won't appear in the queue.</p>
+              <p className="text-sm text-[#667085]">This movie is ignored and won&apos;t appear in the queue.</p>
               <Button className="w-full" size="sm" onClick={unignore} loading={ignoring}>
                 Remove from ignore list
               </Button>
