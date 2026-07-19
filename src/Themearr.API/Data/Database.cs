@@ -109,14 +109,19 @@ public class Database(string dbPath)
 
         if (columns.Contains("source") || !columns.Contains("plex_rating_key")) return;
 
+        // Everything below — including the read of the pre-migration rows — runs inside
+        // the transaction so there is a consistent snapshot of "movies" for the duration
+        // of the migration, not just for the destructive DDL that follows it.
+        using var tx = conn.BeginTransaction();
+
         // old id → new id, for rewriting history afterwards
         var remap = new Dictionary<string, string>(StringComparer.Ordinal);
-        var rows = new List<(string NewId, string Folder, string Source, string SourceRef,
-                             string Title, object? Year, string SourcePath, string Status, long Ignored)>();
-        var seenIds = new HashSet<string>(StringComparer.Ordinal);
+        var raw = new List<(string NewId, string Folder, string Source, string SourceRef,
+                             string Title, object? Year, string SourcePath, string Status,
+                             long Ignored, string? SyncedAt)>();
 
         conn.Query(
-            "SELECT id, plex_server_id, plex_rating_key, title, year, sourcePath, folderName, status, ignored FROM movies",
+            "SELECT id, plex_server_id, plex_rating_key, title, year, sourcePath, folderName, status, ignored, synced_at FROM movies",
             r =>
             {
                 while (r.Read())
@@ -128,19 +133,32 @@ public class Database(string dbPath)
 
                     var newId = MovieFolderId.For(folder);
                     remap[oldId] = newId;
-                    // Two folders differing only by trailing separators normalize to one id; first wins.
-                    if (!seenIds.Add(newId)) continue;
 
-                    rows.Add((newId, folder, "plex", $"{r.GetString(1)}:{r.GetString(2)}",
+                    raw.Add((newId, folder, "plex", $"{r.GetString(1)}:{r.GetString(2)}",
                               r.GetString(3), r.IsDBNull(4) ? null : r.GetInt32(4),
                               r.IsDBNull(5) ? "" : r.GetString(5),
-                              r.GetString(7), r.IsDBNull(8) ? 0L : r.GetInt64(8)));
+                              r.GetString(7), r.IsDBNull(8) ? 0L : r.GetInt64(8),
+                              r.IsDBNull(9) ? null : r.GetString(9)));
                 }
             });
 
-        using var tx = conn.BeginTransaction();
+        // Two folders differing only by trailing separators normalize to one id; the first
+        // row wins for the display fields (status is re-derived from disk regardless), but
+        // if any collapsed row was ignored the user's choice must not be silently dropped.
+        var ignoredByFolder = raw
+            .GroupBy(x => x.NewId, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.Any(x => x.Ignored != 0), StringComparer.Ordinal);
 
-        conn.Execute("DROP TABLE IF EXISTS movies_v4_old");
+        var seenIds = new HashSet<string>(StringComparer.Ordinal);
+        var rows = new List<(string NewId, string Folder, string Source, string SourceRef,
+                             string Title, object? Year, string SourcePath, string Status,
+                             long Ignored, string? SyncedAt)>();
+        foreach (var row in raw)
+        {
+            if (!seenIds.Add(row.NewId)) continue;
+            rows.Add(row with { Ignored = ignoredByFolder[row.NewId] ? 1L : 0L });
+        }
+
         conn.Execute("ALTER TABLE movies RENAME TO movies_v4_old");
         conn.Execute("""
             CREATE TABLE movies (
@@ -160,11 +178,11 @@ public class Database(string dbPath)
         foreach (var row in rows)
             conn.Execute("""
                 INSERT INTO movies (id, folderName, source, source_ref, title, year, sourcePath, status, ignored, synced_at)
-                VALUES (@id, @f, @src, @ref, @t, @y, @sp, @s, @ig, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+                VALUES (@id, @f, @src, @ref, @t, @y, @sp, @s, @ig, COALESCE(@sa, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')))
                 """,
                 ("@id", row.NewId), ("@f", row.Folder), ("@src", row.Source), ("@ref", row.SourceRef),
                 ("@t", row.Title), ("@y", row.Year ?? (object)DBNull.Value), ("@sp", row.SourcePath),
-                ("@s", row.Status), ("@ig", row.Ignored));
+                ("@s", row.Status), ("@ig", row.Ignored), ("@sa", (object?)row.SyncedAt ?? DBNull.Value));
 
         // History rows already carry title and year, so any that fail to remap still
         // display correctly rather than going blank.
@@ -183,6 +201,13 @@ public class Database(string dbPath)
         var columns = new HashSet<string>();
         using (var r = cmd.ExecuteReader())
             while (r.Read()) columns.Add(r.GetString(1));
+
+        // Already on the modern (source-keyed) schema. Post-V4 the table has neither
+        // plex_server_id nor plex_rating_key, so without this guard every subsequent
+        // startup would think a legacy migration is still needed and would rename the
+        // table, recreate the OLD schema, and copy only id/title/year/folderName/status —
+        // silently dropping ignored flags, source_ref (Plex identity), and sourcePath.
+        if (columns.Contains("source")) return;
 
         var required = new[] { "id", "plex_server_id", "plex_rating_key", "title", "year", "sourcePath", "folderName", "status" };
         if (required.All(c => columns.Contains(c))) return;
