@@ -175,20 +175,36 @@ public sealed record TaskState(
 /// </summary>
 public sealed class TaskRegistry
 {
+    // Bundles the four run-state fields so RecordRun and MarkRunning publish them
+    // as a single atomic swap. Without this, a reader on another thread could see a
+    // torn mix of old and new values (a fresh LastRunUtc paired with a stale
+    // LastResult), since nothing orders four separate field writes.
+    private sealed record RunState(DateTime? LastRunUtc, long? LastDurationMs, string? LastResult, bool IsRunning)
+    {
+        public static readonly RunState Initial = new(null, null, null, false);
+    }
+
     private sealed class Entry
     {
         public required string   Name     { get; init; }
         public required TimeSpan Interval { get; init; }
 
-        public DateTime? LastRunUtc;
-        public long?     LastDurationMs;
-        public string?   LastResult;
-        public bool      IsRunning;
+        private RunState _state = RunState.Initial;
 
-        // Capacity 1 + DropWrite is the whole debounce: an impatient user clicking
-        // "Run now" five times queues one run, not five library syncs.
+        public RunState State
+        {
+            get => Volatile.Read(ref _state);
+            set => Volatile.Write(ref _state, value);
+        }
+
+        // Capacity 1 is the whole debounce: an impatient user clicking "Run now"
+        // five times queues one run, not five library syncs.
+        // FullMode must be Wait, not DropWrite — with any Drop* mode TryWrite always
+        // returns true (it discards the incoming item silently), so the caller cannot
+        // tell "queued" from "already queued". Wait keeps the pending item and makes
+        // TryWrite return false when full; TryWrite never blocks.
         public readonly Channel<byte> Trigger = Channel.CreateBounded<byte>(
-            new BoundedChannelOptions(1) { FullMode = BoundedChannelFullMode.DropWrite });
+            new BoundedChannelOptions(1) { FullMode = BoundedChannelFullMode.Wait });
     }
 
     private readonly ConcurrentDictionary<string, Entry> _tasks = new();
@@ -215,29 +231,30 @@ public sealed class TaskRegistry
 
     public void MarkRunning(string id, bool running)
     {
-        if (_tasks.TryGetValue(id, out var e)) e.IsRunning = running;
+        if (_tasks.TryGetValue(id, out var e)) e.State = e.State with { IsRunning = running };
     }
 
     public void RecordRun(string id, DateTime startedUtc, TimeSpan duration, string result)
     {
         if (!_tasks.TryGetValue(id, out var e)) return;
-        e.LastRunUtc     = startedUtc;
-        e.LastDurationMs = (long)duration.TotalMilliseconds;
-        e.LastResult     = result;
-        e.IsRunning      = false;
+        e.State = new RunState(startedUtc, (long)duration.TotalMilliseconds, result, false);
     }
 
     public IReadOnlyList<TaskState> Snapshot() =>
         _tasks
-            .Select(kv => new TaskState(
-                kv.Key,
-                kv.Value.Name,
-                kv.Value.Interval,
-                kv.Value.LastRunUtc,
-                kv.Value.LastDurationMs,
-                kv.Value.LastResult,
-                kv.Value.LastRunUtc is { } last ? last + kv.Value.Interval : null,
-                kv.Value.IsRunning))
+            .Select(kv =>
+            {
+                var state = kv.Value.State;
+                return new TaskState(
+                    kv.Key,
+                    kv.Value.Name,
+                    kv.Value.Interval,
+                    state.LastRunUtc,
+                    state.LastDurationMs,
+                    state.LastResult,
+                    state.LastRunUtc is { } last ? last + kv.Value.Interval : null,
+                    state.IsRunning);
+            })
             .OrderBy(t => t.Name, StringComparer.Ordinal)
             .ToList();
 }
