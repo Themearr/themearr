@@ -1,6 +1,7 @@
 import type {
   Movie, YoutubeResult, PlexServer, PlexLibrary,
   SetupStatus, Settings, SyncStatus, VersionInfo, HistoryEntry, DashboardStats,
+  HealthResponse, SystemTask,
 } from './types'
 
 const BASE = (import.meta.env.VITE_API_URL ?? '').replace(/\/$/, '')
@@ -211,4 +212,15 @@ export const versionApi = {
   refresh: () => request<VersionInfo>('/api/version/refresh', { method: 'POST' }),
   update:  () => request<{ started: boolean }>('/api/update', { method: 'POST' }),
   updateStatus: () => request<{ inProgress: boolean; finished: boolean; error: string; logs: string[] }>('/api/update/status'),
+}
+
+// ── System (health + tasks) ───────────────────────────────────────────────────
+
+export const systemApi = {
+  health: () => request<HealthResponse>('/api/system/health'),
+  tasks:  () => request<SystemTask[]>('/api/system/tasks'),
+  runTask: (id: string) =>
+    request<{ started: boolean }>(`/api/system/tasks/${encodeURIComponent(id)}/run`, {
+      method: 'POST',
+    }),
 }

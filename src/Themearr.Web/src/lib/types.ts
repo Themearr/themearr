@@ -103,3 +103,33 @@ export interface VersionInfo {
   checkError: string
   repo: string
 }
+
+export type HealthType = 'ok' | 'warning' | 'error'
+
+export interface HealthItem {
+  source: string
+  type: HealthType
+  message: string
+  wikiUrl: string | null
+}
+
+export interface HealthResponse {
+  status: HealthType
+  checks: HealthItem[]
+}
+
+export interface SystemTask {
+  id: string
+  name: string
+  /**
+   * Serialized .NET TimeSpan in the constant format `[d.]hh:mm:ss`, e.g.
+   * "1.00:00:00" for 24 hours (the leading "1." is a day component, not
+   * an hour count).
+   */
+  interval: string
+  lastRunUtc: string | null
+  lastDurationMs: number | null
+  lastResult: string | null
+  nextRunUtc: string | null
+  isRunning: boolean
+}

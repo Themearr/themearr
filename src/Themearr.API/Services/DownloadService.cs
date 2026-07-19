@@ -5,7 +5,7 @@ namespace Themearr.API.Services;
 
 public class DownloadService(
     IThemeAudioProvider provider, Database db, IHttpClientFactory httpClientFactory,
-    IConfiguration config, ILogger<DownloadService> log)
+    IConfiguration config, ILogger<DownloadService> log) : Health.IQuotaStatus
 {
     private sealed record JobState(bool InProgress, bool Finished, string? Error, DateTime StartedAtUtc = default);
     private readonly ConcurrentDictionary<string, JobState>          _jobs    = new();
@@ -91,7 +91,7 @@ public class DownloadService(
         if (!isProviderUrl) return null;
         if (provider.CheckConfiguration() is { } notReady) return notReady;
         if (IsQuotaCoolingDown(out var until))
-            return $"RapidAPI quota is exhausted — downloads are paused until {until:HH:mm} UTC. Try again later.";
+            return $"{Health.QuotaMessages.CooldownUntil(until)}. Try again later.";
         return null;
     }
 

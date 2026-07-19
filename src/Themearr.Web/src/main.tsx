@@ -12,6 +12,7 @@ import MoviesPage from './app/movies/page'
 import QueuePage from './app/queue/page'
 import SettingsPage from './app/settings/page'
 import SetupPage from './app/setup/page'
+import SystemPage from './app/system/page'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
@@ -26,6 +27,7 @@ createRoot(document.getElementById('root')!).render(
           <Route path="/queue" element={<QueuePage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/setup" element={<SetupPage />} />
+          <Route path="/system" element={<SystemPage />} />
           {/* Unknown paths fall back to the root redirect, which routes by auth state. */}
           <Route path="*" element={<RootPage />} />
         </Routes>

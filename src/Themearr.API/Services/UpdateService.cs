@@ -14,10 +14,7 @@ public class UpdateService(Database db, IConfiguration config)
     private volatile bool _finished;
     private string _error = "";
 
-    private string GithubRepo =>
-        Environment.GetEnvironmentVariable("GITHUB_REPO")
-        ?? config["Themearr:GithubRepo"]
-        ?? "Themearr/themearr";
+    private string GithubRepo => GithubRepoResolver.Resolve(config);
 
     private string CurrentVersion()
     {

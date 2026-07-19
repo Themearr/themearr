@@ -1,6 +1,6 @@
 import { Link, useLocation } from 'react-router-dom'
 import { useEffect, useState } from 'react'
-import { syncApi, versionApi } from '@/lib/api'
+import { syncApi, versionApi, systemApi } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { Spinner } from '@/components/ui'
 import type { VersionInfo } from '@/lib/types'
@@ -59,6 +59,17 @@ const NAV = [
       </svg>
     ),
   },
+  {
+    href: '/system',
+    label: 'System',
+    icon: (
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+        <rect x="2" y="4" width="20" height="14" rx="2" />
+        <path d="M8 20h8M12 18v2" />
+        <path d="M6 9h4M6 12h7" />
+      </svg>
+    ),
+  },
 ]
 
 export function Sidebar() {
@@ -66,6 +77,7 @@ export function Sidebar() {
   const { accountName, logout } = useAuth()
   const [version, setVersion] = useState<VersionInfo | null>(null)
   const [syncing, setSyncing] = useState(false)
+  const [healthIssues, setHealthIssues] = useState(0)
 
   useEffect(() => {
     versionApi.get().then(setVersion).catch(() => null)
@@ -78,6 +90,19 @@ export function Sidebar() {
         .then(s => setSyncing(s.inProgress))
         .catch(() => null)
     }, 3000)
+    return () => clearInterval(id)
+  }, [])
+
+  // Health badge. The server caches the report for 60s, so this interval costs one
+  // real probe per minute no matter how many tabs are open.
+  useEffect(() => {
+    function check() {
+      systemApi.health()
+        .then(h => setHealthIssues(h.checks.length))
+        .catch(() => null)
+    }
+    check()
+    const id = setInterval(check, 60000)
     return () => clearInterval(id)
   }, [])
 
@@ -96,6 +121,7 @@ export function Sidebar() {
         {NAV.map(({ href, label, icon }) => {
           const active = pathname.startsWith(href)
           const showSyncBadge = label === 'Movies' && syncing
+          const showHealthBadge = label === 'System' && healthIssues > 0
           return (
             <Link
               key={href}
@@ -110,6 +136,11 @@ export function Sidebar() {
               <span className={active ? 'text-[#CC3333]' : 'text-[#475467]'}>{icon}</span>
               <span className="flex-1">{label}</span>
               {showSyncBadge && <Spinner size={12} className="text-[#F79009]" />}
+              {showHealthBadge && (
+                <span className="rounded-full bg-[#F04438] px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">
+                  {healthIssues}
+                </span>
+              )}
             </Link>
           )
         })}

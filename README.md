@@ -27,6 +27,7 @@ Themearr signs in with your Plex account, reads your movie libraries, and helps 
 - Automatic background downloading across the whole library
 - Paste any video URL to use a custom source
 - Downloaded status tracked per movie, verified against what's on disk
+- System page with health checks and scheduled tasks, arr-style
 
 ## Downloads require a RapidAPI key
 
@@ -90,6 +91,20 @@ Example — Plex on Windows, Themearr in Docker:
 If sync logs `Skipping <title> — unresolved path: <path>`, that logged path is exactly what Plex reported — map its parent folder to wherever it's mounted in Themearr. Windows-style (`\`) paths are handled automatically.
 
 Also make sure the movie mount is **writable** — a read-only mount resolves fine but silently fails every download.
+
+## Health checks
+
+**System → Health** flags the things that silently break downloads: a library path
+that is missing or read-only, a Plex server that is unreachable or has rejected its
+token, a missing RapidAPI key, an exhausted quota, and a stalled auto-download
+worker. Only problems are listed, so an empty page means everything is fine.
+
+**System → Tasks** shows when the library last synced and lets you trigger a sync
+immediately with *Run now*.
+
+For external monitoring, Themearr exposes an unauthenticated `/health` endpoint
+that returns `{"status":"Healthy"}` and nothing else — enough for Uptime Kuma or
+Gatus, without leaking any configuration.
 
 ## Updating
 

@@ -12,7 +12,7 @@ public class AutoDownloadService(
     IServiceProvider services,
     DownloadService  download,
     IThemeAudioProvider provider,
-    ILogger<AutoDownloadService> log) : BackgroundService
+    ILogger<AutoDownloadService> log) : BackgroundService, Health.IDownloadWorkerStatus
 {
     private static readonly TimeSpan CheckInterval    = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan ErrorCooldown    = TimeSpan.FromHours(1);
@@ -24,10 +24,25 @@ public class AutoDownloadService(
     private string? _lastStartedMovieId;
 
     // ── Diagnostic state (exposed via GET /api/auto-download/debug) ──────────
-    private DateTime? _lastTickAt;
-    private string    _lastTickResult = "never run";
-    private int       _ticksCompleted;
-    private int       _downloadsStarted;
+    // Published as one immutable value so a reader on another thread always sees a
+    // coherent timestamp/result pair — DownloadWorkerCheck renders them together, and
+    // a torn read would describe the wrong tick. Same pattern as TaskRegistry.
+    private sealed record TickState(DateTime? At, string Result);
+
+    private TickState _tick = new(null, "never run");
+
+    private TickState Tick
+    {
+        get => Volatile.Read(ref _tick);
+        set => Volatile.Write(ref _tick, value);
+    }
+
+    private int _ticksCompleted;
+    private int _downloadsStarted;
+
+    // Exposed for DownloadWorkerCheck: "is the worker alive, and what did it last do".
+    public DateTime? LastTickAt     => Tick.At;
+    public string    LastTickResult => Tick.Result;
 
     public object GetDiagnostics()
     {
@@ -42,8 +57,8 @@ public class AutoDownloadService(
             quotaCooldownUntil = quotaUntil == DateTime.MinValue ? (DateTime?)null : quotaUntil,
             downloadInProgress = download.IsAnyInProgress(),
             lastStartedMovieId = _lastStartedMovieId,
-            lastTickAt         = _lastTickAt,
-            lastTickResult     = _lastTickResult,
+            lastTickAt         = Tick.At,
+            lastTickResult     = Tick.Result,
             ticksCompleted     = _ticksCompleted,
             downloadsStarted   = _downloadsStarted,
             pendingCount       = db.GetAllMovies().Count(m => (m["status"]?.ToString() ?? "") == "pending"),
@@ -67,13 +82,13 @@ public class AutoDownloadService(
             try { await TryAutoDownloadOne(); }
             catch (Exception ex)
             {
-                _lastTickResult = $"exception: {ex.Message}";
+                Tick = Tick with { Result = "last tick failed — see the application log" };
                 log.LogWarning(ex, "AutoDownload tick failed");
             }
             finally
             {
                 _ticksCompleted++;
-                _lastTickAt = DateTime.UtcNow;
+                Tick = Tick with { At = DateTime.UtcNow };
             }
 
             await Task.Delay(CheckInterval, ct);
@@ -88,12 +103,12 @@ public class AutoDownloadService(
 
         if (db.GetSetting("auto_download", "false") != "true")
         {
-            _lastTickResult = "skipped: auto_download is off";
+            Tick = Tick with { Result = "skipped: auto_download is off" };
             return;
         }
         if (!db.IsSetupComplete())
         {
-            _lastTickResult = "skipped: setup not complete";
+            Tick = Tick with { Result = "skipped: setup not complete" };
             return;
         }
 
@@ -101,7 +116,7 @@ public class AutoDownloadService(
         // surface the actionable reason instead of failing one movie per tick.
         if (provider.CheckConfiguration() is { } notReady)
         {
-            _lastTickResult = $"skipped: {notReady}";
+            Tick = Tick with { Result = $"skipped: {notReady}" };
             return;
         }
 
@@ -109,14 +124,14 @@ public class AutoDownloadService(
         // hammering the API until it clears.
         if (download.IsQuotaCoolingDown(out var quotaUntil))
         {
-            _lastTickResult = $"skipped: RapidAPI quota cooldown until {quotaUntil:o}";
+            Tick = Tick with { Result = $"skipped: RapidAPI quota cooldown until {quotaUntil:o}" };
             return;
         }
 
         // One download at a time — respect whatever the user or the queue page already started.
         if (download.IsAnyInProgress())
         {
-            _lastTickResult = "skipped: a download is in progress";
+            Tick = Tick with { Result = "skipped: a download is in progress" };
             return;
         }
 
@@ -139,9 +154,12 @@ public class AutoDownloadService(
 
         if (candidate == null)
         {
-            _lastTickResult = pending.Count == 0
-                ? "skipped: no pending movies"
-                : $"skipped: all {pending.Count} pending movies are in cooldown";
+            Tick = Tick with
+            {
+                Result = pending.Count == 0
+                    ? "skipped: no pending movies"
+                    : $"skipped: all {pending.Count} pending movies are in cooldown",
+            };
             return;
         }
 
@@ -159,7 +177,7 @@ public class AutoDownloadService(
         {
             log.LogWarning(ex, "AutoDownload: YouTube search failed for {Title}", LogSanitizer.Clean(title));
             _cooldownUntil[movieId] = DateTime.UtcNow + ErrorCooldown;
-            _lastTickResult = $"search failed for '{title}': {ex.Message}";
+            Tick = Tick with { Result = $"search failed for '{title}' — see the application log" };
             return;
         }
 
@@ -169,7 +187,7 @@ public class AutoDownloadService(
             log.LogInformation("AutoDownload: no confident match for '{Title}' — backing off {Hrs}h",
                 LogSanitizer.Clean(title), NoMatchCooldown.TotalHours);
             _cooldownUntil[movieId] = DateTime.UtcNow + NoMatchCooldown;
-            _lastTickResult = $"no confident match for '{title}'; cooldown {NoMatchCooldown.TotalHours}h";
+            Tick = Tick with { Result = $"no confident match for '{title}'; cooldown {NoMatchCooldown.TotalHours}h" };
             return;
         }
 
@@ -181,13 +199,13 @@ public class AutoDownloadService(
         {
             // Raced with another starter — try again next tick.
             _cooldownUntil[movieId] = DateTime.UtcNow + ErrorCooldown;
-            _lastTickResult = $"race: Start() returned false for '{title}'";
+            Tick = Tick with { Result = $"race: Start() returned false for '{title}'" };
             return;
         }
 
         _lastStartedMovieId = movieId;
         _downloadsStarted++;
-        _lastTickResult = $"started '{title}' → {videoId}";
+        Tick = Tick with { Result = $"started '{title}' → {videoId}" };
     }
 
     private void ExpireCooldowns()

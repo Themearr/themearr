@@ -221,54 +221,86 @@ public class PlexService(HttpClient http, Database db)
         var result    = new List<MovieRecord>();
         var seen      = new HashSet<string>();
 
-        foreach (var srv in servers)
+        // Movies skipped because no local folder could be resolved. Recorded into
+        // settings at the end so LibraryPathsCheck can warn about a broken Path
+        // Mapping — these movies never enter the DB, so they cannot be counted later.
+        var unresolvedCount  = 0;
+        var unresolvedSample = "";
+
+        try
         {
-            var serverId  = srv.GetValueOrDefault("id", "")?.ToString()?.Trim() ?? "";
-            var serverName = srv.GetValueOrDefault("name", "")?.ToString()?.Trim() ?? "";
-            var primaryUrl = srv.GetValueOrDefault("url", "")?.ToString()?.Trim() ?? "";
-            var urlList   = srv.GetValueOrDefault("urls") is JsonElement je && je.ValueKind == JsonValueKind.Array
-                ? je.EnumerateArray().Select(u => u.GetString() ?? "").Where(u => !string.IsNullOrEmpty(u)).ToList()
-                : new List<string> { primaryUrl };
-            var serverToken = srv.GetValueOrDefault("token", "")?.ToString()?.Trim() ?? "";
-
-            if (string.IsNullOrEmpty(serverId) || string.IsNullOrEmpty(serverToken)) continue;
-            logFn?.Invoke($"Using Plex server: {serverName}");
-
-            var libs = await ListLibrariesAsync(urlList, serverToken);
-            var selectedKeys = libMap.GetValueOrDefault(serverId, []);
-            if (selectedKeys.Count > 0) libs = libs.Where(l => selectedKeys.Contains(l["key"]?.ToString() ?? "")).ToList();
-
-            logFn?.Invoke($"Found {libs.Count} selected movie libraries on {serverName}");
-
-            foreach (var lib in libs)
+            foreach (var srv in servers)
             {
-                var sectionKey = lib["key"]?.ToString() ?? "";
-                logFn?.Invoke($"Scanning library: {lib["title"]}");
+                var serverId  = srv.GetValueOrDefault("id", "")?.ToString()?.Trim() ?? "";
+                var serverName = srv.GetValueOrDefault("name", "")?.ToString()?.Trim() ?? "";
+                var primaryUrl = srv.GetValueOrDefault("url", "")?.ToString()?.Trim() ?? "";
+                var urlList   = srv.GetValueOrDefault("urls") is JsonElement je && je.ValueKind == JsonValueKind.Array
+                    ? je.EnumerateArray().Select(u => u.GetString() ?? "").Where(u => !string.IsNullOrEmpty(u)).ToList()
+                    : new List<string> { primaryUrl };
+                var serverToken = srv.GetValueOrDefault("token", "")?.ToString()?.Trim() ?? "";
 
-                var items = await FetchMoviesForSectionAsync(urlList, sectionKey, serverToken, clientId);
-                foreach (var item in items)
+                if (string.IsNullOrEmpty(serverId) || string.IsNullOrEmpty(serverToken)) continue;
+                logFn?.Invoke($"Using Plex server: {serverName}");
+
+                var libs = await ListLibrariesAsync(urlList, serverToken);
+                var selectedKeys = libMap.GetValueOrDefault(serverId, []);
+                if (selectedKeys.Count > 0) libs = libs.Where(l => selectedKeys.Contains(l["key"]?.ToString() ?? "")).ToList();
+
+                logFn?.Invoke($"Found {libs.Count} selected movie libraries on {serverName}");
+
+                foreach (var lib in libs)
                 {
-                    var ratingKey = item.Attribute("ratingKey")?.Value?.Trim() ?? "";
-                    if (string.IsNullOrEmpty(ratingKey)) continue;
+                    var sectionKey = lib["key"]?.ToString() ?? "";
+                    logFn?.Invoke($"Scanning library: {lib["title"]}");
 
-                    var movieId = $"{serverId}:{ratingKey}";
-                    if (!seen.Add(movieId)) continue;
+                    var items = await FetchMoviesForSectionAsync(urlList, sectionKey, serverToken, clientId);
+                    foreach (var item in items)
+                    {
+                        var ratingKey = item.Attribute("ratingKey")?.Value?.Trim() ?? "";
+                        if (string.IsNullOrEmpty(ratingKey)) continue;
 
-                    var filePath = item.Descendants("Part").FirstOrDefault()?.Attribute("file")?.Value?.Trim() ?? "";
-                    if (string.IsNullOrEmpty(filePath)) { logFn?.Invoke($"Skipping — no media path"); continue; }
+                        var movieId = $"{serverId}:{ratingKey}";
+                        if (!seen.Add(movieId)) continue;
 
-                    var title = item.Attribute("title")?.Value?.Trim() ?? "";
-                    var yearStr = item.Attribute("year")?.Value;
-                    var year = int.TryParse(yearStr, out var y) ? y : (int?)null;
+                        var filePath = item.Descendants("Part").FirstOrDefault()?.Attribute("file")?.Value?.Trim() ?? "";
+                        if (string.IsNullOrEmpty(filePath)) { logFn?.Invoke($"Skipping — no media path"); continue; }
 
-                    var (folder, mode) = ResolveLocalFolder(filePath);
-                    if (string.IsNullOrEmpty(folder)) { logFn?.Invoke($"Skipping {title} — unresolved path: {filePath}  (add a Path Mapping from this path's folder to where it's mounted in Themearr)"); continue; }
+                        var title = item.Attribute("title")?.Value?.Trim() ?? "";
+                        var yearStr = item.Attribute("year")?.Value;
+                        var year = int.TryParse(yearStr, out var y) ? y : (int?)null;
 
-                    logFn?.Invoke($"Matched: {title} ({year}) -> {folder} [{mode}]");
-                    result.Add(new MovieRecord(movieId, serverId, ratingKey, title, year, filePath, folder));
+                        var (folder, mode) = ResolveLocalFolder(filePath);
+                        if (string.IsNullOrEmpty(folder))
+                        {
+                            unresolvedCount++;
+                            if (unresolvedSample.Length == 0) unresolvedSample = filePath;
+                            logFn?.Invoke($"Skipping {title} — unresolved path: {filePath}  (add a Path Mapping from this path's folder to where it's mounted in Themearr)");
+                            continue;
+                        }
+
+                        logFn?.Invoke($"Matched: {title} ({year}) -> {folder} [{mode}]");
+                        result.Add(new MovieRecord(movieId, serverId, ratingKey, title, year, filePath, folder));
+                    }
                 }
             }
         }
+        finally
+        {
+            // Overwritten every sync, so fixing a mapping clears the health warning
+            // on the next run. Recorded here even when a sync fails partway, so the
+            // numbers always describe the most recent attempt rather than an older
+            // successful one.
+            try
+            {
+                db.SetSetting("last_sync_unresolved_count",  unresolvedCount.ToString());
+                db.SetSetting("last_sync_unresolved_sample", unresolvedSample);
+            }
+            catch (Exception)
+            {
+                /* settings write must not mask the sync error; counters are diagnostics only */
+            }
+        }
+
         return result;
     }
 
