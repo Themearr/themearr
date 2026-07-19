@@ -411,15 +411,22 @@ public class Database(string dbPath)
     /// </summary>
     public int PruneMoviesExcept(IEnumerable<string> keptFolders)
     {
-        var keep = keptFolders.Where(f => !string.IsNullOrEmpty(f)).ToHashSet(StringComparer.Ordinal);
+        // Build the kept set using derived IDs, not raw folder strings. folderName is stored
+        // verbatim (with or without trailing separators), but identity is MovieFolderId.For(folder)
+        // which normalizes those separators away. Comparing raw strings would incorrectly
+        // delete a kept folder if the caller passes it with a different trailing-separator state.
+        var keep = keptFolders
+            .Where(f => !string.IsNullOrEmpty(f))
+            .Select(f => MovieFolderId.For(f))
+            .ToHashSet(StringComparer.Ordinal);
         if (keep.Count == 0) return 0;
 
         using var conn = Open();
         var doomed = new List<string>();
-        conn.Query("SELECT id, folderName FROM movies", r =>
+        conn.Query("SELECT id FROM movies", r =>
         {
             while (r.Read())
-                if (!keep.Contains(r.GetString(1))) doomed.Add(r.GetString(0));
+                if (!keep.Contains(r.GetString(0))) doomed.Add(r.GetString(0));
         });
 
         using var tx = conn.BeginTransaction();
