@@ -6,5 +6,10 @@ namespace Themearr.API.Services.Health;
 /// </summary>
 public interface IQuotaStatus
 {
+    /// <summary>
+    /// True while downloads are paused after a quota rejection. <paramref name="untilUtc"/>
+    /// is only meaningful when this returns true — callers must not read it otherwise, as it
+    /// may hold a stale timestamp from a cooldown that has already lapsed.
+    /// </summary>
     bool IsQuotaCoolingDown(out DateTime untilUtc);
 }
