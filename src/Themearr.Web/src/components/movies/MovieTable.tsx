@@ -1,5 +1,3 @@
-'use client'
-
 import { useState } from 'react'
 import type { Movie } from '@/lib/types'
 import { Badge, Button, EmptyState } from '@/components/ui'

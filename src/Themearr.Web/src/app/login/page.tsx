@@ -1,14 +1,11 @@
-'use client'
-
-import Image from 'next/image'
 import { useEffect, useRef, useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { useNavigate } from 'react-router-dom'
 import { authApi, setupApi, setAuthToken } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { Button, Spinner } from '@/components/ui'
 
 export default function LoginPage() {
-  const router = useRouter()
+  const navigate = useNavigate()
   const { loading, authorized, connected, setupComplete, refresh } = useAuth()
   const [token, setToken] = useState('')
   const [verifying, setVerifying] = useState(false)
@@ -19,13 +16,30 @@ export default function LoginPage() {
   // Redirect if already authenticated *and* Plex connected
   useEffect(() => {
     if (!loading && authorized && connected) {
-      router.replace(setupComplete ? '/queue' : '/setup')
+      navigate(setupComplete ? '/queue' : '/setup', { replace: true })
     }
-  }, [loading, authorized, connected, setupComplete, router])
+  }, [loading, authorized, connected, setupComplete, navigate])
 
-  // Handle return from Plex OAuth
-  // We don't rely on query params (trailingSlash rewrites drop them).
-  // Instead: if plex_pin is in localStorage when the page loads, we just came back from Plex.
+  // Declared before its first use below — a hoisted call reads as a stale
+  // reference to React's compiler lint (react-hooks/immutability).
+  function beginPolling(pinId: number, code: string) {
+    setPolling(true)
+    pollRef.current = setInterval(async () => {
+      try {
+        const status = await setupApi.plexLoginStatus(pinId, code)
+        if (status.claimed) {
+          clearInterval(pollRef.current!)
+          setPolling(false)
+          await refresh()
+          const s = await setupApi.status()
+          navigate(s.setupComplete ? '/queue' : '/setup', { replace: true })
+        }
+      } catch { /* keep polling */ }
+    }, 2000)
+  }
+
+  // Handle return from Plex OAuth.
+  // If plex_pin is in localStorage when the page loads, we just came back from Plex.
   useEffect(() => {
     if (typeof window === 'undefined') return
     const saved = localStorage.getItem('plex_pin')
@@ -53,22 +67,6 @@ export default function LoginPage() {
     } catch (e) {
       setError((e as Error).message)
     }
-  }
-
-  function beginPolling(pinId: number, code: string) {
-    setPolling(true)
-    pollRef.current = setInterval(async () => {
-      try {
-        const status = await setupApi.plexLoginStatus(pinId, code)
-        if (status.claimed) {
-          clearInterval(pollRef.current!)
-          setPolling(false)
-          await refresh()
-          const s = await setupApi.status()
-          router.replace(s.setupComplete ? '/queue' : '/setup')
-        }
-      } catch { /* keep polling */ }
-    }, 2000)
   }
 
   async function verifyToken(e: React.FormEvent) {
@@ -101,8 +99,8 @@ export default function LoginPage() {
       <div className="flex min-h-screen items-center justify-center px-4 bg-[#0C111D]">
         <div className="w-full max-w-sm space-y-8">
           <div className="flex flex-col items-center gap-4">
-            <Image src="/logo-icon.svg" alt="Themearr" width={80} height={80} />
-            <Image src="/logo.svg" alt="Themearr" width={207} height={54} style={{ height: 32, width: 'auto' }} />
+            <img src="/logo-icon.svg" alt="Themearr" width={80} height={80} />
+            <img src="/logo.svg" alt="Themearr" width={207} height={54} style={{ height: 32, width: 'auto' }} />
             <p className="text-sm text-[#667085]">Enter your access token</p>
           </div>
 
@@ -139,8 +137,8 @@ export default function LoginPage() {
       <div className="w-full max-w-sm space-y-8">
         {/* Logo */}
         <div className="flex flex-col items-center gap-4">
-          <Image src="/logo-icon.svg" alt="Themearr" width={80} height={80} />
-          <Image src="/logo.svg" alt="Themearr" width={207} height={54} style={{ height: 32, width: 'auto' }} />
+          <img src="/logo-icon.svg" alt="Themearr" width={80} height={80} />
+          <img src="/logo.svg" alt="Themearr" width={207} height={54} style={{ height: 32, width: 'auto' }} />
           <p className="text-sm text-[#667085]">Sign in to continue</p>
         </div>
 

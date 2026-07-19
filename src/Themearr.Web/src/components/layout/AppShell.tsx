@@ -1,7 +1,5 @@
-'use client'
-
 import { useEffect, type ReactNode } from 'react'
-import { useRouter } from 'next/navigation'
+import { useNavigate } from 'react-router-dom'
 import { Sidebar } from './Sidebar'
 import { useAuth } from '@/lib/auth'
 import { Spinner } from '@/components/ui'
@@ -13,15 +11,15 @@ interface AppShellProps {
 }
 
 export function AppShell({ children, title, actions }: AppShellProps) {
-  const router = useRouter()
+  const navigate = useNavigate()
   const { loading, authorized } = useAuth()
 
   // Route guard: kick anyone without a valid bearer token back to /login.
   // The api.ts 401 handler catches expired tokens mid-session; this handles
   // the cold-load case (user navigates directly to /queue, /movies, etc).
   useEffect(() => {
-    if (!loading && !authorized) router.replace('/login')
-  }, [loading, authorized, router])
+    if (!loading && !authorized) navigate('/login', { replace: true })
+  }, [loading, authorized, navigate])
 
   if (loading || !authorized) {
     return (

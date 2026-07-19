@@ -1,7 +1,5 @@
-'use client'
-
 import { useEffect, useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { useNavigate } from 'react-router-dom'
 import { setupApi } from '@/lib/api'
 import type { PlexLibrary, PlexServer } from '@/lib/types'
 import { Button, Input, Spinner } from '@/components/ui'
@@ -9,7 +7,7 @@ import { Button, Input, Spinner } from '@/components/ui'
 type Step = 'server-select' | 'library-select' | 'path-config'
 
 export function SetupWizard() {
-  const router = useRouter()
+  const navigate = useNavigate()
   const [step, setStep]   = useState<Step>('server-select')
   const [error, setError] = useState('')
 
@@ -90,7 +88,7 @@ export function SetupWizard() {
         pathMappings: [],  // auto-mapped: local paths used as remote paths too
         libraryPaths: paths,
       })
-      router.push('/movies')
+      navigate('/movies')
     } catch (e) {
       setError((e as Error).message)
     } finally {

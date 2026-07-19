@@ -1,5 +1,3 @@
-'use client'
-
 import { type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, useEffect, useRef } from 'react'
 
 // ── Badge ─────────────────────────────────────────────────────────────────────

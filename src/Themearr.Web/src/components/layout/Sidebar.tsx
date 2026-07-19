@@ -1,8 +1,4 @@
-'use client'
-
-import Image from 'next/image'
-import Link from 'next/link'
-import { usePathname } from 'next/navigation'
+import { Link, useLocation } from 'react-router-dom'
 import { useEffect, useState } from 'react'
 import { syncApi, versionApi } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
@@ -66,7 +62,7 @@ const NAV = [
 ]
 
 export function Sidebar() {
-  const pathname = usePathname()
+  const pathname = useLocation().pathname
   const { accountName, logout } = useAuth()
   const [version, setVersion] = useState<VersionInfo | null>(null)
   const [syncing, setSyncing] = useState(false)
@@ -92,7 +88,7 @@ export function Sidebar() {
     >
       {/* Logo */}
       <div className="px-4 py-4 border-b border-[#1D2939]">
-        <Image src="/logo.svg" alt="Themearr" width={138} height={36} style={{ height: 36, width: 'auto' }} />
+        <img src="/logo.svg" alt="Themearr" width={138} height={36} style={{ height: 36, width: 'auto' }} />
       </div>
 
       {/* Nav */}
@@ -103,7 +99,7 @@ export function Sidebar() {
           return (
             <Link
               key={href}
-              href={href}
+              to={href}
               className={`
                 flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all
                 ${active
@@ -123,7 +119,7 @@ export function Sidebar() {
       <div className="border-t border-[#1D2939] px-3 py-3 space-y-1">
         {version?.updateAvailable && (
           <Link
-            href="/settings"
+            to="/settings"
             className="flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs text-[#FEC84B] hover:bg-[#1D2939] transition-colors"
           >
             <span className="h-1.5 w-1.5 rounded-full bg-[#F79009] animate-pulse" />

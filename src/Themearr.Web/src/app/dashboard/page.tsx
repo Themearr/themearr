@@ -1,7 +1,5 @@
-'use client'
-
 import { useEffect, useState } from 'react'
-import Link from 'next/link'
+import { Link } from 'react-router-dom'
 import { statsApi } from '@/lib/api'
 import type { DashboardStats } from '@/lib/types'
 import { AppShell } from '@/components/layout/AppShell'
@@ -61,7 +59,7 @@ export default function DashboardPage() {
           ].map(({ label, value, color, href }) => (
             <Link
               key={label}
-              href={href}
+              to={href}
               className="rounded-xl border border-[#1D2939] bg-[#101828] px-4 py-4 hover:border-[#344054] transition-colors"
             >
               <p className="text-xs text-[#667085] mb-1">{label}</p>
@@ -77,7 +75,7 @@ export default function DashboardPage() {
           <div className="rounded-xl border border-[#1D2939] bg-[#101828] overflow-hidden">
             <div className="flex items-center justify-between px-4 py-3 border-b border-[#1D2939]">
               <p className="text-xs font-semibold text-[#667085] uppercase tracking-wider">Recent downloads</p>
-              <Link href="/history" className="text-xs text-[#CC3333] hover:text-[#E07777] transition-colors">View all →</Link>
+              <Link to="/history" className="text-xs text-[#CC3333] hover:text-[#E07777] transition-colors">View all →</Link>
             </div>
             {stats.recentActivity.length === 0 ? (
               <p className="px-4 py-6 text-sm text-[#475467]">No themes downloaded yet.</p>
@@ -115,7 +113,7 @@ export default function DashboardPage() {
           <div className="rounded-xl border border-[#1D2939] bg-[#101828] overflow-hidden">
             <div className="flex items-center justify-between px-4 py-3 border-b border-[#1D2939]">
               <p className="text-xs font-semibold text-[#667085] uppercase tracking-wider">Recently added</p>
-              <Link href="/queue" className="text-xs text-[#CC3333] hover:text-[#E07777] transition-colors">Go to queue →</Link>
+              <Link to="/queue" className="text-xs text-[#CC3333] hover:text-[#E07777] transition-colors">Go to queue →</Link>
             </div>
             {stats.recentlyAdded.length === 0 ? (
               <p className="px-4 py-6 text-sm text-[#475467]">

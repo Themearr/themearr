@@ -76,7 +76,7 @@ jobs:
           echo "bump=${bump}"             >> "$GITHUB_OUTPUT"
           echo "next_tag=${next_tag}"     >> "$GITHUB_OUTPUT"
 
-      # ── Build Next.js frontend ───────────────────────────────────────────────
+      # ── Build frontend (Vite) ───────────────────────────────────────────────
       - uses: actions/setup-node@v4.4.0
         with:
           node-version: '22'
