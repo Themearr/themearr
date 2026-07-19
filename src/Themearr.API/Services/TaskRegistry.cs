@@ -35,7 +35,6 @@ public sealed class TaskRegistry
     private sealed class Entry
     {
         public required string     Name       { get; init; }
-        public required TimeSpan   Interval   { get; set; }
 
         // Optional probe supplied at Register() time, e.g. backed by SyncService.InProgress.
         // When present it is the source of truth for IsRunning: it reflects reality even
@@ -44,6 +43,19 @@ public sealed class TaskRegistry
         // tasks registered without a probe, so callers with no probe keep working exactly
         // as before.
         public Func<bool>? IsRunningProbe { get; init; }
+
+        private long _intervalTicks;
+
+        // Interval is guarded independently via Volatile.Read/Write, not bundled into RunState.
+        // RunState is replaced wholesale (via 'with' in RecordRun and MarkRunning), so
+        // a concurrent UpdateInterval racing a RecordRun would lose an update if Interval
+        // were part of the record. This field mirrors the technique used for run state,
+        // giving it its own publication point.
+        public required TimeSpan Interval
+        {
+            get => TimeSpan.FromTicks(Volatile.Read(ref _intervalTicks));
+            set => Volatile.Write(ref _intervalTicks, value.Ticks);
+        }
 
         private RunState _state = RunState.Initial;
 
