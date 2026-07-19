@@ -95,13 +95,20 @@ Also make sure the movie mount is **writable** — a read-only mount resolves fi
 
 - **In-app:** Settings → Updates. Downloads the latest release, preserves your data, and restarts.
 - **Docker:** `docker compose pull && docker compose up -d`
-- **Proxmox:** the in-app updater, or re-run the community install script.
+- **Proxmox / bare metal:** the in-app updater, or re-run the community install script.
+
+> **Upgrading a pre-.NET-10 install:** releases from v1.39.10 onward need the **ASP.NET Core 10** runtime. Containers created earlier were provisioned with .NET 9, so install the runtime first:
+> ```bash
+> curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh
+> bash /tmp/dotnet-install.sh --channel 10.0 --runtime aspnetcore --install-dir /usr/share/dotnet
+> ```
+> If you forget, nothing breaks — the updater checks for the runtime *before* changing any files and aborts with these instructions, leaving your running install untouched. Docker is unaffected (the runtime ships in the image).
 
 ## Tech stack
 
 | Layer | Technology |
 |---|---|
-| API | .NET 9 Web API (ASP.NET Core) |
+| API | .NET 10 Web API (ASP.NET Core, LTS) |
 | Frontend | React 19 + Vite (static SPA, served by .NET) |
 | Routing | React Router |
 | Database | SQLite via `Microsoft.Data.Sqlite` |
@@ -113,7 +120,7 @@ Also make sure the movie mount is **writable** — a read-only mount resolves fi
 
 ### Requirements
 
-- [.NET 9 SDK](https://dotnet.microsoft.com/download)
+- [.NET 10 SDK](https://dotnet.microsoft.com/download)
 - [Node.js 22+](https://nodejs.org/)
 - A [youtube-mp36 RapidAPI](https://rapidapi.com/ytjar/api/youtube-mp36) key + username (added in **Settings → RapidAPI**) — required for downloads
 
