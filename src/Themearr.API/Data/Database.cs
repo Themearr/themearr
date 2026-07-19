@@ -382,29 +382,58 @@ public class Database(string dbPath)
         using var conn = Open();
         using var tx = conn.BeginTransaction();
         foreach (var m in movies)
+        {
+            if (string.IsNullOrEmpty(m.Folder)) continue;
+            var id = MovieFolderId.For(m.Folder);
             conn.Execute("""
-                INSERT INTO movies (id, plex_server_id, plex_rating_key, title, year, sourcePath, folderName, status, synced_at)
-                VALUES (@id, @sid, @rk, @t, @y, @sp, @fn, 'pending', COALESCE((SELECT synced_at FROM movies WHERE id = @id), strftime('%Y-%m-%dT%H:%M:%fZ', 'now')))
+                INSERT INTO movies (id, folderName, source, source_ref, title, year, sourcePath, status, synced_at)
+                VALUES (@id, @f, @src, @ref, @t, @y, @sp, 'pending',
+                        COALESCE((SELECT synced_at FROM movies WHERE id = @id), strftime('%Y-%m-%dT%H:%M:%fZ', 'now')))
                 ON CONFLICT(id) DO UPDATE SET
-                    plex_server_id  = excluded.plex_server_id,
-                    plex_rating_key = excluded.plex_rating_key,
-                    title           = excluded.title,
-                    year            = excluded.year,
-                    sourcePath      = excluded.sourcePath,
-                    folderName      = excluded.folderName,
-                    synced_at       = COALESCE(movies.synced_at, excluded.synced_at)
+                    folderName = excluded.folderName,
+                    source     = excluded.source,
+                    source_ref = excluded.source_ref,
+                    title      = excluded.title,
+                    year       = excluded.year,
+                    sourcePath = excluded.sourcePath,
+                    synced_at  = COALESCE(movies.synced_at, excluded.synced_at)
                 """,
-                ("@id", m.Id), ("@sid", m.PlexServerId), ("@rk", m.PlexRatingKey),
-                ("@t", m.Title), ("@y", (object?)m.Year ?? DBNull.Value),
-                ("@sp", m.SourcePath), ("@fn", m.FolderName));
+                ("@id", id), ("@f", m.Folder), ("@src", m.Source), ("@ref", m.SourceRef),
+                ("@t", m.Title), ("@y", (object?)m.Year ?? DBNull.Value), ("@sp", m.SourcePath));
+        }
         tx.Commit();
+    }
+
+    /// <summary>
+    /// Deletes movies whose folder was not in the most recent sync. Callers MUST only
+    /// invoke this after a sync that both succeeded and returned results — pruning on a
+    /// failed or empty sync would empty the library. Returns the number removed.
+    /// </summary>
+    public int PruneMoviesExcept(IEnumerable<string> keptFolders)
+    {
+        var keep = keptFolders.Where(f => !string.IsNullOrEmpty(f)).ToHashSet(StringComparer.Ordinal);
+        if (keep.Count == 0) return 0;
+
+        using var conn = Open();
+        var doomed = new List<string>();
+        conn.Query("SELECT id, folderName FROM movies", r =>
+        {
+            while (r.Read())
+                if (!keep.Contains(r.GetString(1))) doomed.Add(r.GetString(0));
+        });
+
+        using var tx = conn.BeginTransaction();
+        foreach (var id in doomed)
+            conn.Execute("DELETE FROM movies WHERE id = @id", ("@id", id));
+        tx.Commit();
+        return doomed.Count;
     }
 
     public List<Dictionary<string, object?>> GetAllMovies()
     {
         using var conn = Open();
         var result = new List<Dictionary<string, object?>>();
-        conn.Query("SELECT id, plex_server_id, plex_rating_key, title, year, sourcePath, folderName, status, ignored FROM movies ORDER BY status, title", r =>
+        conn.Query("SELECT id, folderName, source, source_ref, title, year, sourcePath, status, ignored FROM movies ORDER BY status, title", r =>
         {
             while (r.Read())
             {
@@ -420,7 +449,7 @@ public class Database(string dbPath)
         using var conn = Open();
         Dictionary<string, object?>? result = null;
         conn.Query(
-            "SELECT id, plex_server_id, plex_rating_key, title, year, sourcePath, folderName, status, ignored FROM movies WHERE id = @id",
+            "SELECT id, folderName, source, source_ref, title, year, sourcePath, status, ignored FROM movies WHERE id = @id",
             r => { if (r.Read()) result = ReadMovieRow(r); }, ("@id", id));
         return result;
     }
@@ -494,7 +523,7 @@ public class Database(string dbPath)
 
         var recentlyAdded = new List<Dictionary<string, object?>>();
         conn.Query("""
-            SELECT id, plex_server_id, plex_rating_key, title, year, synced_at
+            SELECT id, source, source_ref, title, year, synced_at
             FROM movies
             WHERE ignored = 0 AND status = 'pending' AND synced_at IS NOT NULL
             ORDER BY synced_at DESC LIMIT 20
@@ -506,12 +535,12 @@ public class Database(string dbPath)
                 if (!pendingIds.Contains(id)) continue;
                 recentlyAdded.Add(new Dictionary<string, object?>
                 {
-                    ["id"]            = id,
-                    ["plexServerId"]  = r.GetString(1),
-                    ["plexRatingKey"] = r.GetString(2),
-                    ["title"]         = r.GetString(3),
-                    ["year"]          = r.IsDBNull(4) ? null : r.GetInt32(4),
-                    ["syncedAt"]      = r.IsDBNull(5) ? null : r.GetString(5),
+                    ["id"]        = id,
+                    ["source"]    = r.GetString(1),
+                    ["sourceRef"] = r.IsDBNull(2) ? null : r.GetString(2),
+                    ["title"]     = r.GetString(3),
+                    ["year"]      = r.IsDBNull(4) ? null : r.GetInt32(4),
+                    ["syncedAt"]  = r.IsDBNull(5) ? null : r.GetString(5),
                 });
             }
         });
@@ -559,7 +588,7 @@ public class Database(string dbPath)
     private static Dictionary<string, object?>? ReadMovieRow(SqliteDataReader r)
     {
         var ignored = !r.IsDBNull(8) && r.GetInt32(8) == 1;
-        var folder  = r.IsDBNull(6) ? "" : r.GetString(6);
+        var folder  = r.IsDBNull(1) ? "" : r.GetString(1);
 
         // Always return ignored movies so they can be unignored from the UI;
         // non-ignored movies with missing folders can't be used so filter them out.
@@ -578,14 +607,15 @@ public class Database(string dbPath)
 
         return new Dictionary<string, object?>
         {
-            ["id"]             = r.GetString(0),
-            ["plexServerId"]   = r.GetString(1),
-            ["plexRatingKey"]  = r.GetString(2),
-            ["title"]          = r.GetString(3),
-            ["year"]           = r.IsDBNull(4) ? null : r.GetInt32(4),
-            ["sourcePath"]     = r.IsDBNull(5) ? null : r.GetString(5),
-            ["folderName"]     = folder,
-            ["status"]         = status,
+            ["id"]         = r.GetString(0),
+            ["folderName"] = folder,
+            ["source"]     = r.GetString(2),
+            ["sourceRef"]  = r.IsDBNull(3) ? null : r.GetString(3),
+            ["title"]      = r.GetString(4),
+            ["year"]       = r.IsDBNull(5) ? null : r.GetInt32(5),
+            ["sourcePath"] = r.IsDBNull(6) ? null : r.GetString(6),
+            ["status"]     = status,
+            ["ignored"]    = ignored,
         };
     }
 }
@@ -630,11 +660,14 @@ public record StatsResult(
     List<Dictionary<string, object?>> RecentActivity,
     List<Dictionary<string, object?>> RecentlyAdded);
 
+/// <summary>
+/// A movie as reported by a library source. There is no id: identity is the resolved
+/// local folder, and the stored id is derived from it via <see cref="MovieFolderId"/>.
+/// </summary>
 public record MovieRecord(
-    string Id,
-    string PlexServerId,
-    string PlexRatingKey,
+    string Folder,
+    string Source,
+    string SourceRef,
     string Title,
     int? Year,
-    string SourcePath,
-    string FolderName);
+    string SourcePath);
