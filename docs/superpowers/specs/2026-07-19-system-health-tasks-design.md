@@ -117,9 +117,27 @@ DTO for the UI, serving both audiences from one engine.
 **Modified**
 
 - `src/Themearr.API/Program.cs` — `AddHealthChecks`, `MapHealthChecks("/health")`, `AddSingleton<TaskRegistry>`
-- `src/Themearr.API/Services/ApiAuthMiddleware.cs` — allowlist `/health`
 - `src/Themearr.API/Services/AutoSyncService.cs` — report runs; race the delay against a trigger
 - `src/Themearr.API/Services/AutoDownloadService.cs` — expose last-tick time for `DownloadWorkerCheck`
+- `src/Themearr.API/Services/PlexService.cs` — record the unresolved-path count during sync
+
+`ApiAuthMiddleware` needs **no** change. It guards only `/api/*`
+(`Path.StartsWithSegments("/api")`), and `/health` sits outside that prefix, so
+the monitoring endpoint is already unauthenticated without an allowlist entry.
+
+### Recording unresolved paths
+
+`PlexService.FetchMoviesAsync` currently *skips* a movie whose path cannot be
+resolved (`continue`), so unresolved movies never reach the `movies` table and
+cannot be counted from the database afterwards. Sync must therefore record the
+outcome as it happens, writing two settings at the end of each run:
+
+- `last_sync_unresolved_count` — how many movies were skipped as unresolved
+- `last_sync_unresolved_sample` — the first such Plex-reported path, so the
+  health message can show a concrete example
+
+Both are overwritten on every sync, so a fixed mapping clears the warning on the
+next run.
 - `src/Themearr.Web/src/main.tsx` — `/system` route
 - `src/Themearr.Web/src/components/layout/Sidebar.tsx` — nav entry + warning badge
 
@@ -127,9 +145,10 @@ DTO for the UI, serving both audiences from one engine.
 
 | Check | Detects | Severity |
 |---|---|---|
-| `LibraryPathsCheck` | configured path does not exist | error |
+| `LibraryPathsCheck` | no library paths configured at all | error |
+| | configured path does not exist | error |
 | | configured path is not writable | error |
-| | movies whose `sourcePath` resolves to no local path | warning |
+| | movies skipped as unresolved by the last sync | warning |
 | `PlexReachableCheck` | server unreachable | error |
 | | token rejected (HTTP 401) | error |
 | `RapidApiCheck` | key/username not configured | error |
