@@ -31,6 +31,9 @@ var dbPath = Environment.GetEnvironmentVariable("DB_PATH")
 
 // Services
 builder.Services.AddSingleton<Database>(_ => new Database(dbPath));
+// Shared by every library source: the tool reporting paths sees a different
+// filesystem than Themearr does.
+builder.Services.AddSingleton<LocalFolderResolver>();
 builder.Services.AddSingleton<SyncService>();
 builder.Services.AddSingleton<UpdateService>();
 builder.Services.AddHttpClient<PlexService>();

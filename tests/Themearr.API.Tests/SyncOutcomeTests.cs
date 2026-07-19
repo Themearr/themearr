@@ -50,7 +50,7 @@ public class SyncOutcomeTests
         var db = new Database(Path.Combine(dir.Path, "test.db"));
         db.Init();
         // No Plex credentials configured, so the sync fails fast inside FetchMoviesAsync.
-        return new SyncService(db, new PlexService(new HttpClient(), db), NullLogger<SyncService>.Instance);
+        return new SyncService(db, new PlexService(new HttpClient(), db, new LocalFolderResolver(db)), NullLogger<SyncService>.Instance);
     }
 
     [Fact]
