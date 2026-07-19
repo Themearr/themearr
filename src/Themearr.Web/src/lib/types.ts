@@ -103,3 +103,29 @@ export interface VersionInfo {
   checkError: string
   repo: string
 }
+
+export type HealthType = 'ok' | 'warning' | 'error'
+
+export interface HealthItem {
+  source: string
+  type: HealthType
+  message: string
+  wikiUrl: string | null
+}
+
+export interface HealthResponse {
+  status: HealthType
+  checks: HealthItem[]
+}
+
+export interface SystemTask {
+  id: string
+  name: string
+  /** Serialized TimeSpan, e.g. "24:00:00". */
+  interval: string
+  lastRunUtc: string | null
+  lastDurationMs: number | null
+  lastResult: string | null
+  nextRunUtc: string | null
+  isRunning: boolean
+}
