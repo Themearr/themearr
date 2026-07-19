@@ -69,12 +69,12 @@ builder.Services.AddSingleton<Themearr.API.Services.Health.IQuotaStatus>(
     sp => sp.GetRequiredService<DownloadService>());
 // A short timeout matters: an unreachable Plex server is the expected case here,
 // and without it the whole health page waits on a TCP hang.
-builder.Services.AddHttpClient(Themearr.API.Services.Health.PlexReachableCheck.ClientName,
+builder.Services.AddHttpClient(Themearr.API.Services.Sources.PlexLibrarySource.ClientName,
     c => c.Timeout = TimeSpan.FromSeconds(3));
 
 builder.Services.AddHealthChecks()
     .AddCheck<Themearr.API.Services.Health.LibraryPathsCheck>("libraryPaths")
-    .AddCheck<Themearr.API.Services.Health.PlexReachableCheck>("plex")
+    .AddCheck<Themearr.API.Services.Health.LibrarySourceCheck>("librarySource")
     .AddCheck<Themearr.API.Services.Health.RapidApiCheck>("rapidapi")
     .AddCheck<Themearr.API.Services.Health.DownloadWorkerCheck>("autoDownload");
 

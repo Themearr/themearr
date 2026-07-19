@@ -7,6 +7,11 @@ namespace Themearr.API.Tests;
 
 public class SyncOutcomeTests
 {
+    private sealed class StubHttpClientFactory : IHttpClientFactory
+    {
+        public HttpClient CreateClient(string name) => new();
+    }
+
     // ── Outcome wording ──────────────────────────────────────────────────────
 
     [Fact]
@@ -52,7 +57,7 @@ public class SyncOutcomeTests
         db.Init();
         // No Plex credentials configured, so the sync fails fast inside FetchMoviesAsync.
         var plex = new PlexService(new HttpClient(), db, new LocalFolderResolver(db));
-        var sources = new LibrarySourceResolver(db, [new PlexLibrarySource(plex)]);
+        var sources = new LibrarySourceResolver(db, [new PlexLibrarySource(plex, db, new StubHttpClientFactory())]);
         return new SyncService(db, sources, NullLogger<SyncService>.Instance);
     }
 
