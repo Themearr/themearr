@@ -12,7 +12,7 @@ public class AutoDownloadService(
     IServiceProvider services,
     DownloadService  download,
     IThemeAudioProvider provider,
-    ILogger<AutoDownloadService> log) : BackgroundService
+    ILogger<AutoDownloadService> log) : BackgroundService, Health.IDownloadWorkerStatus
 {
     private static readonly TimeSpan CheckInterval    = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan ErrorCooldown    = TimeSpan.FromHours(1);
@@ -28,6 +28,10 @@ public class AutoDownloadService(
     private string    _lastTickResult = "never run";
     private int       _ticksCompleted;
     private int       _downloadsStarted;
+
+    // Exposed for DownloadWorkerCheck: "is the worker alive, and what did it last do".
+    public DateTime? LastTickAt     => _lastTickAt;
+    public string    LastTickResult => _lastTickResult;
 
     public object GetDiagnostics()
     {
