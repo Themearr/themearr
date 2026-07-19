@@ -279,7 +279,10 @@ public class PlexService(HttpClient http, Database db, LocalFolderResolver folde
                         }
 
                         logFn?.Invoke($"Matched: {title} ({year}) -> {folder} [{mode}]");
-                        result.Add(new MovieRecord(movieId, serverId, ratingKey, title, year, filePath, folder));
+                        // source_ref keeps BOTH identifiers: PlexImageUrl needs the server as
+                        // well as the rating key, so a rating key alone would break posters
+                        // for anyone running more than one Plex server.
+                        result.Add(new MovieRecord(folder, "plex", movieId, title, year, filePath));
                     }
                 }
             }

@@ -34,6 +34,10 @@ builder.Services.AddSingleton<Database>(_ => new Database(dbPath));
 // Shared by every library source: the tool reporting paths sees a different
 // filesystem than Themearr does.
 builder.Services.AddSingleton<LocalFolderResolver>();
+builder.Services.AddSingleton<Themearr.API.Services.Sources.PlexLibrarySource>();
+builder.Services.AddSingleton<Themearr.API.Services.Sources.ILibrarySource>(
+    sp => sp.GetRequiredService<Themearr.API.Services.Sources.PlexLibrarySource>());
+builder.Services.AddSingleton<Themearr.API.Services.Sources.LibrarySourceResolver>();
 builder.Services.AddSingleton<SyncService>();
 builder.Services.AddSingleton<UpdateService>();
 builder.Services.AddHttpClient<PlexService>();

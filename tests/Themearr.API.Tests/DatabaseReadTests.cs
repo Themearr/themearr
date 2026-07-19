@@ -1,4 +1,5 @@
 using Themearr.API.Data;
+using Themearr.API.Services;
 
 namespace Themearr.API.Tests;
 
@@ -34,8 +35,8 @@ public class DatabaseReadTests
         var db = NewDb();
         db.UpsertMovies(
         [
-            new MovieRecord("s:1", "s", "1", "Downloaded Movie", 2020, "/plex/1/f.mkv", downloadedDir.Path),
-            new MovieRecord("s:2", "s", "2", "Pending Movie",    2021, "/plex/2/f.mkv", pendingDir.Path),
+            new MovieRecord(downloadedDir.Path, "s", "1", "Downloaded Movie", 2020, "/plex/1/f.mkv"),
+            new MovieRecord(pendingDir.Path,    "s", "2", "Pending Movie",    2021, "/plex/2/f.mkv"),
         ]);
 
         var all = db.GetAllMovies();
@@ -54,9 +55,9 @@ public class DatabaseReadTests
     {
         using var dir = new TempDir();
         var db = NewDb();
-        db.UpsertMovies([new MovieRecord("s:7", "s", "7", "Heat", 1995, "/plex/heat/f.mkv", dir.Path)]);
+        db.UpsertMovies([new MovieRecord(dir.Path, "s", "7", "Heat", 1995, "/plex/heat/f.mkv")]);
 
-        Assert.Equal("Heat", db.GetMovie("s:7")!["title"]);
+        Assert.Equal("Heat", db.GetMovie(MovieFolderId.For(dir.Path))!["title"]);
         Assert.Null(db.GetMovie("does-not-exist"));
     }
 
