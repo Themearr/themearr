@@ -19,16 +19,16 @@ public class Database(string dbPath)
         using var conn = Open();
         conn.Execute("""
             CREATE TABLE IF NOT EXISTS movies (
-                id              TEXT PRIMARY KEY,
-                plex_server_id  TEXT NOT NULL,
-                plex_rating_key TEXT NOT NULL,
-                title           TEXT NOT NULL,
-                year            INTEGER,
-                sourcePath      TEXT,
-                folderName      TEXT,
-                status          TEXT NOT NULL DEFAULT 'pending',
-                ignored         INTEGER NOT NULL DEFAULT 0,
-                UNIQUE(plex_server_id, plex_rating_key)
+                id          TEXT PRIMARY KEY,
+                folderName  TEXT NOT NULL UNIQUE,
+                source      TEXT NOT NULL DEFAULT 'plex',
+                source_ref  TEXT,
+                title       TEXT NOT NULL,
+                year        INTEGER,
+                sourcePath  TEXT,
+                status      TEXT NOT NULL DEFAULT 'pending',
+                ignored     INTEGER NOT NULL DEFAULT 0,
+                synced_at   TEXT
             )
             """);
         conn.Execute("""
@@ -52,6 +52,7 @@ public class Database(string dbPath)
         MigrateHistoryTable(conn);
         MigrateMoviesTableV2(conn);
         MigrateMoviesTableV3(conn);
+        MigrateMoviesTableV4(conn);
     }
 
     private static void MigrateHistoryTable(SqliteConnection conn)
@@ -88,6 +89,91 @@ public class Database(string dbPath)
             while (r.Read()) columns.Add(r.GetString(1));
         if (!columns.Contains("synced_at"))
             conn.Execute("ALTER TABLE movies ADD COLUMN synced_at TEXT");
+    }
+
+    /// <summary>
+    /// Re-keys movies from Plex identifiers to their local folder.
+    ///
+    /// Runs in a transaction: the earlier rebuild-style migration in this file renames
+    /// the table before recreating it, so a failure partway would leave an install with
+    /// no movies table at all. SQLite supports transactional DDL, so a failure here
+    /// rolls back and the app starts on the old schema instead.
+    /// </summary>
+    private static void MigrateMoviesTableV4(SqliteConnection conn)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "PRAGMA table_info(movies)";
+        var columns = new HashSet<string>();
+        using (var r = cmd.ExecuteReader())
+            while (r.Read()) columns.Add(r.GetString(1));
+
+        if (columns.Contains("source") || !columns.Contains("plex_rating_key")) return;
+
+        // old id → new id, for rewriting history afterwards
+        var remap = new Dictionary<string, string>(StringComparer.Ordinal);
+        var rows = new List<(string NewId, string Folder, string Source, string SourceRef,
+                             string Title, object? Year, string SourcePath, string Status, long Ignored)>();
+        var seenFolders = new HashSet<string>(StringComparer.Ordinal);
+
+        conn.Query(
+            "SELECT id, plex_server_id, plex_rating_key, title, year, sourcePath, folderName, status, ignored FROM movies",
+            r =>
+            {
+                while (r.Read())
+                {
+                    var oldId  = r.GetString(0);
+                    var folder = r.IsDBNull(6) ? "" : r.GetString(6);
+                    // Pre-resolution rows have no folder, so they cannot be acted on.
+                    if (string.IsNullOrEmpty(folder)) continue;
+
+                    var newId = MovieFolderId.For(folder);
+                    remap[oldId] = newId;
+                    // Two cuts in one folder are one movie here; first wins.
+                    if (!seenFolders.Add(folder)) continue;
+
+                    rows.Add((newId, folder, "plex", $"{r.GetString(1)}:{r.GetString(2)}",
+                              r.GetString(3), r.IsDBNull(4) ? null : r.GetInt32(4),
+                              r.IsDBNull(5) ? "" : r.GetString(5),
+                              r.GetString(7), r.IsDBNull(8) ? 0L : r.GetInt64(8)));
+                }
+            });
+
+        using var tx = conn.BeginTransaction();
+
+        conn.Execute("DROP TABLE IF EXISTS movies_v4_old");
+        conn.Execute("ALTER TABLE movies RENAME TO movies_v4_old");
+        conn.Execute("""
+            CREATE TABLE movies (
+                id          TEXT PRIMARY KEY,
+                folderName  TEXT NOT NULL UNIQUE,
+                source      TEXT NOT NULL DEFAULT 'plex',
+                source_ref  TEXT,
+                title       TEXT NOT NULL,
+                year        INTEGER,
+                sourcePath  TEXT,
+                status      TEXT NOT NULL DEFAULT 'pending',
+                ignored     INTEGER NOT NULL DEFAULT 0,
+                synced_at   TEXT
+            )
+            """);
+
+        foreach (var row in rows)
+            conn.Execute("""
+                INSERT INTO movies (id, folderName, source, source_ref, title, year, sourcePath, status, ignored, synced_at)
+                VALUES (@id, @f, @src, @ref, @t, @y, @sp, @s, @ig, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+                """,
+                ("@id", row.NewId), ("@f", row.Folder), ("@src", row.Source), ("@ref", row.SourceRef),
+                ("@t", row.Title), ("@y", row.Year ?? (object)DBNull.Value), ("@sp", row.SourcePath),
+                ("@s", row.Status), ("@ig", row.Ignored));
+
+        // History rows already carry title and year, so any that fail to remap still
+        // display correctly rather than going blank.
+        foreach (var (oldId, newId) in remap)
+            conn.Execute("UPDATE theme_history SET movie_id = @new WHERE movie_id = @old",
+                ("@new", newId), ("@old", oldId));
+
+        conn.Execute("DROP TABLE movies_v4_old");
+        tx.Commit();
     }
 
     private static void MigrateMoviesTable(SqliteConnection conn)
