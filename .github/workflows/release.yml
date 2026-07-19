@@ -19,9 +19,6 @@ on:
 permissions:
   contents: write
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 jobs:
   release:
     runs-on: ubuntu-latest
@@ -29,7 +26,7 @@ jobs:
       next_tag: ${{ steps.semver.outputs.next_tag }}
 
     steps:
-      - uses: actions/checkout@v4.2.2
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
 
@@ -77,7 +74,7 @@ jobs:
           echo "next_tag=${next_tag}"     >> "$GITHUB_OUTPUT"
 
       # ── Build frontend (Vite) ───────────────────────────────────────────────
-      - uses: actions/setup-node@v4.4.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22'
 
@@ -88,7 +85,7 @@ jobs:
           npm run build
 
       # ── Build .NET API ────────────────────────────────────────────────────────
-      - uses: actions/setup-dotnet@v4.3.1
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: '10.0.x'
 
@@ -133,7 +130,7 @@ jobs:
 
       # ── Create GitHub release with binary assets ──────────────────────────────
       - name: Create release
-        uses: softprops/action-gh-release@72f2c25fcb47643c292f7107632f7a47c1df5cd8 # v2.3.2
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ steps.semver.outputs.next_tag }}
           target_commitish: ${{ github.sha }}
@@ -159,7 +156,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4.2.2
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
 
