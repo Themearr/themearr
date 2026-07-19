@@ -117,19 +117,28 @@ public class AutoSyncService(IServiceProvider services, TaskRegistry registry, I
         var startedAt = DateTime.UtcNow;
         var sw = Stopwatch.StartNew();
         registry.MarkRunning(SyncTaskId, true);
-
-        var started = await sync.StartAsync();
-        sw.Stop();
-
-        if (started)
+        try
         {
-            db.SetSetting("last_auto_sync_at", DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString());
-            registry.RecordRun(SyncTaskId, startedAt, sw.Elapsed, "sync started");
+            var started = await sync.StartAsync();
+            sw.Stop();
+
+            if (started)
+            {
+                db.SetSetting("last_auto_sync_at", DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString());
+                registry.RecordRun(SyncTaskId, startedAt, sw.Elapsed, "sync started");
+            }
+            else
+            {
+                log.LogInformation("AutoSync: sync already in progress, skipping");
+                registry.RecordRun(SyncTaskId, startedAt, sw.Elapsed, "skipped: a sync was already running");
+            }
         }
-        else
+        catch
         {
-            log.LogInformation("AutoSync: sync already in progress, skipping");
-            registry.RecordRun(SyncTaskId, startedAt, sw.Elapsed, "skipped: a sync was already running");
+            sw.Stop();
+            // RecordRun also clears IsRunning, so the Run now button recovers.
+            registry.RecordRun(SyncTaskId, startedAt, sw.Elapsed, "failed to start — see the application log");
+            throw;   // ExecuteAsync still logs the exception with its stack trace
         }
     }
 }
