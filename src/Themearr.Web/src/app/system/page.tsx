@@ -64,7 +64,7 @@ export default function SystemPage() {
   // failures here are ignored rather than blowing away an already-loaded
   // table with an error screen.
   function pollTasks() {
-    systemApi.tasks().then(setTasks).catch(() => null)
+    systemApi.tasks().then(t => { setTasks(t); setTasksError(false) }).catch(() => null)
   }
 
   useEffect(() => {
