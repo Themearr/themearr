@@ -68,18 +68,18 @@ public sealed class HealthCache(HealthCheckService health, IConfiguration? confi
         {
             if (_cached is not null && DateTime.UtcNow < _expiresAt) return _cached;
 
-            // Reuse the outstanding probe if the previous refresh's is still running
-            // (see the field comments above); otherwise start a fresh one.
-            if (_pendingProbe is null || _pendingProbe.IsCompleted)
-            {
-                _pendingCts?.Dispose();
-                _pendingCts    = new CancellationTokenSource(_refreshTimeout);
-                _pendingProbe  = health.CheckHealthAsync(_pendingCts.Token);
-            }
-
             CachedHealth result;
             try
             {
+                // Reuse the outstanding probe if the previous refresh's is still running
+                // (see the field comments above); otherwise start a fresh one.
+                if (_pendingProbe is null || _pendingProbe.IsCompleted)
+                {
+                    _pendingCts?.Dispose();
+                    _pendingCts    = new CancellationTokenSource(_refreshTimeout);
+                    _pendingProbe  = health.CheckHealthAsync(_pendingCts.Token);
+                }
+
                 var report = await _pendingProbe.WaitAsync(_refreshTimeout);
                 result = new CachedHealth(report.Status, HealthDto.From(report, _config));
             }

@@ -112,7 +112,7 @@ public sealed class TaskRegistry
     public void RecordFailure(string id, string result)
     {
         if (!_tasks.TryGetValue(id, out var e)) return;
-        e.State = e.State with { LastResult = result, IsRunning = false };
+        e.State = e.State with { LastResult = result, IsRunning = false, LastDurationMs = null };
     }
 
     public IReadOnlyList<TaskState> Snapshot() =>
