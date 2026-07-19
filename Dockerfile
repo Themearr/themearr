@@ -44,8 +44,10 @@ USER themearr
 
 ARG APP_VERSION=dev
 ENV APP_VERSION=${APP_VERSION}
-# Bind to loopback by default. docker-compose must re-publish only to 127.0.0.1
-# on the host — remote exposure requires a reverse proxy with its own auth/TLS.
+# Bind to all interfaces INSIDE the container — this is required, since Docker's
+# port publishing can't reach a container that only listens on its own loopback.
+# Host exposure is restricted separately by docker-compose publishing to
+# 127.0.0.1:8080 only; remote access needs a reverse proxy with its own auth/TLS.
 ENV ASPNETCORE_URLS=http://0.0.0.0:8080
 ENV DOTNET_RUNNING_IN_CONTAINER=true
 
