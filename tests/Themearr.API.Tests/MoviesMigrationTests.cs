@@ -148,6 +148,19 @@ public class MoviesMigrationTests
         var movie = Assert.Single(new Database(path).GetAllMovies());
         Assert.Equal("downloaded", movie["status"]?.ToString());
     }
+
+    [Fact]
+    public void Folders_differing_only_by_a_trailing_separator_collapse_to_one_row()
+    {
+        using var dir = new TempDir();
+        var path = OldSchemaDb(dir);
+        InsertOldMovie(path, "srv1:101", "/movies/Heat (1995)", "Heat", "downloaded", 0);
+        InsertOldMovie(path, "srv1:102", "/movies/Heat (1995)/", "Heat (Director's Cut)", "pending", 0);
+
+        new Database(path).Init();
+
+        Assert.Single(new Database(path).GetAllMovies());
+    }
 }
 
 // `Database.cs` keeps its own SQL helper `file`-scoped so nothing outside it can bypass

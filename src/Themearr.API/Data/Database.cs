@@ -113,7 +113,7 @@ public class Database(string dbPath)
         var remap = new Dictionary<string, string>(StringComparer.Ordinal);
         var rows = new List<(string NewId, string Folder, string Source, string SourceRef,
                              string Title, object? Year, string SourcePath, string Status, long Ignored)>();
-        var seenFolders = new HashSet<string>(StringComparer.Ordinal);
+        var seenIds = new HashSet<string>(StringComparer.Ordinal);
 
         conn.Query(
             "SELECT id, plex_server_id, plex_rating_key, title, year, sourcePath, folderName, status, ignored FROM movies",
@@ -128,8 +128,8 @@ public class Database(string dbPath)
 
                     var newId = MovieFolderId.For(folder);
                     remap[oldId] = newId;
-                    // Two cuts in one folder are one movie here; first wins.
-                    if (!seenFolders.Add(folder)) continue;
+                    // Two folders differing only by trailing separators normalize to one id; first wins.
+                    if (!seenIds.Add(newId)) continue;
 
                     rows.Add((newId, folder, "plex", $"{r.GetString(1)}:{r.GetString(2)}",
                               r.GetString(3), r.IsDBNull(4) ? null : r.GetInt32(4),
