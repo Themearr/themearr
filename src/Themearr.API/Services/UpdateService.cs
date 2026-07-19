@@ -165,8 +165,11 @@ public class UpdateService(Database db, IConfiguration config)
                 UseShellExecute        = false,
             };
             using var proc = Process.Start(psi)!;
-            while (!proc.StandardOutput.EndOfStream)
-                AddLog(await proc.StandardOutput.ReadLineAsync() ?? "");
+            // Read fully async: `EndOfStream` blocks the calling thread while it waits
+            // for data, which can deadlock inside an async method (CA2024).
+            string? line;
+            while ((line = await proc.StandardOutput.ReadLineAsync()) != null)
+                AddLog(line);
             await proc.WaitForExitAsync();
             AddLog($"Update command exited with code {proc.ExitCode}");
             if (proc.ExitCode != 0)

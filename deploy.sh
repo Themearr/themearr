@@ -51,6 +51,24 @@ SHA_URL=$(echo "$RELEASE_JSON" \
 
 info "Deploying Themearr $TAG ($ARCH_SUFFIX)"
 
+# ── Verify the required .NET runtime ──────────────────────────────────────────
+# The app targets net10.0. Installs provisioned earlier shipped with the .NET 9
+# runtime, and dropping net10 binaries onto a 9.x runtime leaves the service unable
+# to start. Check BEFORE touching any files and fail fast, so a mismatch leaves the
+# running install working rather than half-updated. We deliberately do not
+# auto-install it: piping a remote script into a root shell is exactly the
+# supply-chain pattern this updater was hardened to avoid.
+
+REQUIRED_DOTNET_MAJOR=10
+if command -v dotnet &>/dev/null \
+   && ! dotnet --list-runtimes 2>/dev/null | grep -q "^Microsoft.AspNetCore.App ${REQUIRED_DOTNET_MAJOR}\."; then
+  error "This release needs the ASP.NET Core ${REQUIRED_DOTNET_MAJOR} runtime, which isn't installed.
+          Nothing has been changed — your current install is still running.
+          Install the runtime, then run the update again:
+            curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh
+            bash /tmp/dotnet-install.sh --channel ${REQUIRED_DOTNET_MAJOR}.0 --runtime aspnetcore --install-dir /usr/share/dotnet"
+fi
+
 # ── Backup data ───────────────────────────────────────────────────────────────
 # Note: we do NOT stop the service first. On Linux, .NET assemblies are
 # memory-mapped and can be replaced on disk while the process is running.
