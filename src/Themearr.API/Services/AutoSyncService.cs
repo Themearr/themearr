@@ -39,7 +39,7 @@ public class AutoSyncService(IServiceProvider services, TaskRegistry registry, I
 
         while (!ct.IsCancellationRequested)
         {
-            try { await TryAutoSync(forced); }
+            try { await TryAutoSync(forced, ct); }
             catch (Exception ex) { log.LogWarning(ex, "AutoSync check failed"); }
 
             forced = await WaitForNextAsync(ct);
@@ -98,7 +98,7 @@ public class AutoSyncService(IServiceProvider services, TaskRegistry registry, I
         return wokenByTrigger && !ct.IsCancellationRequested;
     }
 
-    private async Task TryAutoSync(bool forced)
+    private async Task TryAutoSync(bool forced, CancellationToken ct)
     {
         using var scope = services.CreateScope();
         var db   = scope.ServiceProvider.GetRequiredService<Database>();
@@ -134,12 +134,20 @@ public class AutoSyncService(IServiceProvider services, TaskRegistry registry, I
         try
         {
             var started = await sync.StartAsync();
-            sw.Stop();
 
             if (started)
             {
                 db.SetSetting("last_auto_sync_at", DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString());
-                registry.RecordRun(SyncTaskId, startedAt, sw.Elapsed, "sync started");
+
+                // StartAsync only reports that the job was launched — it runs in the
+                // background and fails there. Await the outcome so the Tasks tab can say
+                // what actually happened, and so the recorded duration is the sync's
+                // rather than the near-zero time it took to start one.
+                await sync.Current.WaitAsync(ct);
+                sw.Stop();
+
+                registry.RecordRun(SyncTaskId, startedAt, sw.Elapsed,
+                    SyncOutcome.Describe(sync.Error, sync.Synced));
             }
             else
             {
