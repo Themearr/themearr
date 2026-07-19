@@ -23,15 +23,27 @@ public sealed record TaskState(
 /// </summary>
 public sealed class TaskRegistry
 {
+    // Bundles the four run-state fields so RecordRun and MarkRunning publish them
+    // as a single atomic swap. Without this, a reader on another thread could see
+    // a torn mix of old and new values (e.g. a fresh LastRunUtc paired with a
+    // stale LastResult) since there's no fence ordering four separate field writes.
+    private sealed record RunState(DateTime? LastRunUtc, long? LastDurationMs, string? LastResult, bool IsRunning)
+    {
+        public static readonly RunState Initial = new(null, null, null, false);
+    }
+
     private sealed class Entry
     {
         public required string   Name     { get; init; }
         public required TimeSpan Interval { get; init; }
 
-        public DateTime? LastRunUtc;
-        public long?     LastDurationMs;
-        public string?   LastResult;
-        public bool      IsRunning;
+        private RunState _state = RunState.Initial;
+
+        public RunState State
+        {
+            get => Volatile.Read(ref _state);
+            set => Volatile.Write(ref _state, value);
+        }
 
         // Capacity 1 + Wait is the whole debounce: an impatient user clicking
         // "Run now" five times queues one run, not five library syncs. Wait mode
@@ -67,29 +79,30 @@ public sealed class TaskRegistry
 
     public void MarkRunning(string id, bool running)
     {
-        if (_tasks.TryGetValue(id, out var e)) e.IsRunning = running;
+        if (_tasks.TryGetValue(id, out var e)) e.State = e.State with { IsRunning = running };
     }
 
     public void RecordRun(string id, DateTime startedUtc, TimeSpan duration, string result)
     {
         if (!_tasks.TryGetValue(id, out var e)) return;
-        e.LastRunUtc     = startedUtc;
-        e.LastDurationMs = (long)duration.TotalMilliseconds;
-        e.LastResult     = result;
-        e.IsRunning      = false;
+        e.State = new RunState(startedUtc, (long)duration.TotalMilliseconds, result, false);
     }
 
     public IReadOnlyList<TaskState> Snapshot() =>
         _tasks
-            .Select(kv => new TaskState(
-                kv.Key,
-                kv.Value.Name,
-                kv.Value.Interval,
-                kv.Value.LastRunUtc,
-                kv.Value.LastDurationMs,
-                kv.Value.LastResult,
-                kv.Value.LastRunUtc is { } last ? last + kv.Value.Interval : null,
-                kv.Value.IsRunning))
+            .Select(kv =>
+            {
+                var state = kv.Value.State;
+                return new TaskState(
+                    kv.Key,
+                    kv.Value.Name,
+                    kv.Value.Interval,
+                    state.LastRunUtc,
+                    state.LastDurationMs,
+                    state.LastResult,
+                    state.LastRunUtc is { } last ? last + kv.Value.Interval : null,
+                    state.IsRunning);
+            })
             .OrderBy(t => t.Name, StringComparer.Ordinal)
             .ToList();
 }
