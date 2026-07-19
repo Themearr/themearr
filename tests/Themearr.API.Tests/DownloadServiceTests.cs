@@ -68,8 +68,8 @@ public class DownloadServiceTests
         var db = new Database(Path.Combine(dbDir, "themearr.db"));
         db.Init();
 
-        const string movieId = "movie-1";
-        db.UpsertMovies([new MovieRecord(movieId, "srv1", "rk1", "Test Movie", 2020, "/plex/Test Movie/movie.mkv", movieFolder)]);
+        var movieId = MovieFolderId.For(movieFolder);
+        db.UpsertMovies([new MovieRecord(movieFolder, "srv1", "rk1", "Test Movie", 2020, "/plex/Test Movie/movie.mkv")]);
 
         var config = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>

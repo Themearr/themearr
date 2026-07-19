@@ -27,10 +27,13 @@ public class PosterController(
             return Unauthorized();
 
         var movie = db.GetMovie(id);
-        var serverId = movie?.GetValueOrDefault("plexServerId")?.ToString() ?? "";
-        var ratingKey = movie?.GetValueOrDefault("plexRatingKey")?.ToString() ?? "";
-        if (string.IsNullOrEmpty(serverId) || string.IsNullOrEmpty(ratingKey))
-            return NotFound();
+        if (movie?.GetValueOrDefault("source")?.ToString() != "plex") return NotFound();
+
+        // Plex stores "{serverId}:{ratingKey}" in source_ref because PlexImageUrl needs
+        // both. The field is opaque to everything except the source that issued it.
+        var parts = (movie.GetValueOrDefault("sourceRef")?.ToString() ?? "").Split(':', 2);
+        if (parts.Length != 2 || parts.Any(string.IsNullOrEmpty)) return NotFound();
+        var (serverId, ratingKey) = (parts[0], parts[1]);
 
         if (!db.GetPlexServersDict().TryGetValue(serverId, out var srv))
             return NotFound();

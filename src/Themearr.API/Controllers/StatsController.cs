@@ -17,10 +17,15 @@ public class StatsController(Database db, PosterUrlSigner posterSigner) : Contro
         // Attach signed, token-free poster URLs (same as MoviesController).
         foreach (var movie in stats.RecentlyAdded)
         {
-            var id  = movie.GetValueOrDefault("id")?.ToString()           ?? "";
-            var sid = movie.GetValueOrDefault("plexServerId")?.ToString()  ?? "";
-            var rk  = movie.GetValueOrDefault("plexRatingKey")?.ToString() ?? "";
-            movie["posterUrl"] = (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(sid) && !string.IsNullOrEmpty(rk))
+            var id = movie.GetValueOrDefault("id")?.ToString() ?? "";
+
+            // Plex stores "{serverId}:{ratingKey}" in source_ref; only Plex movies have a
+            // poster to sign a URL for (see PosterController).
+            var isPlex = movie.GetValueOrDefault("source")?.ToString() == "plex";
+            var parts  = (movie.GetValueOrDefault("sourceRef")?.ToString() ?? "").Split(':', 2);
+            var hasRef = parts.Length == 2 && parts.All(p => !string.IsNullOrEmpty(p));
+
+            movie["posterUrl"] = (!string.IsNullOrEmpty(id) && isPlex && hasRef)
                 ? posterSigner.PosterPath(id, posterExpiry)
                 : null;
         }

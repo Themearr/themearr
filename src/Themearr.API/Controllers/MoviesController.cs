@@ -18,11 +18,16 @@ public class MoviesController(
         var posterExpiry = DateTimeOffset.UtcNow.AddHours(12);
         foreach (var movie in movies)
         {
-            var id  = movie.GetValueOrDefault("id")?.ToString() ?? "";
-            var sid = movie.GetValueOrDefault("plexServerId")?.ToString() ?? "";
-            var rk  = movie.GetValueOrDefault("plexRatingKey")?.ToString() ?? "";
+            var id = movie.GetValueOrDefault("id")?.ToString() ?? "";
+
+            // Plex stores "{serverId}:{ratingKey}" in source_ref; only Plex movies have a
+            // poster to sign a URL for (see PosterController).
+            var isPlex = movie.GetValueOrDefault("source")?.ToString() == "plex";
+            var parts  = (movie.GetValueOrDefault("sourceRef")?.ToString() ?? "").Split(':', 2);
+            var hasRef = parts.Length == 2 && parts.All(p => !string.IsNullOrEmpty(p));
+
             // Signed, token-free poster URL — the Plex token stays server-side (see PosterController).
-            movie["posterUrl"] = (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(sid) && !string.IsNullOrEmpty(rk))
+            movie["posterUrl"] = (!string.IsNullOrEmpty(id) && isPlex && hasRef)
                 ? posterSigner.PosterPath(id, posterExpiry)
                 : null;
         }

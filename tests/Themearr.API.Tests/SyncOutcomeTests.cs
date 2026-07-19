@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using Themearr.API.Data;
 using Themearr.API.Services;
+using Themearr.API.Services.Sources;
 
 namespace Themearr.API.Tests;
 
@@ -50,7 +51,9 @@ public class SyncOutcomeTests
         var db = new Database(Path.Combine(dir.Path, "test.db"));
         db.Init();
         // No Plex credentials configured, so the sync fails fast inside FetchMoviesAsync.
-        return new SyncService(db, new PlexService(new HttpClient(), db), NullLogger<SyncService>.Instance);
+        var plex = new PlexService(new HttpClient(), db, new LocalFolderResolver(db));
+        var sources = new LibrarySourceResolver(db, [new PlexLibrarySource(plex)]);
+        return new SyncService(db, sources, NullLogger<SyncService>.Instance);
     }
 
     [Fact]

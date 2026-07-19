@@ -19,16 +19,16 @@ public class Database(string dbPath)
         using var conn = Open();
         conn.Execute("""
             CREATE TABLE IF NOT EXISTS movies (
-                id              TEXT PRIMARY KEY,
-                plex_server_id  TEXT NOT NULL,
-                plex_rating_key TEXT NOT NULL,
-                title           TEXT NOT NULL,
-                year            INTEGER,
-                sourcePath      TEXT,
-                folderName      TEXT,
-                status          TEXT NOT NULL DEFAULT 'pending',
-                ignored         INTEGER NOT NULL DEFAULT 0,
-                UNIQUE(plex_server_id, plex_rating_key)
+                id          TEXT PRIMARY KEY,
+                folderName  TEXT NOT NULL UNIQUE,
+                source      TEXT NOT NULL DEFAULT 'plex',
+                source_ref  TEXT,
+                title       TEXT NOT NULL,
+                year        INTEGER,
+                sourcePath  TEXT,
+                status      TEXT NOT NULL DEFAULT 'pending',
+                ignored     INTEGER NOT NULL DEFAULT 0,
+                synced_at   TEXT
             )
             """);
         conn.Execute("""
@@ -52,6 +52,7 @@ public class Database(string dbPath)
         MigrateHistoryTable(conn);
         MigrateMoviesTableV2(conn);
         MigrateMoviesTableV3(conn);
+        MigrateMoviesTableV4(conn);
     }
 
     private static void MigrateHistoryTable(SqliteConnection conn)
@@ -90,6 +91,110 @@ public class Database(string dbPath)
             conn.Execute("ALTER TABLE movies ADD COLUMN synced_at TEXT");
     }
 
+    /// <summary>
+    /// Re-keys movies from Plex identifiers to their local folder.
+    ///
+    /// Runs in a transaction: the earlier rebuild-style migration in this file renames
+    /// the table before recreating it, so a failure partway would leave an install with
+    /// no movies table at all. SQLite supports transactional DDL, so a failure here rolls
+    /// back and the table is never left half-migrated — the upgrade can simply be retried
+    /// against intact data.
+    /// </summary>
+    private static void MigrateMoviesTableV4(SqliteConnection conn)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "PRAGMA table_info(movies)";
+        var columns = new HashSet<string>();
+        using (var r = cmd.ExecuteReader())
+            while (r.Read()) columns.Add(r.GetString(1));
+
+        if (columns.Contains("source") || !columns.Contains("plex_rating_key")) return;
+
+        // Everything below — including the read of the pre-migration rows — runs inside
+        // the transaction so there is a consistent snapshot of "movies" for the duration
+        // of the migration, not just for the destructive DDL that follows it.
+        using var tx = conn.BeginTransaction();
+
+        // old id → new id, for rewriting history afterwards
+        var remap = new Dictionary<string, string>(StringComparer.Ordinal);
+        var raw = new List<(string NewId, string Folder, string Source, string SourceRef,
+                             string Title, object? Year, string SourcePath, string Status,
+                             long Ignored, string? SyncedAt)>();
+
+        conn.Query(
+            "SELECT id, plex_server_id, plex_rating_key, title, year, sourcePath, folderName, status, ignored, synced_at FROM movies",
+            r =>
+            {
+                while (r.Read())
+                {
+                    var oldId  = r.GetString(0);
+                    var folder = r.IsDBNull(6) ? "" : r.GetString(6);
+                    // Pre-resolution rows have no folder, so they cannot be acted on.
+                    if (string.IsNullOrEmpty(folder)) continue;
+
+                    var newId = MovieFolderId.For(folder);
+                    remap[oldId] = newId;
+
+                    raw.Add((newId, folder, "plex", $"{r.GetString(1)}:{r.GetString(2)}",
+                              r.GetString(3), r.IsDBNull(4) ? null : r.GetInt32(4),
+                              r.IsDBNull(5) ? "" : r.GetString(5),
+                              r.GetString(7), r.IsDBNull(8) ? 0L : r.GetInt64(8),
+                              r.IsDBNull(9) ? null : r.GetString(9)));
+                }
+            });
+
+        // Two folders differing only by trailing separators normalize to one id; the first
+        // row wins for the display fields (status is re-derived from disk regardless), but
+        // if any collapsed row was ignored the user's choice must not be silently dropped.
+        var ignoredByFolder = raw
+            .GroupBy(x => x.NewId, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.Any(x => x.Ignored != 0), StringComparer.Ordinal);
+
+        var seenIds = new HashSet<string>(StringComparer.Ordinal);
+        var rows = new List<(string NewId, string Folder, string Source, string SourceRef,
+                             string Title, object? Year, string SourcePath, string Status,
+                             long Ignored, string? SyncedAt)>();
+        foreach (var row in raw)
+        {
+            if (!seenIds.Add(row.NewId)) continue;
+            rows.Add(row with { Ignored = ignoredByFolder[row.NewId] ? 1L : 0L });
+        }
+
+        conn.Execute("ALTER TABLE movies RENAME TO movies_v4_old");
+        conn.Execute("""
+            CREATE TABLE movies (
+                id          TEXT PRIMARY KEY,
+                folderName  TEXT NOT NULL UNIQUE,
+                source      TEXT NOT NULL DEFAULT 'plex',
+                source_ref  TEXT,
+                title       TEXT NOT NULL,
+                year        INTEGER,
+                sourcePath  TEXT,
+                status      TEXT NOT NULL DEFAULT 'pending',
+                ignored     INTEGER NOT NULL DEFAULT 0,
+                synced_at   TEXT
+            )
+            """);
+
+        foreach (var row in rows)
+            conn.Execute("""
+                INSERT INTO movies (id, folderName, source, source_ref, title, year, sourcePath, status, ignored, synced_at)
+                VALUES (@id, @f, @src, @ref, @t, @y, @sp, @s, @ig, COALESCE(@sa, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')))
+                """,
+                ("@id", row.NewId), ("@f", row.Folder), ("@src", row.Source), ("@ref", row.SourceRef),
+                ("@t", row.Title), ("@y", row.Year ?? (object)DBNull.Value), ("@sp", row.SourcePath),
+                ("@s", row.Status), ("@ig", row.Ignored), ("@sa", (object?)row.SyncedAt ?? DBNull.Value));
+
+        // History rows already carry title and year, so any that fail to remap still
+        // display correctly rather than going blank.
+        foreach (var (oldId, newId) in remap)
+            conn.Execute("UPDATE theme_history SET movie_id = @new WHERE movie_id = @old",
+                ("@new", newId), ("@old", oldId));
+
+        conn.Execute("DROP TABLE movies_v4_old");
+        tx.Commit();
+    }
+
     private static void MigrateMoviesTable(SqliteConnection conn)
     {
         using var cmd = conn.CreateCommand();
@@ -97,6 +202,13 @@ public class Database(string dbPath)
         var columns = new HashSet<string>();
         using (var r = cmd.ExecuteReader())
             while (r.Read()) columns.Add(r.GetString(1));
+
+        // Already on the modern (source-keyed) schema. Post-V4 the table has neither
+        // plex_server_id nor plex_rating_key, so without this guard every subsequent
+        // startup would think a legacy migration is still needed and would rename the
+        // table, recreate the OLD schema, and copy only id/title/year/folderName/status —
+        // silently dropping ignored flags, source_ref (Plex identity), and sourcePath.
+        if (columns.Contains("source")) return;
 
         var required = new[] { "id", "plex_server_id", "plex_rating_key", "title", "year", "sourcePath", "folderName", "status" };
         if (required.All(c => columns.Contains(c))) return;
@@ -271,29 +383,69 @@ public class Database(string dbPath)
         using var conn = Open();
         using var tx = conn.BeginTransaction();
         foreach (var m in movies)
+        {
+            if (string.IsNullOrEmpty(m.Folder)) continue;
+            var id = MovieFolderId.For(m.Folder);
             conn.Execute("""
-                INSERT INTO movies (id, plex_server_id, plex_rating_key, title, year, sourcePath, folderName, status, synced_at)
-                VALUES (@id, @sid, @rk, @t, @y, @sp, @fn, 'pending', COALESCE((SELECT synced_at FROM movies WHERE id = @id), strftime('%Y-%m-%dT%H:%M:%fZ', 'now')))
+                INSERT INTO movies (id, folderName, source, source_ref, title, year, sourcePath, status, synced_at)
+                VALUES (@id, @f, @src, @ref, @t, @y, @sp, 'pending',
+                        COALESCE((SELECT synced_at FROM movies WHERE id = @id), strftime('%Y-%m-%dT%H:%M:%fZ', 'now')))
                 ON CONFLICT(id) DO UPDATE SET
-                    plex_server_id  = excluded.plex_server_id,
-                    plex_rating_key = excluded.plex_rating_key,
-                    title           = excluded.title,
-                    year            = excluded.year,
-                    sourcePath      = excluded.sourcePath,
-                    folderName      = excluded.folderName,
-                    synced_at       = COALESCE(movies.synced_at, excluded.synced_at)
+                    folderName = excluded.folderName,
+                    source     = excluded.source,
+                    source_ref = excluded.source_ref,
+                    title      = excluded.title,
+                    year       = excluded.year,
+                    sourcePath = excluded.sourcePath,
+                    synced_at  = COALESCE(movies.synced_at, excluded.synced_at)
                 """,
-                ("@id", m.Id), ("@sid", m.PlexServerId), ("@rk", m.PlexRatingKey),
-                ("@t", m.Title), ("@y", (object?)m.Year ?? DBNull.Value),
-                ("@sp", m.SourcePath), ("@fn", m.FolderName));
+                ("@id", id), ("@f", m.Folder), ("@src", m.Source), ("@ref", m.SourceRef),
+                ("@t", m.Title), ("@y", (object?)m.Year ?? DBNull.Value), ("@sp", m.SourcePath));
+        }
         tx.Commit();
+    }
+
+    /// <summary>
+    /// Deletes movies whose folder was not in the most recent sync. Callers MUST only
+    /// invoke this after a sync that both succeeded and returned results — pruning on a
+    /// failed or empty sync would empty the library. Rows with <c>ignored = 1</c> are
+    /// never deleted, even when absent from the kept set: an ignored movie reflects an
+    /// explicit user decision, and silently reversing that (only for the movie to
+    /// re-sync as pending and get auto-downloaded into a folder the user opted out of)
+    /// is worse than leaving a harmless phantom row behind. Returns the number removed.
+    /// </summary>
+    public int PruneMoviesExcept(IEnumerable<string> keptFolders)
+    {
+        // Build the kept set using derived IDs, not raw folder strings. folderName is stored
+        // verbatim (with or without trailing separators), but identity is MovieFolderId.For(folder)
+        // which normalizes those separators away. Comparing raw strings would incorrectly
+        // delete a kept folder if the caller passes it with a different trailing-separator state.
+        var keep = keptFolders
+            .Where(f => !string.IsNullOrEmpty(f))
+            .Select(f => MovieFolderId.For(f))
+            .ToHashSet(StringComparer.Ordinal);
+        if (keep.Count == 0) return 0;
+
+        using var conn = Open();
+        var doomed = new List<string>();
+        conn.Query("SELECT id, ignored FROM movies", r =>
+        {
+            while (r.Read())
+                if (!keep.Contains(r.GetString(0)) && r.GetInt64(1) == 0) doomed.Add(r.GetString(0));
+        });
+
+        using var tx = conn.BeginTransaction();
+        foreach (var id in doomed)
+            conn.Execute("DELETE FROM movies WHERE id = @id", ("@id", id));
+        tx.Commit();
+        return doomed.Count;
     }
 
     public List<Dictionary<string, object?>> GetAllMovies()
     {
         using var conn = Open();
         var result = new List<Dictionary<string, object?>>();
-        conn.Query("SELECT id, plex_server_id, plex_rating_key, title, year, sourcePath, folderName, status, ignored FROM movies ORDER BY status, title", r =>
+        conn.Query("SELECT id, folderName, source, source_ref, title, year, sourcePath, status, ignored FROM movies ORDER BY status, title", r =>
         {
             while (r.Read())
             {
@@ -309,7 +461,7 @@ public class Database(string dbPath)
         using var conn = Open();
         Dictionary<string, object?>? result = null;
         conn.Query(
-            "SELECT id, plex_server_id, plex_rating_key, title, year, sourcePath, folderName, status, ignored FROM movies WHERE id = @id",
+            "SELECT id, folderName, source, source_ref, title, year, sourcePath, status, ignored FROM movies WHERE id = @id",
             r => { if (r.Read()) result = ReadMovieRow(r); }, ("@id", id));
         return result;
     }
@@ -383,7 +535,7 @@ public class Database(string dbPath)
 
         var recentlyAdded = new List<Dictionary<string, object?>>();
         conn.Query("""
-            SELECT id, plex_server_id, plex_rating_key, title, year, synced_at
+            SELECT id, source, source_ref, title, year, synced_at
             FROM movies
             WHERE ignored = 0 AND status = 'pending' AND synced_at IS NOT NULL
             ORDER BY synced_at DESC LIMIT 20
@@ -395,12 +547,12 @@ public class Database(string dbPath)
                 if (!pendingIds.Contains(id)) continue;
                 recentlyAdded.Add(new Dictionary<string, object?>
                 {
-                    ["id"]            = id,
-                    ["plexServerId"]  = r.GetString(1),
-                    ["plexRatingKey"] = r.GetString(2),
-                    ["title"]         = r.GetString(3),
-                    ["year"]          = r.IsDBNull(4) ? null : r.GetInt32(4),
-                    ["syncedAt"]      = r.IsDBNull(5) ? null : r.GetString(5),
+                    ["id"]        = id,
+                    ["source"]    = r.GetString(1),
+                    ["sourceRef"] = r.IsDBNull(2) ? null : r.GetString(2),
+                    ["title"]     = r.GetString(3),
+                    ["year"]      = r.IsDBNull(4) ? null : r.GetInt32(4),
+                    ["syncedAt"]  = r.IsDBNull(5) ? null : r.GetString(5),
                 });
             }
         });
@@ -448,7 +600,7 @@ public class Database(string dbPath)
     private static Dictionary<string, object?>? ReadMovieRow(SqliteDataReader r)
     {
         var ignored = !r.IsDBNull(8) && r.GetInt32(8) == 1;
-        var folder  = r.IsDBNull(6) ? "" : r.GetString(6);
+        var folder  = r.IsDBNull(1) ? "" : r.GetString(1);
 
         // Always return ignored movies so they can be unignored from the UI;
         // non-ignored movies with missing folders can't be used so filter them out.
@@ -467,14 +619,15 @@ public class Database(string dbPath)
 
         return new Dictionary<string, object?>
         {
-            ["id"]             = r.GetString(0),
-            ["plexServerId"]   = r.GetString(1),
-            ["plexRatingKey"]  = r.GetString(2),
-            ["title"]          = r.GetString(3),
-            ["year"]           = r.IsDBNull(4) ? null : r.GetInt32(4),
-            ["sourcePath"]     = r.IsDBNull(5) ? null : r.GetString(5),
-            ["folderName"]     = folder,
-            ["status"]         = status,
+            ["id"]         = r.GetString(0),
+            ["folderName"] = folder,
+            ["source"]     = r.GetString(2),
+            ["sourceRef"]  = r.IsDBNull(3) ? null : r.GetString(3),
+            ["title"]      = r.GetString(4),
+            ["year"]       = r.IsDBNull(5) ? null : r.GetInt32(5),
+            ["sourcePath"] = r.IsDBNull(6) ? null : r.GetString(6),
+            ["status"]     = status,
+            ["ignored"]    = ignored,
         };
     }
 }
@@ -519,11 +672,14 @@ public record StatsResult(
     List<Dictionary<string, object?>> RecentActivity,
     List<Dictionary<string, object?>> RecentlyAdded);
 
+/// <summary>
+/// A movie as reported by a library source. There is no id: identity is the resolved
+/// local folder, and the stored id is derived from it via <see cref="MovieFolderId"/>.
+/// </summary>
 public record MovieRecord(
-    string Id,
-    string PlexServerId,
-    string PlexRatingKey,
+    string Folder,
+    string Source,
+    string SourceRef,
     string Title,
     int? Year,
-    string SourcePath,
-    string FolderName);
+    string SourcePath);
