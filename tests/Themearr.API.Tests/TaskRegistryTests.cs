@@ -139,4 +139,40 @@ public class TaskRegistryTests
         r.MarkRunning("syncLibrary", true);
         Assert.False(Assert.Single(r.Snapshot()).IsRunning);
     }
+
+    [Fact]
+    public void UpdateInterval_changes_the_reported_interval()
+    {
+        var r = WithSync();
+
+        r.UpdateInterval("syncLibrary", TimeSpan.FromMinutes(15));
+
+        Assert.Equal(TimeSpan.FromMinutes(15), Assert.Single(r.Snapshot()).Interval);
+    }
+
+    [Fact]
+    public void UpdateInterval_preserves_last_run_state()
+    {
+        var r = WithSync();
+        var started = new DateTime(2026, 7, 20, 2, 0, 0, DateTimeKind.Utc);
+        r.RecordRun("syncLibrary", started, TimeSpan.FromMilliseconds(1200), "42 movies synced");
+
+        r.UpdateInterval("syncLibrary", TimeSpan.FromMinutes(15));
+
+        var t = Assert.Single(r.Snapshot());
+        Assert.Equal(started, t.LastRunUtc);
+        Assert.Equal("42 movies synced", t.LastResult);
+        // nextRunUtc is derived, so it must follow the NEW interval
+        Assert.Equal(started.AddMinutes(15), t.NextRunUtc);
+    }
+
+    [Fact]
+    public void UpdateInterval_on_an_unknown_id_does_nothing()
+    {
+        var r = WithSync();
+
+        r.UpdateInterval("nope", TimeSpan.FromMinutes(5));
+
+        Assert.Equal(TimeSpan.FromHours(24), Assert.Single(r.Snapshot()).Interval);
+    }
 }

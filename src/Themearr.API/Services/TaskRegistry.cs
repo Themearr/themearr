@@ -35,7 +35,7 @@ public sealed class TaskRegistry
     private sealed class Entry
     {
         public required string     Name       { get; init; }
-        public required TimeSpan   Interval   { get; init; }
+        public required TimeSpan   Interval   { get; set; }
 
         // Optional probe supplied at Register() time, e.g. backed by SyncService.InProgress.
         // When present it is the source of truth for IsRunning: it reflects reality even
@@ -74,6 +74,17 @@ public sealed class TaskRegistry
     /// </summary>
     public void Register(string id, string name, TimeSpan interval, Func<bool>? isRunning = null) =>
         _tasks[id] = new Entry { Name = name, Interval = interval, IsRunningProbe = isRunning };
+
+    /// <summary>
+    /// Changes a task's displayed cadence without touching its run history.
+    /// Re-registering would replace the entry and wipe last-run state, so this exists
+    /// for the case where the interval is a property of something configurable — the
+    /// active library source — rather than a constant.
+    /// </summary>
+    public void UpdateInterval(string id, TimeSpan interval)
+    {
+        if (_tasks.TryGetValue(id, out var e)) e.Interval = interval;
+    }
 
     public bool Exists(string id) => _tasks.ContainsKey(id);
 
