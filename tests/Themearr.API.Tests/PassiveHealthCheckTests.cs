@@ -22,6 +22,15 @@ public class PassiveHealthCheckTests
         public string    LastTickResult => lastResult;
     }
 
+    private sealed class FakeQuota(DateTime? coolingUntil) : IQuotaStatus
+    {
+        public bool IsQuotaCoolingDown(out DateTime untilUtc)
+        {
+            untilUtc = coolingUntil ?? DateTime.MinValue;
+            return coolingUntil.HasValue;
+        }
+    }
+
     private static Database NewDb(TempDir dir, bool setupComplete)
     {
         var db = new Database(Path.Combine(dir.Path, "test.db"));
@@ -39,7 +48,7 @@ public class PassiveHealthCheckTests
     public async Task RapidApi_before_setup_is_healthy_even_with_no_key()
     {
         using var dir = new TempDir();
-        var check = new RapidApiCheck(NewDb(dir, setupComplete: false), new FakeProvider("no key"));
+        var check = new RapidApiCheck(NewDb(dir, setupComplete: false), new FakeProvider("no key"), new FakeQuota(null));
 
         Assert.Equal(HealthStatus.Healthy, (await Run(check)).Status);
     }
@@ -48,7 +57,7 @@ public class PassiveHealthCheckTests
     public async Task RapidApi_without_a_key_is_an_error_carrying_the_reason()
     {
         using var dir = new TempDir();
-        var check = new RapidApiCheck(NewDb(dir, setupComplete: true), new FakeProvider("RapidAPI key is not set"));
+        var check = new RapidApiCheck(NewDb(dir, setupComplete: true), new FakeProvider("RapidAPI key is not set"), new FakeQuota(null));
 
         var result = await Run(check);
 
@@ -60,9 +69,24 @@ public class PassiveHealthCheckTests
     public async Task RapidApi_configured_is_healthy()
     {
         using var dir = new TempDir();
-        var check = new RapidApiCheck(NewDb(dir, setupComplete: true), new FakeProvider(null));
+        var check = new RapidApiCheck(NewDb(dir, setupComplete: true), new FakeProvider(null), new FakeQuota(null));
 
         Assert.Equal(HealthStatus.Healthy, (await Run(check)).Status);
+    }
+
+    [Fact]
+    public async Task RapidApi_quota_cooldown_is_a_warning_naming_the_time()
+    {
+        using var dir = new TempDir();
+        var until = new DateTime(2026, 7, 19, 14, 32, 0, DateTimeKind.Utc);
+        var check = new RapidApiCheck(
+            NewDb(dir, setupComplete: true), new FakeProvider(null), new FakeQuota(until));
+
+        var result = await Run(check);
+
+        Assert.Equal(HealthStatus.Degraded, result.Status);
+        Assert.Contains("quota", result.Description, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("14:32", result.Description);
     }
 
     // ── DownloadWorkerCheck ──────────────────────────────────────────────────

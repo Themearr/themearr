@@ -5,7 +5,7 @@ namespace Themearr.API.Services;
 
 public class DownloadService(
     IThemeAudioProvider provider, Database db, IHttpClientFactory httpClientFactory,
-    IConfiguration config, ILogger<DownloadService> log)
+    IConfiguration config, ILogger<DownloadService> log) : Health.IQuotaStatus
 {
     private sealed record JobState(bool InProgress, bool Finished, string? Error, DateTime StartedAtUtc = default);
     private readonly ConcurrentDictionary<string, JobState>          _jobs    = new();
