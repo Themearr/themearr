@@ -77,11 +77,17 @@ public class AutoSyncService(IServiceProvider services, TaskRegistry registry, I
         var delay   = Task.Delay(CheckInterval + jitter, raceCts.Token);
 
         await Task.WhenAny(trigger, delay);
-        var wokenByTrigger = trigger.IsCompletedSuccessfully;
 
         await raceCts.CancelAsync();
         try { await Task.WhenAll(trigger, delay); }
         catch (OperationCanceledException) { /* expected: we cancelled the loser */ }
+
+        // Read the winner AFTER the loser settles. If a trigger landed in the gap
+        // between WhenAny resuming and the cancel, the channel byte has already been
+        // consumed — reading earlier would report "not triggered" and silently drop
+        // that click. A cancelled trigger task is not CompletedSuccessfully, so the
+        // timer-won case still returns false.
+        var wokenByTrigger = trigger.IsCompletedSuccessfully;
 
         return wokenByTrigger && !ct.IsCancellationRequested;
     }
