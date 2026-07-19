@@ -90,7 +90,7 @@ jobs:
       # ── Build .NET API ────────────────────────────────────────────────────────
       - uses: actions/setup-dotnet@v4.3.1
         with:
-          dotnet-version: '9.0.x'
+          dotnet-version: '10.0.x'
 
       - name: Publish linux-x64
         run: |

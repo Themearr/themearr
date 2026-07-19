@@ -13,7 +13,7 @@ RUN npm run build
 # Output is in /frontend/out (static SPA bundle)
 
 # ── Stage 2: Build .NET API ───────────────────────────────────────────────────
-FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:9.0 AS api-build
+FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:10.0 AS api-build
 WORKDIR /src
 
 COPY src/Themearr.API/ ./
@@ -21,7 +21,7 @@ RUN dotnet restore
 RUN dotnet publish -c Release -o /app/publish --no-restore
 
 # ── Stage 3: Runtime ──────────────────────────────────────────────────────────
-FROM mcr.microsoft.com/dotnet/aspnet:9.0 AS runtime
+FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 
 # No extra system packages: theme audio is fetched over HTTP from the
 # youtube-mp36 RapidAPI (see DownloadService), so yt-dlp/ffmpeg are not needed.
