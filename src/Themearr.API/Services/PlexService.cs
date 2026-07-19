@@ -290,8 +290,15 @@ public class PlexService(HttpClient http, Database db)
             // on the next run. Recorded here even when a sync fails partway, so the
             // numbers always describe the most recent attempt rather than an older
             // successful one.
-            db.SetSetting("last_sync_unresolved_count",  unresolvedCount.ToString());
-            db.SetSetting("last_sync_unresolved_sample", unresolvedSample);
+            try
+            {
+                db.SetSetting("last_sync_unresolved_count",  unresolvedCount.ToString());
+                db.SetSetting("last_sync_unresolved_sample", unresolvedSample);
+            }
+            catch (Exception)
+            {
+                /* settings write must not mask the sync error; counters are diagnostics only */
+            }
         }
 
         return result;
