@@ -31,4 +31,14 @@ public interface ILibrarySource
 
     /// <summary>Null when healthy, otherwise a user-facing reason. Never raw exception text.</summary>
     Task<string?> CheckAsync(CancellationToken ct);
+
+    /// <summary>
+    /// Null when this source has enough set up to attempt a sync at all (Plex: a server
+    /// and at least one selected library; Radarr: a URL and API key), otherwise a
+    /// user-facing reason it can't. Unlike <see cref="CheckAsync"/> this never makes a
+    /// network call — it's the same-process check the sync-start endpoint needs before
+    /// it will even try, so a misconfigured source fails fast with a source-appropriate
+    /// message instead of a generic error partway through the sync.
+    /// </summary>
+    string? SyncBlockedReason { get; }
 }

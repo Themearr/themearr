@@ -53,6 +53,20 @@ public class PlexLibrarySource(PlexService plex, Database db, IHttpClientFactory
         return buffer;
     }
 
+    /// <summary>Same check the sync-start endpoint used to run inline before this moved onto
+    /// the interface — kept word-for-word so a Plex user's error message is unchanged.</summary>
+    public string? SyncBlockedReason
+    {
+        get
+        {
+            var servers   = db.GetPlexServers();
+            var libraries = db.GetSelectedLibraries();
+            return servers.Count == 0 || libraries.Values.Sum(v => v.Count) == 0
+                ? "Plex sign-in is not complete"
+                : null;
+        }
+    }
+
     public async Task<string?> CheckAsync(CancellationToken ct)
     {
         var servers = db.GetPlexServersDict();

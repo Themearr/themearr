@@ -17,6 +17,8 @@ public class LibrarySourceResolverTests
             Task.FromResult<Stream?>(null);
 
         public Task<string?> CheckAsync(CancellationToken ct) => Task.FromResult<string?>(null);
+
+        public string? SyncBlockedReason => null;
     }
 
     private static LibrarySourceResolver New(TempDir dir, string? configured, out Database db)

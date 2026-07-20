@@ -173,6 +173,19 @@ public class RadarrLibrarySource(Database db, LocalFolderResolver folders, IHttp
         return buffer;
     }
 
+    /// <summary>Mirrors the guard at the top of <see cref="FetchAsync"/> — a sync must fail
+    /// this fast, before a background task even starts, rather than only inside it.</summary>
+    public string? SyncBlockedReason
+    {
+        get
+        {
+            var (url, key) = Config();
+            return string.IsNullOrEmpty(url) || string.IsNullOrEmpty(key)
+                ? "Radarr is not configured — set its URL and API key in Settings."
+                : null;
+        }
+    }
+
     public Task<string?> CheckAsync(CancellationToken ct)
     {
         var (url, key) = Config();

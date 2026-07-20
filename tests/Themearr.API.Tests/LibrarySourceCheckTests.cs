@@ -19,6 +19,8 @@ public class LibrarySourceCheckTests
             Task.FromResult<Stream?>(null);
 
         public Task<string?> CheckAsync(CancellationToken ct) => Task.FromResult(reason);
+
+        public string? SyncBlockedReason => null;
     }
 
     private static Task<HealthCheckResult> Run(TempDir dir, string? reason, bool setupComplete = true)

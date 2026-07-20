@@ -7,11 +7,13 @@ import { SearchModal } from './SearchModal'
 interface MovieGridProps {
   movies: Movie[]
   onMovieUpdated: (movieId: string, status: Movie['status']) => void
+  /** Active library source, for the empty-state copy — "Plex" or "Radarr". */
+  sourceLabel: string
 }
 
 type Filter = 'all' | 'pending' | 'downloaded' | 'ignored'
 
-export function MovieGrid({ movies, onMovieUpdated }: MovieGridProps) {
+export function MovieGrid({ movies, onMovieUpdated, sourceLabel }: MovieGridProps) {
   const [filter,   setFilter]   = useState<Filter>('all')
   const [search,   setSearch]   = useState('')
   const [selected, setSelected] = useState<Movie | null>(null)
@@ -110,7 +112,7 @@ export function MovieGrid({ movies, onMovieUpdated }: MovieGridProps) {
             </svg>
           }
           title={search ? 'No movies match your search' : 'No movies yet'}
-          description={search ? 'Try a different search term' : 'Sync your Plex library to get started'}
+          description={search ? 'Try a different search term' : `Sync your ${sourceLabel} library to get started`}
         />
       ) : (
         <>

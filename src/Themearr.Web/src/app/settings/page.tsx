@@ -400,8 +400,8 @@ export default function SettingsPage() {
             />
             <div className="border-t border-[#1D2939]" />
             <ToggleRow
-              label="Auto-sync with Plex"
-              hint={`Check Plex for new movies once a day.${settings.lastAutoSyncAt ? ` Last synced: ${formatUnix(settings.lastAutoSyncAt)}` : ''}`}
+              label={`Auto-sync with ${librarySource === 'radarr' ? 'Radarr' : 'Plex'}`}
+              hint={`Check ${librarySource === 'radarr' ? 'Radarr for new movies every 15 minutes' : 'Plex for new movies once a day'}.${settings.lastAutoSyncAt ? ` Last synced: ${formatUnix(settings.lastAutoSyncAt)}` : ''}`}
               checked={settings.autoSync}
               onChange={() => setSettings(s => s ? { ...s, autoSync: !s.autoSync } : s)}
             />
