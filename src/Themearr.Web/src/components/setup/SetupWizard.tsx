@@ -148,17 +148,14 @@ export function SetupWizard() {
       if (source === 'radarr') {
         // The Radarr branch never touches plex/selection (Plex-only); library
         // paths go through the ordinary settings endpoint, then setup completes
-        // via its own non-Plex endpoint.
-        await settingsApi.save({
-          selectedServers: [],
-          selectedLibraries: {},
-          pathMappings: [],
-          libraryPaths: paths,
-          advanced: { maxSearchDirs: 20000, searchDepth: 4 },
-          autoDownload: false,
-          autoSync: false,
-          lastAutoSyncAt: '',
-        })
+        // via its own non-Plex endpoint. /setup is reachable at any time by an
+        // already-configured user, so this must only write the library paths —
+        // fetch the current settings first and round-trip everything else
+        // unchanged, rather than posting a blank slate that would wipe out an
+        // existing Plex server/library selection and reset auto-download,
+        // auto-sync and the advanced search settings.
+        const current = await settingsApi.get()
+        await settingsApi.save({ ...current, libraryPaths: paths })
         await setupApi.complete()
       } else {
         await setupApi.saveSelection({

@@ -184,9 +184,14 @@ public class SetupController(Database db, PlexService plex) : ControllerBase
         var selectedLibraries = db.GetSelectedLibraries();
         var libCount = selectedLibraries.Values.Sum(v => v.Count);
 
+        // A Radarr install never selects Plex libraries, so the library-count
+        // requirement only makes sense for the Plex source — otherwise setup can
+        // never be reported complete and /setup/complete becomes unobservable.
+        var isPlex = db.GetSetting("library_source", "plex") == "plex";
+
         return new
         {
-            setupComplete    = db.IsSetupComplete() && libCount > 0,
+            setupComplete    = db.IsSetupComplete() && (!isPlex || libCount > 0),
             plexConnected,
             plexAccountName  = db.GetSetting("plex_account_name"),
             selectedServers,
