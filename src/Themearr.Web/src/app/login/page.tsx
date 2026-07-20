@@ -170,6 +170,17 @@ export default function LoginPage() {
               <p className="text-center text-xs text-[#475467]">
                 You&apos;ll be redirected to Plex to authorise Themearr, then brought back automatically.
               </p>
+              <div className="flex items-center gap-3">
+                <div className="h-px flex-1 bg-[#1D2939]" />
+                <span className="text-xs text-[#475467]">or</span>
+                <div className="h-px flex-1 bg-[#1D2939]" />
+              </div>
+              <button
+                onClick={() => navigate('/setup')}
+                className="w-full text-center text-xs text-[#667085] hover:text-[#D0D5DD] transition-colors"
+              >
+                I don&apos;t use Plex — set up with Radarr
+              </button>
             </>
           )}
         </div>

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { radarrApi, setupApi, settingsApi } from '@/lib/api'
+import { useAuth } from '@/lib/auth'
 import type { PlexLibrary, PlexServer } from '@/lib/types'
 import { Button, Input, Spinner } from '@/components/ui'
 
@@ -9,6 +10,7 @@ type Source = 'plex' | 'radarr'
 
 export function SetupWizard() {
   const navigate = useNavigate()
+  const { connected } = useAuth()
   const [step, setStep]     = useState<Step>('source-select')
   const [source, setSource] = useState<Source>('plex')
   const [error, setError]   = useState('')
@@ -42,6 +44,15 @@ export function SetupWizard() {
     setSource(src)
     setError('')
     if (src === 'plex') {
+      // A user can reach the wizard with a valid token but no Plex sign-in yet
+      // (e.g. arriving via the Radarr entry point on /login, or an unfinished
+      // Plex OAuth). The server-select step has nothing to fetch without a
+      // Plex connection, so send them to sign in instead of showing an empty
+      // or broken list.
+      if (!connected) {
+        navigate('/login')
+        return
+      }
       setStep('server-select')
       setLoadingServers(true)
       setupApi.plexServers()
