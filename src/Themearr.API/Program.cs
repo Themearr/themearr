@@ -37,6 +37,11 @@ builder.Services.AddSingleton<LocalFolderResolver>();
 builder.Services.AddSingleton<Themearr.API.Services.Sources.PlexLibrarySource>();
 builder.Services.AddSingleton<Themearr.API.Services.Sources.ILibrarySource>(
     sp => sp.GetRequiredService<Themearr.API.Services.Sources.PlexLibrarySource>());
+builder.Services.AddSingleton<Themearr.API.Services.Sources.RadarrLibrarySource>();
+builder.Services.AddSingleton<Themearr.API.Services.Sources.ILibrarySource>(
+    sp => sp.GetRequiredService<Themearr.API.Services.Sources.RadarrLibrarySource>());
+builder.Services.AddHttpClient(Themearr.API.Services.Sources.RadarrLibrarySource.ClientName,
+    c => c.Timeout = TimeSpan.FromSeconds(10));
 builder.Services.AddSingleton<Themearr.API.Services.Sources.LibrarySourceResolver>();
 builder.Services.AddSingleton<SyncService>();
 builder.Services.AddSingleton<UpdateService>();
