@@ -201,6 +201,65 @@ public class RadarrLibrarySourceTests
         Assert.DoesNotContain("Connection refused", reason);
     }
 
+    // ── ProbeAsync ───────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task ProbeAsync_returns_null_when_radarr_is_reachable()
+    {
+        using var dir = new TempDir();
+        var handler = new StubHandler(_ => Json("""{"version":"5.0.0"}"""));
+        var (source, _) = New(dir, handler);
+
+        var reason = await source.ProbeAsync("http://elsewhere:9999", "some-other-key", CancellationToken.None);
+
+        Assert.Null(reason);
+    }
+
+    [Fact]
+    public async Task ProbeAsync_reports_a_rejected_key_without_leaking_it()
+    {
+        using var dir = new TempDir();
+        var handler = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.Unauthorized));
+        var (source, _) = New(dir, handler);
+
+        var reason = await source.ProbeAsync("http://elsewhere:9999", "typed-key", CancellationToken.None);
+
+        Assert.NotNull(reason);
+        Assert.Contains("401", reason);
+        Assert.DoesNotContain("typed-key", reason);
+    }
+
+    [Fact]
+    public async Task ProbeAsync_reports_an_unreachable_host_cleanly()
+    {
+        using var dir = new TempDir();
+        var handler = new StubHandler(_ => throw new HttpRequestException("Connection refused to http://elsewhere:9999 key=typed-key"));
+        var (source, _) = New(dir, handler);
+
+        var reason = await source.ProbeAsync("http://elsewhere:9999", "typed-key", CancellationToken.None);
+
+        Assert.NotNull(reason);
+        Assert.DoesNotContain("typed-key", reason);
+        Assert.DoesNotContain("Connection refused", reason);
+    }
+
+    [Fact]
+    public async Task ProbeAsync_never_touches_stored_settings()
+    {
+        using var dir = new TempDir();
+        var handler = new StubHandler(_ => Json("""{"version":"5.0.0"}"""));
+        var (source, db) = New(dir, handler);
+
+        var urlBefore = db.GetSetting("radarr_url", "");
+        var keyBefore = db.GetSetting("radarr_api_key", "");
+
+        var reason = await source.ProbeAsync("http://totally-different-host:1234", "totally-different-key", CancellationToken.None);
+
+        Assert.Null(reason);
+        Assert.Equal(urlBefore, db.GetSetting("radarr_url", ""));
+        Assert.Equal(keyBefore, db.GetSetting("radarr_api_key", ""));
+    }
+
     [Fact]
     public async Task An_unconfigured_radarr_reports_what_is_missing()
     {

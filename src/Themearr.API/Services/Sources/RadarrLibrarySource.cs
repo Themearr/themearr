@@ -173,16 +173,28 @@ public class RadarrLibrarySource(Database db, LocalFolderResolver folders, IHttp
         return buffer;
     }
 
-    public async Task<string?> CheckAsync(CancellationToken ct)
+    public Task<string?> CheckAsync(CancellationToken ct)
     {
         var (url, key) = Config();
-        if (string.IsNullOrEmpty(url) || string.IsNullOrEmpty(key))
+        return ProbeAsync(url, key, ct);
+    }
+
+    /// <summary>
+    /// Probes Radarr at the given URL/key without touching stored settings — used both by
+    /// <see cref="CheckAsync"/> (stored config) and by the Settings "Test" endpoint (the
+    /// values the user just typed, before they've been saved). Never writes to the
+    /// database, so a test can never race a scheduled sync or corrupt saved credentials.
+    /// </summary>
+    public async Task<string?> ProbeAsync(string url, string apiKey, CancellationToken ct)
+    {
+        url = url.TrimEnd('/');
+        if (string.IsNullOrEmpty(url) || string.IsNullOrEmpty(apiKey))
             return "Radarr is not configured — set its URL and API key in Settings.";
 
         var http = factory.CreateClient(ClientName);
         try
         {
-            using var request = Request(url, key, "/api/v3/system/status");
+            using var request = Request(url, apiKey, "/api/v3/system/status");
             using var response = await http.SendAsync(request, ct);
 
             if (response.StatusCode == HttpStatusCode.Unauthorized)

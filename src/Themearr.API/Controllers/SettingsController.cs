@@ -7,7 +7,7 @@ namespace Themearr.API.Controllers;
 
 [ApiController]
 [Route("api/settings")]
-public class SettingsController(Database db, IEnumerable<ILibrarySource> allSources) : ControllerBase
+public class SettingsController(Database db, RadarrLibrarySource radarr) : ControllerBase
 {
     [HttpGet]
     public IActionResult Get() => Ok(new
@@ -122,9 +122,10 @@ public class SettingsController(Database db, IEnumerable<ILibrarySource> allSour
         }
 
         db.SetSetting("library_source", source);
-        db.SetSetting("radarr_url", (payload.Url ?? "").Trim().TrimEnd('/'));
-        // A blank key means "keep what you had" — the UI never receives the stored key,
-        // so submitting the form unchanged must not wipe it.
+        // A blank URL or key means "keep what you had" — e.g. a Plex save submits neither,
+        // and must not wipe Radarr's stored config out from under it.
+        if (!string.IsNullOrWhiteSpace(payload.Url))
+            db.SetSetting("radarr_url", payload.Url.Trim().TrimEnd('/'));
         if (!string.IsNullOrWhiteSpace(payload.ApiKey))
             db.SetSetting("radarr_api_key", payload.ApiKey.Trim());
 
@@ -136,23 +137,15 @@ public class SettingsController(Database db, IEnumerable<ILibrarySource> allSour
     public async Task<IActionResult> TestRadarr([FromBody] RadarrPayload payload, CancellationToken ct)
     {
         // Test what the user is about to save, not what is stored, so a wrong key is
-        // caught while they are still looking at the field.
-        var previousUrl = db.GetSetting("radarr_url", "");
-        var previousKey = db.GetSetting("radarr_api_key", "");
-        try
-        {
-            db.SetSetting("radarr_url", (payload.Url ?? "").Trim().TrimEnd('/'));
-            if (!string.IsNullOrWhiteSpace(payload.ApiKey)) db.SetSetting("radarr_api_key", payload.ApiKey.Trim());
-
-            var radarr = allSources.First(s => s.Name == "radarr");
-            var reason = await radarr.CheckAsync(ct);
-            return Ok(new { ok = reason is null, detail = reason ?? "Radarr is reachable." });
-        }
-        finally
-        {
-            db.SetSetting("radarr_url", previousUrl);
-            db.SetSetting("radarr_api_key", previousKey);
-        }
+        // caught while they are still looking at the field. Probes directly against the
+        // submitted values — never writes to settings, so this can't race a scheduled
+        // sync or a real save that lands mid-probe (see RadarrLibrarySource.ProbeAsync).
+        var url = (payload.Url ?? "").Trim();
+        var key = string.IsNullOrWhiteSpace(payload.ApiKey)
+            ? db.GetSetting("radarr_api_key", "")
+            : payload.ApiKey.Trim();
+        var reason = await radarr.ProbeAsync(url, key, ct);
+        return Ok(new { ok = reason is null, detail = reason ?? "Radarr is reachable." });
     }
 
     public record RadarrPayload(string? Source, string? Url, string? ApiKey);
