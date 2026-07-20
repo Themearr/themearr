@@ -1,12 +1,13 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Http;
 using Themearr.API.Data;
+using Themearr.API.Services.Sources;
 
 namespace Themearr.API.Controllers;
 
 [ApiController]
 [Route("api/settings")]
-public class SettingsController(Database db) : ControllerBase
+public class SettingsController(Database db, IEnumerable<ILibrarySource> allSources) : ControllerBase
 {
     [HttpGet]
     public IActionResult Get() => Ok(new
@@ -91,6 +92,70 @@ public class SettingsController(Database db) : ControllerBase
         db.SetSetting("rapidapi_username", "");
         return Ok(new { configured = false });
     }
+
+    // ── Radarr library source ────────────────────────────────────────────────
+
+    [HttpGet("radarr")]
+    public IActionResult GetRadarr() => Ok(new
+    {
+        source     = db.GetSetting("library_source", "plex"),
+        url        = db.GetSetting("radarr_url", ""),
+        // The key itself is never returned — same rule as the RapidAPI endpoint above.
+        configured = !string.IsNullOrWhiteSpace(db.GetSetting("radarr_api_key", "")),
+    });
+
+    [HttpPost("radarr")]
+    [Consumes("application/json")]
+    public IActionResult SaveRadarr([FromBody] RadarrPayload payload)
+    {
+        var source = (payload.Source ?? "plex").Trim();
+        if (source is not ("plex" or "radarr"))
+            return BadRequest(new { detail = "Library source must be 'plex' or 'radarr'." });
+
+        if (source == "radarr")
+        {
+            if (string.IsNullOrWhiteSpace(payload.Url))
+                return BadRequest(new { detail = "Radarr URL cannot be empty." });
+            if (string.IsNullOrWhiteSpace(payload.ApiKey) &&
+                string.IsNullOrWhiteSpace(db.GetSetting("radarr_api_key", "")))
+                return BadRequest(new { detail = "Radarr API key cannot be empty." });
+        }
+
+        db.SetSetting("library_source", source);
+        db.SetSetting("radarr_url", (payload.Url ?? "").Trim().TrimEnd('/'));
+        // A blank key means "keep what you had" — the UI never receives the stored key,
+        // so submitting the form unchanged must not wipe it.
+        if (!string.IsNullOrWhiteSpace(payload.ApiKey))
+            db.SetSetting("radarr_api_key", payload.ApiKey.Trim());
+
+        return Ok(new { source, configured = !string.IsNullOrWhiteSpace(db.GetSetting("radarr_api_key", "")) });
+    }
+
+    [HttpPost("radarr/test")]
+    [Consumes("application/json")]
+    public async Task<IActionResult> TestRadarr([FromBody] RadarrPayload payload, CancellationToken ct)
+    {
+        // Test what the user is about to save, not what is stored, so a wrong key is
+        // caught while they are still looking at the field.
+        var previousUrl = db.GetSetting("radarr_url", "");
+        var previousKey = db.GetSetting("radarr_api_key", "");
+        try
+        {
+            db.SetSetting("radarr_url", (payload.Url ?? "").Trim().TrimEnd('/'));
+            if (!string.IsNullOrWhiteSpace(payload.ApiKey)) db.SetSetting("radarr_api_key", payload.ApiKey.Trim());
+
+            var radarr = allSources.First(s => s.Name == "radarr");
+            var reason = await radarr.CheckAsync(ct);
+            return Ok(new { ok = reason is null, detail = reason ?? "Radarr is reachable." });
+        }
+        finally
+        {
+            db.SetSetting("radarr_url", previousUrl);
+            db.SetSetting("radarr_api_key", previousKey);
+        }
+    }
+
+    public record RadarrPayload(string? Source, string? Url, string? ApiKey);
 }
 
 public record RapidApiKeyPayload(string Key, string Username);
