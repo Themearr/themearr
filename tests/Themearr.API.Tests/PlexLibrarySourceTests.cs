@@ -184,4 +184,52 @@ public class PlexLibrarySourceTests
 
         Assert.Null(stream);
     }
+
+    [Fact]
+    public async Task FetchPosterAsync_returns_the_served_bytes_and_stays_readable_after_returning()
+    {
+        using var dir = new TempDir();
+        var db = NewDb(dir, withServer: true);
+        byte[] served = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+        var handler = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new ByteArrayContent(served),
+        });
+
+        var stream = await NewSource(db, handler)
+            .FetchPosterAsync($"{ServerId}:12345", width: 300, CancellationToken.None);
+
+        Assert.NotNull(stream);
+        // The HttpResponseMessage FetchPosterAsync fetched from is disposed before the
+        // method returns. If the bytes had not been copied out first (e.g. the old code
+        // that handed back resp.Content's stream directly), reading here — after the
+        // call has already returned — would throw ObjectDisposedException. Reading
+        // successfully proves the response did not leak past the method.
+        using var read = new MemoryStream();
+        await stream!.CopyToAsync(read);
+        Assert.Equal(served, read.ToArray());
+    }
+
+    [Fact]
+    public async Task FetchPosterAsync_returns_null_instead_of_unbounded_data_over_the_byte_cap()
+    {
+        using var dir = new TempDir();
+        var db = NewDb(dir, withServer: true);
+        // Mirrors the internal StreamLimits.MaxPosterBytes (20 MB); that constant isn't
+        // visible from this assembly, so the cap is duplicated here deliberately.
+        const long maxPosterBytes = 20L * 1024 * 1024;
+        var oversized = new byte[maxPosterBytes + 1];
+        var handler = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new ByteArrayContent(oversized),
+        });
+
+        var stream = await NewSource(db, handler)
+            .FetchPosterAsync($"{ServerId}:12345", width: 300, CancellationToken.None);
+
+        // FetchPosterAsync returns null when the response exceeds the poster byte cap
+        // (mirroring PosterController's "any failure -> NotFound" behaviour) rather than
+        // truncating and returning a partial image.
+        Assert.Null(stream);
+    }
 }

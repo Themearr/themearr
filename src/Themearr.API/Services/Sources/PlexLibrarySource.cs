@@ -32,9 +32,25 @@ public class PlexLibrarySource(PlexService plex, Database db, IHttpClientFactory
 
         var http = factory.CreateClient();
         http.Timeout = TimeSpan.FromSeconds(15);
-        var resp = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct);
-        if (!resp.IsSuccessStatusCode) { resp.Dispose(); return null; }
-        return await resp.Content.ReadAsStreamAsync(ct);
+        using var resp = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct);
+        if (!resp.IsSuccessStatusCode) return null;
+
+        // Buffer the bytes under a cap rather than handing back resp.Content's stream:
+        // the HttpResponseMessage is disposed when this method returns (the `using`
+        // above), so its stream must not outlive the call, and the byte cap belongs
+        // here now that the source — not PosterController — owns the fetch.
+        var buffer = new MemoryStream();
+        try
+        {
+            await StreamLimits.CopyWithLimitAsync(
+                await resp.Content.ReadAsStreamAsync(ct), buffer, StreamLimits.MaxPosterBytes, ct);
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+        buffer.Position = 0;
+        return buffer;
     }
 
     public async Task<string?> CheckAsync(CancellationToken ct)

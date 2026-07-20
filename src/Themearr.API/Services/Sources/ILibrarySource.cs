@@ -23,7 +23,9 @@ public interface ILibrarySource
     /// <summary>
     /// Streams this source's poster for <paramref name="sourceRef"/>, or null when it
     /// has none. The caller proxies the bytes same-origin, so the source's credentials
-    /// never reach the browser.
+    /// never reach the browser. <paramref name="width"/> is expected to already be
+    /// clamped to a sane range by the caller; this is a request concern, not something
+    /// the source re-validates.
     /// </summary>
     Task<Stream?> FetchPosterAsync(string sourceRef, int width, CancellationToken ct);
 
