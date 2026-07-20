@@ -101,6 +101,10 @@ export const setupApi = {
 
   reset: () =>
     request<SetupStatus>('/api/setup/reset', { method: 'POST' }),
+
+  // For a non-Plex install: the Plex branch reaches setup_complete through
+  // saveSelection above; a Radarr user never touches that endpoint.
+  complete: () => request<{ setupComplete: boolean }>('/api/setup/complete', { method: 'POST' }),
 }
 
 // ── Movies ────────────────────────────────────────────────────────────────────

@@ -136,6 +136,25 @@ public class SetupController(Database db, PlexService plex) : ControllerBase
         return Ok(SetupPayload());
     }
 
+    // ── Non-Plex completion ──────────────────────────────────────────────────
+
+    /// <summary>
+    /// Marks setup complete for an install that is not using Plex. The Plex branch
+    /// finishes via plex/selection; a Radarr user never touches those endpoints.
+    /// </summary>
+    [HttpPost("complete")]
+    public IActionResult Complete()
+    {
+        if (db.GetSetting("library_source", "plex") != "radarr")
+            return BadRequest(new { detail = "Only a non-Plex library source can complete setup this way." });
+        if (string.IsNullOrWhiteSpace(db.GetSetting("radarr_url", "")) ||
+            string.IsNullOrWhiteSpace(db.GetSetting("radarr_api_key", "")))
+            return BadRequest(new { detail = "Configure Radarr before completing setup." });
+
+        db.MarkSetupComplete();
+        return Ok(new { setupComplete = true });
+    }
+
     // ── Logout ───────────────────────────────────────────────────────────────
 
     [HttpPost("plex/logout")]
