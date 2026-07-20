@@ -187,9 +187,9 @@ public class RadarrLibrarySource(Database db, LocalFolderResolver folders, IHttp
     /// </summary>
     public async Task<string?> ProbeAsync(string url, string apiKey, CancellationToken ct)
     {
-        url = url.TrimEnd('/');
         if (string.IsNullOrEmpty(url) || string.IsNullOrEmpty(apiKey))
             return "Radarr is not configured — set its URL and API key in Settings.";
+        url = url.TrimEnd('/');
 
         var http = factory.CreateClient(ClientName);
         try
