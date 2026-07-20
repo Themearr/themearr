@@ -1,7 +1,7 @@
 import type {
   Movie, YoutubeResult, PlexServer, PlexLibrary,
   SetupStatus, Settings, SyncStatus, VersionInfo, HistoryEntry, DashboardStats,
-  HealthResponse, SystemTask,
+  HealthResponse, SystemTask, RadarrSettings,
 } from './types'
 
 const BASE = (import.meta.env.VITE_API_URL ?? '').replace(/\/$/, '')
@@ -222,5 +222,21 @@ export const systemApi = {
   runTask: (id: string) =>
     request<{ started: boolean }>(`/api/system/tasks/${encodeURIComponent(id)}/run`, {
       method: 'POST',
+    }),
+}
+
+// ── Library source (Radarr) ───────────────────────────────────────────────────
+
+export const radarrApi = {
+  get: () => request<RadarrSettings>('/api/settings/radarr'),
+  save: (source: string, url: string, apiKey: string) =>
+    request<{ source: string; configured: boolean }>('/api/settings/radarr', {
+      method: 'POST',
+      body: JSON.stringify({ source, url, apiKey }),
+    }),
+  test: (url: string, apiKey: string) =>
+    request<{ ok: boolean; detail: string }>('/api/settings/radarr/test', {
+      method: 'POST',
+      body: JSON.stringify({ source: 'radarr', url, apiKey }),
     }),
 }

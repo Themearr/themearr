@@ -133,3 +133,10 @@ export interface SystemTask {
   nextRunUtc: string | null
   isRunning: boolean
 }
+
+export interface RadarrSettings {
+  source: 'plex' | 'radarr'
+  url: string
+  /** The API key is never sent to the browser; this only says whether one is stored. */
+  configured: boolean
+}

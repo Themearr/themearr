@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { rapidApiApi, settingsApi, setupApi, versionApi } from '@/lib/api'
+import { radarrApi, rapidApiApi, settingsApi, setupApi, versionApi } from '@/lib/api'
 import type { Settings, VersionInfo } from '@/lib/types'
 import { AppShell } from '@/components/layout/AppShell'
 import { Button, Input, Spinner } from '@/components/ui'
@@ -15,6 +15,15 @@ export default function SettingsPage() {
   const [rapidApiUsername, setRapidApiUsername] = useState('')
   const [rapidApiSaving,   setRapidApiSaving]   = useState(false)
   const [rapidApiError,    setRapidApiError]    = useState('')
+  const [librarySource,    setLibrarySource]    = useState<'plex' | 'radarr'>('plex')
+  const [radarrUrl,        setRadarrUrl]        = useState('')
+  const [radarrApiKey,     setRadarrApiKey]     = useState('')
+  const [radarrConfigured, setRadarrConfigured] = useState(false)
+  const [radarrSaving,     setRadarrSaving]     = useState(false)
+  const [radarrSaved,      setRadarrSaved]      = useState(false)
+  const [radarrTesting,    setRadarrTesting]    = useState(false)
+  const [radarrTestResult, setRadarrTestResult] = useState<{ ok: boolean; detail: string } | null>(null)
+  const [radarrError,      setRadarrError]      = useState('')
 
   // Update modal state
   const [updateOpen,    setUpdateOpen]    = useState(false)
@@ -29,6 +38,11 @@ export default function SettingsPage() {
     settingsApi.get().then(setSettings).catch(() => null)
     versionApi.get().then(setVersion).catch(() => null)
     rapidApiApi.status().then(s => setRapidApiOk(s.configured)).catch(() => null)
+    radarrApi.get().then(s => {
+      setLibrarySource(s.source)
+      setRadarrUrl(s.url)
+      setRadarrConfigured(s.configured)
+    }).catch(() => null)
   }, [])
 
   // Auto-scroll logs
@@ -115,6 +129,37 @@ export default function SettingsPage() {
     setRapidApiUsername('')
   }
 
+  async function testRadarrConnection() {
+    setRadarrTesting(true)
+    setRadarrTestResult(null)
+    setRadarrError('')
+    try {
+      const res = await radarrApi.test(radarrUrl.trim(), radarrApiKey.trim())
+      setRadarrTestResult(res)
+    } catch (e) {
+      setRadarrError((e as Error).message)
+    } finally {
+      setRadarrTesting(false)
+    }
+  }
+
+  async function saveLibrarySource() {
+    setRadarrSaving(true)
+    setRadarrError('')
+    try {
+      const res = await radarrApi.save(librarySource, radarrUrl.trim(), radarrApiKey.trim())
+      setLibrarySource(res.source as 'plex' | 'radarr')
+      setRadarrConfigured(res.configured)
+      setRadarrApiKey('')
+      setRadarrSaved(true)
+      setTimeout(() => setRadarrSaved(false), 2000)
+    } catch (e) {
+      setRadarrError((e as Error).message)
+    } finally {
+      setRadarrSaving(false)
+    }
+  }
+
   function closeUpdateModal() {
     if (updating) return
     setUpdateOpen(false)
@@ -149,6 +194,8 @@ export default function SettingsPage() {
   const setPaths = (fn: (p: string[]) => string[]) =>
     setSettings(s => s ? { ...s, libraryPaths: fn(s.libraryPaths.length ? s.libraryPaths : ['']) } : s)
 
+  const radarrUrlMissing = librarySource === 'radarr' && !radarrUrl.trim()
+
   return (
     <AppShell title="Settings" actions={
       <Button onClick={save} loading={saving} size="sm">
@@ -179,6 +226,82 @@ export default function SettingsPage() {
               <p className="text-sm text-[#667085]">No server connected.</p>
             )}
           </div>
+        </Section>
+
+        {/* Library source */}
+        <Section title="Library Source" hint="Choose whether Themearr reads your movie library from Plex or Radarr.">
+          <div className="flex gap-2">
+            <button
+              onClick={() => setLibrarySource('plex')}
+              className={`flex-1 rounded-lg border px-4 py-2.5 text-sm font-medium transition-colors ${
+                librarySource === 'plex'
+                  ? 'border-[#BB0000] bg-[#BB0000]/10 text-[#F9FAFB]'
+                  : 'border-[#344054] text-[#98A2B3] hover:border-[#475467]'
+              }`}
+            >
+              Plex
+            </button>
+            <button
+              onClick={() => setLibrarySource('radarr')}
+              className={`flex-1 rounded-lg border px-4 py-2.5 text-sm font-medium transition-colors ${
+                librarySource === 'radarr'
+                  ? 'border-[#BB0000] bg-[#BB0000]/10 text-[#F9FAFB]'
+                  : 'border-[#344054] text-[#98A2B3] hover:border-[#475467]'
+              }`}
+            >
+              Radarr
+            </button>
+          </div>
+
+          {librarySource === 'radarr' && (
+            <div className="space-y-3">
+              <Input
+                label="Radarr URL"
+                placeholder="http://localhost:7878"
+                value={radarrUrl}
+                onChange={e => setRadarrUrl(e.target.value)}
+              />
+              <Input
+                label="API key"
+                type="password"
+                placeholder={radarrConfigured ? 'Leave blank to keep the current key' : 'Radarr API key…'}
+                value={radarrApiKey}
+                onChange={e => setRadarrApiKey(e.target.value)}
+                className="font-mono text-xs"
+              />
+              {radarrTestResult && (
+                <div className={`rounded-lg border px-3.5 py-2.5 text-sm ${
+                  radarrTestResult.ok
+                    ? 'border-[#12B76A]/30 bg-[#12B76A]/5 text-[#D0D5DD]'
+                    : 'border-[#B42318]/30 bg-[#FEF3F2]/5 text-[#FDA29B]'
+                }`}>
+                  {radarrTestResult.detail}
+                </div>
+              )}
+              <div className="flex gap-2">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={testRadarrConnection}
+                  loading={radarrTesting}
+                  disabled={radarrUrlMissing}
+                >
+                  Test connection
+                </Button>
+                <Button size="sm" onClick={saveLibrarySource} loading={radarrSaving} disabled={radarrUrlMissing}>
+                  {radarrSaved ? 'Saved ✓' : 'Save'}
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {librarySource === 'plex' && (
+            <Button size="sm" onClick={saveLibrarySource} loading={radarrSaving}>
+              {radarrSaved ? 'Saved ✓' : 'Save'}
+            </Button>
+          )}
+
+          {radarrError && <p className="text-xs text-[#FDA29B]">{radarrError}</p>}
         </Section>
 
         {/* Library paths */}
