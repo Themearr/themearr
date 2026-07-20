@@ -103,6 +103,77 @@ public class RadarrLibrarySourceTests
     }
 
     [Fact]
+    public async Task A_trailing_separator_on_the_reported_path_resolves_to_the_same_folder_identity()
+    {
+        using var dir = new TempDir();
+        var movieDir = Path.Combine(dir.Path, "Heat (1995)");
+        Directory.CreateDirectory(movieDir);
+        var withoutSlash = movieDir.Replace("\\", "/");
+        var handler = new StubHandler(_ => Json($$"""
+            [{"id":7,"title":"Heat","year":1995,"hasFile":true,"path":"{{withoutSlash}}/"}]
+            """));
+        var (source, _) = New(dir, handler);
+
+        var movies = await source.FetchAsync(_ => { }, CancellationToken.None);
+
+        // Without trimming, PlexPath.ParentDir would only strip one of the two trailing
+        // slashes left by "<path>//placeholder.mkv", handing back a folder with a
+        // trailing slash baked in — a different identity string for the same directory.
+        var m = Assert.Single(movies);
+        Assert.Equal(movieDir, m.Folder);
+        Assert.False(m.Folder.EndsWith('/'));
+        Assert.False(m.Folder.EndsWith('\\'));
+    }
+
+    [Fact]
+    public async Task A_malformed_body_reports_cleanly_without_raw_parser_text()
+    {
+        using var dir = new TempDir();
+        var handler = new StubHandler(_ => Json("this is not json"));
+        var (source, _) = New(dir, handler);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => source.FetchAsync(_ => { }, CancellationToken.None));
+
+        Assert.Contains("unexpected response", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("JsonException", ex.Message);
+        Assert.DoesNotContain("byte", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task A_json_object_instead_of_an_array_reports_cleanly_without_raw_parser_text()
+    {
+        using var dir = new TempDir();
+        var handler = new StubHandler(_ => Json("""{"error":"not found"}"""));
+        var (source, _) = New(dir, handler);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => source.FetchAsync(_ => { }, CancellationToken.None));
+
+        Assert.Contains("unexpected response", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Array", ex.Message);
+        Assert.DoesNotContain("ValueKind", ex.Message);
+    }
+
+    [Fact]
+    public async Task A_movie_with_a_non_boolean_hasFile_is_skipped_without_aborting_the_sync()
+    {
+        using var dir = new TempDir();
+        var movieDir = Path.Combine(dir.Path, "Heat (1995)");
+        Directory.CreateDirectory(movieDir);
+        var handler = new StubHandler(_ => Json($$"""
+            [{"id":9,"title":"Broken","year":1990,"hasFile":"yes","path":"/mnt/nowhere/Broken"},
+             {"id":7,"title":"Heat","year":1995,"hasFile":true,"path":"{{movieDir.Replace("\\", "/")}}"}]
+            """));
+        var (source, _) = New(dir, handler);
+
+        var movies = await source.FetchAsync(_ => { }, CancellationToken.None);
+
+        var m = Assert.Single(movies);
+        Assert.Equal("Heat", m.Title);
+    }
+
+    [Fact]
     public async Task A_401_reports_a_rejected_key_without_leaking_it()
     {
         using var dir = new TempDir();
@@ -144,5 +215,52 @@ public class RadarrLibrarySourceTests
 
         Assert.NotNull(reason);
         Assert.Contains("not configured", reason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    // ── FetchPosterAsync ─────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task FetchPosterAsync_returns_the_served_bytes_and_stays_readable_after_returning()
+    {
+        using var dir = new TempDir();
+        byte[] served = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+        var handler = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new ByteArrayContent(served),
+        });
+        var (source, _) = New(dir, handler);
+
+        var stream = await source.FetchPosterAsync("7", width: 300, CancellationToken.None);
+
+        Assert.NotNull(stream);
+        // The HttpResponseMessage FetchPosterAsync fetched from is disposed before the
+        // method returns. If the bytes had not been copied out first (e.g. handing back
+        // response.Content's stream directly), reading here — after the call has already
+        // returned — would throw ObjectDisposedException. Reading successfully proves
+        // the response did not leak past the method.
+        using var read = new MemoryStream();
+        await stream!.CopyToAsync(read);
+        Assert.Equal(served, read.ToArray());
+    }
+
+    [Fact]
+    public async Task FetchPosterAsync_returns_null_instead_of_unbounded_data_over_the_byte_cap()
+    {
+        using var dir = new TempDir();
+        // Mirrors the internal StreamLimits.MaxPosterBytes (20 MB); that constant isn't
+        // visible from this assembly, so the cap is duplicated here deliberately.
+        const long maxPosterBytes = 20L * 1024 * 1024;
+        var oversized = new byte[maxPosterBytes + 1];
+        var handler = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new ByteArrayContent(oversized),
+        });
+        var (source, _) = New(dir, handler);
+
+        var stream = await source.FetchPosterAsync("7", width: 300, CancellationToken.None);
+
+        // FetchPosterAsync returns null when the response exceeds the poster byte cap
+        // rather than truncating and returning a partial image.
+        Assert.Null(stream);
     }
 }

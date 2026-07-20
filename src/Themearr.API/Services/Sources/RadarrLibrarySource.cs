@@ -21,6 +21,16 @@ public class RadarrLibrarySource(Database db, LocalFolderResolver folders, IHttp
     /// <summary>Radarr is local and cheap to poll, so a new import gets its theme quickly.</summary>
     public TimeSpan SyncInterval => TimeSpan.FromMinutes(15);
 
+    /// <summary>
+    /// The one message shown for any malformed Radarr body — invalid JSON, a JSON value
+    /// that isn't the expected array, or a field of an unexpected type. Deliberately does
+    /// not include the underlying parser exception's text, matching every other message
+    /// in this class: raw framework text is either cryptic or (in other classes) capable
+    /// of leaking internals, so callers only ever see this hand-written sentence.
+    /// </summary>
+    private const string MalformedResponseMessage =
+        "Radarr returned an unexpected response. Check the URL points at Radarr and not another service.";
+
     private (string Url, string Key) Config() =>
         (db.GetSetting("radarr_url", "").TrimEnd('/'), db.GetSetting("radarr_api_key", ""));
 
@@ -47,50 +57,92 @@ public class RadarrLibrarySource(Database db, LocalFolderResolver folders, IHttp
         if (!response.IsSuccessStatusCode)
             throw new InvalidOperationException($"Radarr returned HTTP {(int)response.StatusCode} listing movies.");
 
-        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
-
-        var movies = new List<MovieRecord>();
-        var unresolvedCount = 0;
-        var unresolvedSample = "";
-
-        foreach (var item in doc.RootElement.EnumerateArray())
+        // A malformed body (truncated JSON, an HTML error page from a misconfigured
+        // reverse proxy, etc.) throws JsonException here. Converted to the same clean,
+        // hand-written message used everywhere else in this class rather than letting the
+        // parser's own text — meaningless to a user picking a URL in Settings — reach them
+        // through SyncService's generic catch.
+        JsonDocument doc;
+        try
         {
-            // Monitored but not downloaded: a folder may exist, but there is no film for
-            // a theme to accompany yet.
-            if (!item.TryGetProperty("hasFile", out var hasFile) || !hasFile.GetBoolean()) continue;
-
-            var reported = item.TryGetProperty("path", out var p) ? p.GetString() ?? "" : "";
-            if (string.IsNullOrEmpty(reported)) continue;
-
-            var title = item.TryGetProperty("title", out var t) ? t.GetString() ?? "" : "";
-            var year  = item.TryGetProperty("year", out var y) && y.TryGetInt32(out var yr) && yr > 0
-                ? yr : (int?)null;
-            var id    = item.TryGetProperty("id", out var i) ? i.GetRawText().Trim('"') : "";
-
-            // Radarr reports paths from its own filesystem's perspective, exactly as Plex
-            // does — a container may call it /movies where Themearr sees /mnt/media.
-            // LocalFolderResolver.Resolve expects a *file* path and returns its containing
-            // folder, but Radarr reports the folder directly, so a dummy filename is
-            // appended here to reuse the existing resolver unchanged rather than
-            // duplicating its logic.
-            var (folder, _) = folders.Resolve(reported + "/placeholder.mkv");
-            if (string.IsNullOrEmpty(folder))
-            {
-                unresolvedCount++;
-                if (unresolvedSample.Length == 0) unresolvedSample = reported;
-                log($"Skipping {title} — unresolved path: {reported}  (add a Path Mapping from this path to where it's mounted in Themearr)");
-                continue;
-            }
-
-            movies.Add(new MovieRecord(folder, "radarr", id, title, year, reported));
+            doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+        }
+        catch (JsonException)
+        {
+            throw new InvalidOperationException(MalformedResponseMessage);
         }
 
-        // Read by LibraryPathsCheck; overwritten every sync so a fixed mapping clears it.
-        db.SetSetting("last_sync_unresolved_count",  unresolvedCount.ToString());
-        db.SetSetting("last_sync_unresolved_sample", unresolvedSample);
+        using (doc)
+        {
+            // A well-formed JSON value that isn't an array (e.g. an error object from a
+            // service that merely happens to speak JSON) — checked explicitly rather than
+            // letting EnumerateArray() throw, so the message stays the same clean sentence
+            // instead of "...requires an element of type 'Array'...".
+            if (doc.RootElement.ValueKind != JsonValueKind.Array)
+                throw new InvalidOperationException(MalformedResponseMessage);
 
-        log($"Radarr reported {movies.Count} downloaded movies");
-        return movies;
+            var movies = new List<MovieRecord>();
+            var unresolvedCount = 0;
+            var unresolvedSample = "";
+
+            foreach (var item in doc.RootElement.EnumerateArray())
+            {
+                try
+                {
+                    // Monitored but not downloaded: a folder may exist, but there is no
+                    // film for a theme to accompany yet.
+                    if (!item.TryGetProperty("hasFile", out var hasFile) || !hasFile.GetBoolean()) continue;
+
+                    var reported = item.TryGetProperty("path", out var p) ? p.GetString() ?? "" : "";
+                    // Trim a trailing separator before it's used for anything below: left
+                    // in, it would double up with the dummy filename appended just below
+                    // ("...//placeholder.mkv"), and PlexPath.ParentDir (which trims only
+                    // one trailing separator) would then hand back a folder string with a
+                    // trailing slash baked in — splitting this movie's identity from the
+                    // same directory resolved without the slash.
+                    reported = reported.TrimEnd('/', '\\');
+                    if (string.IsNullOrEmpty(reported)) continue;
+
+                    var title = item.TryGetProperty("title", out var t) ? t.GetString() ?? "" : "";
+                    var year  = item.TryGetProperty("year", out var y) && y.TryGetInt32(out var yr) && yr > 0
+                        ? yr : (int?)null;
+                    var id    = item.TryGetProperty("id", out var i) ? i.GetRawText().Trim('"') : "";
+
+                    // Radarr reports paths from its own filesystem's perspective, exactly
+                    // as Plex does — a container may call it /movies where Themearr sees
+                    // /mnt/media. LocalFolderResolver.Resolve expects a *file* path and
+                    // returns its containing folder, but Radarr reports the folder
+                    // directly, so a dummy filename is appended here to reuse the existing
+                    // resolver unchanged rather than duplicating its logic.
+                    var (folder, _) = folders.Resolve(reported + "/placeholder.mkv");
+                    if (string.IsNullOrEmpty(folder))
+                    {
+                        unresolvedCount++;
+                        if (unresolvedSample.Length == 0) unresolvedSample = reported;
+                        log($"Skipping {title} — unresolved path: {reported}  (add a Path Mapping from this path to where it's mounted in Themearr)");
+                        continue;
+                    }
+
+                    movies.Add(new MovieRecord(folder, "radarr", id, title, year, reported));
+                }
+                catch (InvalidOperationException)
+                {
+                    // A field had a type Radarr's own API never sends (e.g. hasFile as a
+                    // string, path as a number) — most likely a single corrupt entry
+                    // rather than a wrong URL, since the response as a whole did parse as
+                    // the expected array. Skip just this movie so one bad entry doesn't
+                    // cost every other movie in the library its theme.
+                    log("Skipping a movie entry from Radarr — one of its fields had an unexpected type.");
+                }
+            }
+
+            // Read by LibraryPathsCheck; overwritten every sync so a fixed mapping clears it.
+            db.SetSetting("last_sync_unresolved_count",  unresolvedCount.ToString());
+            db.SetSetting("last_sync_unresolved_sample", unresolvedSample);
+
+            log($"Radarr reported {movies.Count} downloaded movies");
+            return movies;
+        }
     }
 
     public async Task<Stream?> FetchPosterAsync(string sourceRef, int width, CancellationToken ct)
