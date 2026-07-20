@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  Automatic movie theme song downloader for Plex libraries.
+  Automatic movie theme song downloader for Plex, Jellyfin, Emby and Kodi libraries.
 </p>
 
 <p align="center">
@@ -105,6 +105,27 @@ immediately with *Run now*.
 For external monitoring, Themearr exposes an unauthenticated `/health` endpoint
 that returns `{"status":"Healthy"}` and nothing else — enough for Uptime Kuma or
 Gatus, without leaking any configuration.
+
+## Library source: Plex or Radarr
+
+Themearr can read your movie list from either **Plex** or **Radarr**, chosen during
+setup and changeable later under **Settings → Library source**.
+
+Radarr is what makes Themearr useful without Plex. It already knows every movie's
+folder, title, year and whether the film is downloaded — and because `theme.mp3` is
+read by Jellyfin, Emby and Kodi as well as Plex, a Radarr-sourced library serves all
+of them. You need a Radarr URL and API key (Radarr → Settings → General → API Key).
+
+Radarr is local and cheap to poll, so it syncs every 15 minutes rather than daily —
+a newly imported movie usually has its theme within minutes.
+
+Movies Radarr is monitoring but has not downloaded yet are skipped: there is no film
+for a theme to accompany. Path Mappings work exactly as they do for Plex, and are
+often needed, since Radarr in a container reports its own paths.
+
+Switching source keeps everything. Both sources describe the same folders on disk,
+and Themearr identifies a movie by its folder, so your download history and ignored
+movies survive the change.
 
 ## Updating
 
