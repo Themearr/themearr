@@ -18,8 +18,13 @@ public class RadarrSettingsEndpointTests
 {
     private sealed class StubHandler(Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler
     {
+        public HttpRequestMessage? LastRequest { get; private set; }
+
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
-            => Task.FromResult(respond(request));
+        {
+            LastRequest = request;
+            return Task.FromResult(respond(request));
+        }
     }
 
     private sealed class StubFactory(HttpMessageHandler handler) : IHttpClientFactory
@@ -64,6 +69,58 @@ public class RadarrSettingsEndpointTests
         // pair them with — or otherwise disturb — what's already stored.
         Assert.Equal("http://stored.local:7878", db.GetSetting("radarr_url", ""));
         Assert.Equal("stored-key", db.GetSetting("radarr_api_key", ""));
+    }
+
+    [Fact]
+    public async Task TestRadarr_with_a_blank_key_falls_back_to_the_stored_key_when_the_url_matches()
+    {
+        // A blank key with the URL that key belongs to is the normal "test what I already
+        // saved" flow (e.g. re-testing from the settings page after a reload) — this must
+        // keep working.
+        using var dir = new TempDir();
+        var handler = new StubHandler(_ => Json("""{"version":"5.0.0"}"""));
+        var (controller, db) = New(dir, handler);
+
+        db.SetSetting("radarr_url", "http://stored.local:7878");
+        db.SetSetting("radarr_api_key", "stored-key");
+
+        var result = await controller.TestRadarr(
+            new SettingsController.RadarrPayload("radarr", "http://stored.local:7878", ""),
+            CancellationToken.None);
+
+        var ok = Assert.IsType<OkObjectResult>(result);
+        var okValue = (bool)ok.Value!.GetType().GetProperty("ok")!.GetValue(ok.Value)!;
+        Assert.True(okValue);
+
+        Assert.True(handler.LastRequest!.Headers.TryGetValues("X-Api-Key", out var values));
+        Assert.Equal("stored-key", Assert.Single(values!));
+    }
+
+    [Fact]
+    public async Task TestRadarr_with_a_blank_key_and_a_mismatched_url_does_not_send_the_stored_key()
+    {
+        // The vulnerability this guards against: an authenticated caller submits a blank
+        // key and a URL of their choosing. Without the fix, TestRadarr would fall back to
+        // the real stored key and ship it — in the X-Api-Key header — to that arbitrary
+        // host. The browser can't read the secret back, but it can make the server spend it.
+        using var dir = new TempDir();
+        var handler = new StubHandler(_ => Json("""{"version":"5.0.0"}"""));
+        var (controller, db) = New(dir, handler);
+
+        db.SetSetting("radarr_url", "http://stored.local:7878");
+        db.SetSetting("radarr_api_key", "stored-key");
+
+        var result = await controller.TestRadarr(
+            new SettingsController.RadarrPayload("radarr", "http://attacker.example:1234", ""),
+            CancellationToken.None);
+
+        var ok = Assert.IsType<OkObjectResult>(result);
+        var okValue = (bool)ok.Value!.GetType().GetProperty("ok")!.GetValue(ok.Value)!;
+        Assert.False(okValue);
+
+        // No request was ever made to the attacker-supplied host, so the stored key never
+        // left the server.
+        Assert.Null(handler.LastRequest);
     }
 
     [Fact]

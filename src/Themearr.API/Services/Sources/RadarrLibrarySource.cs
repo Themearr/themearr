@@ -13,8 +13,21 @@ namespace Themearr.API.Services.Sources;
 public class RadarrLibrarySource(Database db, LocalFolderResolver folders, IHttpClientFactory factory)
     : ILibrarySource
 {
-    /// <summary>Named client, configured in Program.cs with a short timeout.</summary>
+    /// <summary>
+    /// Named client for fetching library data (movies, posters), configured in Program.cs
+    /// with a generous timeout — a large library legitimately takes longer than a bare
+    /// reachability probe.
+    /// </summary>
     public const string ClientName = "radarr";
+
+    /// <summary>
+    /// Named client used only for probing reachability (<see cref="CheckAsync"/> and the
+    /// Settings "Test" endpoint via <see cref="ProbeAsync"/>), configured in Program.cs with
+    /// a short timeout — comfortably inside HealthCache's refresh budget, so an unreachable
+    /// Radarr surfaces the hand-written "did not respond within Ns" message instead of
+    /// racing HealthCache's own timeout and losing. Mirrors PlexLibrarySource.ClientName.
+    /// </summary>
+    public const string HealthClientName = "radarr-health";
 
     public string Name => "radarr";
 
@@ -204,7 +217,7 @@ public class RadarrLibrarySource(Database db, LocalFolderResolver folders, IHttp
             return "Radarr is not configured — set its URL and API key in Settings.";
         url = url.TrimEnd('/');
 
-        var http = factory.CreateClient(ClientName);
+        var http = factory.CreateClient(HealthClientName);
         try
         {
             using var request = Request(url, apiKey, "/api/v3/system/status");

@@ -13,9 +13,11 @@ export default function LoginPage() {
   const [polling, setPolling] = useState(false)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  // Redirect if already authenticated *and* Plex connected
+  // Redirect once authorized, provided either Plex is connected or setup
+  // (which may have been completed with a non-Plex source, e.g. Radarr)
+  // already finished.
   useEffect(() => {
-    if (!loading && authorized && connected) {
+    if (!loading && authorized && (connected || setupComplete)) {
       navigate(setupComplete ? '/queue' : '/setup', { replace: true })
     }
   }, [loading, authorized, connected, setupComplete, navigate])

@@ -365,7 +365,10 @@ export default function SettingsPage() {
         </Section>
 
         {/* Path mappings */}
-        <Section title="Path Mappings" hint="Map Plex server paths to local container paths.">
+        <Section
+          title="Path Mappings"
+          hint={`Map ${librarySource === 'radarr' ? 'Radarr' : 'Plex'} server paths to local container paths.`}
+        >
           <div className="space-y-2">
             {settings.pathMappings.map((m, i) => (
               <div key={i} className="flex gap-2 items-center">

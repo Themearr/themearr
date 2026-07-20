@@ -140,10 +140,30 @@ public class SettingsController(Database db, RadarrLibrarySource radarr) : Contr
         // caught while they are still looking at the field. Probes directly against the
         // submitted values — never writes to settings, so this can't race a scheduled
         // sync or a real save that lands mid-probe (see RadarrLibrarySource.ProbeAsync).
-        var url = (payload.Url ?? "").Trim();
-        var key = string.IsNullOrWhiteSpace(payload.ApiKey)
-            ? db.GetSetting("radarr_api_key", "")
-            : payload.ApiKey.Trim();
+        var url = (payload.Url ?? "").Trim().TrimEnd('/');
+
+        string key;
+        if (!string.IsNullOrWhiteSpace(payload.ApiKey))
+        {
+            key = payload.ApiKey.Trim();
+        }
+        else
+        {
+            // No key submitted — only fall back to the stored key when the submitted
+            // URL is the one that key belongs to. Otherwise an authenticated caller
+            // could make the server ship the real Radarr key to a host of their
+            // choosing (the response never reveals the key, but it would still spend it).
+            var storedUrl = db.GetSetting("radarr_url", "").Trim().TrimEnd('/');
+            if (!string.IsNullOrEmpty(storedUrl) && string.Equals(url, storedUrl, StringComparison.OrdinalIgnoreCase))
+            {
+                key = db.GetSetting("radarr_api_key", "");
+            }
+            else
+            {
+                return Ok(new { ok = false, detail = "Enter the API key for this server." });
+            }
+        }
+
         var reason = await radarr.ProbeAsync(url, key, ct);
         return Ok(new { ok = reason is null, detail = reason ?? "Radarr is reachable." });
     }

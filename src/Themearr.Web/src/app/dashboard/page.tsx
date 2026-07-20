@@ -117,7 +117,7 @@ export default function DashboardPage() {
             </div>
             {stats.recentlyAdded.length === 0 ? (
               <p className="px-4 py-6 text-sm text-[#475467]">
-                {stats.pending === 0 ? 'All movies have themes!' : 'Sync Plex to populate.'}
+                {stats.pending === 0 ? 'All movies have themes!' : 'Sync your library to populate.'}
               </p>
             ) : (
               <div className="divide-y divide-[#1D2939]">

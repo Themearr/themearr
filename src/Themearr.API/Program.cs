@@ -76,6 +76,11 @@ builder.Services.AddSingleton<Themearr.API.Services.Health.IQuotaStatus>(
 // and without it the whole health page waits on a TCP hang.
 builder.Services.AddHttpClient(Themearr.API.Services.Sources.PlexLibrarySource.ClientName,
     c => c.Timeout = TimeSpan.FromSeconds(3));
+// Same reasoning, same timeout, for Radarr's health probe — kept separate from the
+// "radarr" client above (10s) so an unreachable Radarr fails fast instead of racing
+// HealthCache's own 10s refresh budget and losing to its generic timeout message.
+builder.Services.AddHttpClient(Themearr.API.Services.Sources.RadarrLibrarySource.HealthClientName,
+    c => c.Timeout = TimeSpan.FromSeconds(3));
 
 builder.Services.AddHealthChecks()
     .AddCheck<Themearr.API.Services.Health.LibraryPathsCheck>("libraryPaths")
