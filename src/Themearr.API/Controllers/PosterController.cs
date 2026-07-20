@@ -1,16 +1,17 @@
 using Microsoft.AspNetCore.Mvc;
 using Themearr.API.Data;
 using Themearr.API.Services;
+using Themearr.API.Services.Sources;
 
 namespace Themearr.API.Controllers;
 
 [ApiController]
 [Route("api")]
 public class PosterController(
-    Database db, PosterUrlSigner signer, IHttpClientFactory httpFactory, ILogger<PosterController> log)
+    Database db, PosterUrlSigner signer, LibrarySourceResolver sources, ILogger<PosterController> log)
     : ControllerBase
 {
-    // Streams a movie's Plex thumbnail through the server so the Plex access token is
+    // Streams a movie's poster through the server so the source's credentials are
     // never placed in a client-visible URL. This route is exempt from bearer auth (an
     // <img> can't send an Authorization header) and instead self-authenticates via the
     // signed, expiring query string produced by PosterUrlSigner.
@@ -27,34 +28,24 @@ public class PosterController(
             return Unauthorized();
 
         var movie = db.GetMovie(id);
-        if (movie?.GetValueOrDefault("source")?.ToString() != "plex") return NotFound();
-
-        // Plex stores "{serverId}:{ratingKey}" in source_ref because PlexImageUrl needs
-        // both. The field is opaque to everything except the source that issued it.
-        var parts = (movie.GetValueOrDefault("sourceRef")?.ToString() ?? "").Split(':', 2);
-        if (parts.Length != 2 || parts.Any(string.IsNullOrEmpty)) return NotFound();
-        var (serverId, ratingKey) = (parts[0], parts[1]);
-
-        if (!db.GetPlexServersDict().TryGetValue(serverId, out var srv))
-            return NotFound();
+        var source = sources.Active;
+        // source_ref is opaque outside its own source, so the source fetches its own poster.
+        if (movie?.GetValueOrDefault("source")?.ToString() != source.Name) return NotFound();
 
         var width = Math.Clamp(w ?? DefaultWidth, 40, MaxWidth);
-        var height = (int)Math.Round(width * 1.5);   // 2:3 poster aspect
-        var thumbUrl = PlexImageUrl.Transcode(srv.Url, ratingKey, srv.Token, width, height);
+        var sourceRef = movie.GetValueOrDefault("sourceRef")?.ToString() ?? "";
+
         try
         {
-            var http = httpFactory.CreateClient();
-            http.Timeout = TimeSpan.FromSeconds(15);
-            using var resp = await http.GetAsync(thumbUrl, HttpCompletionOption.ResponseHeadersRead);
-            if (!resp.IsSuccessStatusCode) return NotFound();
+            await using var stream = await source.FetchPosterAsync(sourceRef, width, HttpContext.RequestAborted);
+            if (stream is null) return NotFound();
 
             using var buffer = new MemoryStream();
-            await StreamLimits.CopyWithLimitAsync(
-                await resp.Content.ReadAsStreamAsync(), buffer, StreamLimits.MaxPosterBytes);
+            await StreamLimits.CopyWithLimitAsync(stream, buffer, StreamLimits.MaxPosterBytes);
+            buffer.Position = 0;
 
-            var contentType = resp.Content.Headers.ContentType?.ToString() ?? "image/jpeg";
             Response.Headers.CacheControl = "private, max-age=86400";
-            return File(buffer.ToArray(), contentType);
+            return File(buffer.ToArray(), "image/jpeg");
         }
         catch (Exception ex)
         {

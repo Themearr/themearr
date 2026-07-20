@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.Net.Http.Headers;
 using Themearr.API.Data;
 using Themearr.API.Services;
+using Themearr.API.Services.Sources;
 
 namespace Themearr.API.Controllers;
 
@@ -9,25 +10,26 @@ namespace Themearr.API.Controllers;
 [Route("api")]
 public class MoviesController(
     Database db, YoutubeService youtube, DownloadService download, PosterUrlSigner posterSigner,
-    ILogger<MoviesController> log) : ControllerBase
+    LibrarySourceResolver sources, ILogger<MoviesController> log) : ControllerBase
 {
     [HttpGet("movies")]
     public IActionResult ListMovies()
     {
         var movies = db.GetAllMovies();
         var posterExpiry = DateTimeOffset.UtcNow.AddHours(12);
+        var activeSource = sources.Active.Name;
         foreach (var movie in movies)
         {
             var id = movie.GetValueOrDefault("id")?.ToString() ?? "";
 
-            // Plex stores "{serverId}:{ratingKey}" in source_ref; only Plex movies have a
-            // poster to sign a URL for (see PosterController).
-            var isPlex = movie.GetValueOrDefault("source")?.ToString() == "plex";
-            var parts  = (movie.GetValueOrDefault("sourceRef")?.ToString() ?? "").Split(':', 2);
-            var hasRef = parts.Length == 2 && parts.All(p => !string.IsNullOrEmpty(p));
+            // source_ref is opaque outside its own source (see PosterController); only a
+            // movie whose source matches the active one has a poster to sign a URL for.
+            var hasPoster = movie.GetValueOrDefault("source")?.ToString() == activeSource
+                         && !string.IsNullOrEmpty(movie.GetValueOrDefault("sourceRef")?.ToString());
 
-            // Signed, token-free poster URL — the Plex token stays server-side (see PosterController).
-            movie["posterUrl"] = (!string.IsNullOrEmpty(id) && isPlex && hasRef)
+            // Signed, token-free poster URL — the source's credentials stay server-side
+            // (see PosterController).
+            movie["posterUrl"] = (!string.IsNullOrEmpty(id) && hasPoster)
                 ? posterSigner.PosterPath(id, posterExpiry)
                 : null;
         }
