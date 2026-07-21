@@ -123,9 +123,32 @@ Movies Radarr is monitoring but has not downloaded yet are skipped: there is no 
 for a theme to accompany. Path Mappings work exactly as they do for Plex, and are
 often needed, since Radarr in a container reports its own paths.
 
-Switching source keeps everything. Both sources describe the same folders on disk,
-and Themearr identifies a movie by its folder, so your download history and ignored
-movies survive the change.
+### If you already have Themearr set up
+
+> **Note for existing installs (v1.42.0).** You don't need to do anything. Themearr
+> stays on Plex unless you change it — the library source defaults to Plex, your setup
+> stays complete, and you won't be asked to run the wizard again.
+
+**Only read on if you plan to switch an existing library from Plex to Radarr.**
+
+Themearr identifies a movie by the folder its theme lives in, and both sources describe
+the same folders on disk, so anything **both** of them report keeps its downloaded
+status and its place in your history.
+
+The catch is anything Radarr *doesn't* report. Radarr only knows about movies it
+manages, so hand-added rips, a second library, or anything imported before you started
+using Radarr are invisible to it — and the first Radarr sync removes those rows.
+Concretely:
+
+- Movies you've **ignored** are kept, whichever source you're on.
+- A removed movie's **downloaded status is not lost in practice** — status is read from
+  whether a `theme.mp3` is actually on disk, so if the file is still there it comes back
+  as downloaded the moment the movie reappears.
+- Its **history entries are orphaned**, though. They still show the film's title and
+  year on the History page, they just no longer link to a movie.
+
+So switching is safe if Radarr manages your whole library, and lossy at the edges if it
+doesn't. Check Radarr's movie count against Themearr's before you switch.
 
 ## Updating
 
