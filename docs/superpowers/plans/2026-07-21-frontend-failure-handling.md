@@ -32,10 +32,12 @@ Everything after this depends on it, so it lands first with a trivial test provi
 - Modify: `src/Themearr.Web/package.json`
 - Modify: `src/Themearr.Web/vite.config.ts`
 - Create: `src/Themearr.Web/src/test/setup.ts`
+- Create: `src/Themearr.Web/src/test/apiMock.ts`
 - Test: `src/Themearr.Web/src/test/harness.test.tsx`
 
 **Interfaces:**
 - Produces: `npm test` (runs `vitest run`), a jsdom environment with Testing Library matchers, and the `@` alias working inside tests
+- Produces: `makeApiMock()` from `@/test/apiMock` — a fully-mocked `@/lib/api` module for every later test file to use
 
 - [ ] **Step 1: Install the dev dependencies**
 
@@ -88,7 +90,58 @@ In `src/Themearr.Web/package.json`, add to `scripts`:
     "test": "vitest run",
 ```
 
-- [ ] **Step 5: Write a test that proves the harness works**
+- [ ] **Step 5: Add the shared API mock**
+
+Every later test file mocks the whole of `@/lib/api`. Repeating that module's full
+export list in four files would rot the moment a new endpoint is added, so build it once.
+
+`vi.mock` is hoisted above imports, which is why the factory uses a dynamic `import()`
+rather than a top-level one — the dynamic import runs when the factory is called, by
+which time the module graph is ready.
+
+Create `src/Themearr.Web/src/test/apiMock.ts`:
+
+```ts
+import { vi } from 'vitest'
+
+/**
+ * A fully-mocked `@/lib/api`. Every export is present and every method is a
+ * `vi.fn()` that returns undefined until a test gives it a value, so a test only
+ * has to configure the calls it cares about.
+ *
+ * Use it as:
+ *   vi.mock('@/lib/api', async () => (await import('@/test/apiMock')).makeApiMock())
+ */
+export function makeApiMock() {
+  const group = (...methods: string[]) =>
+    Object.fromEntries(methods.map(m => [m, vi.fn()]))
+
+  return {
+    getAuthToken: () => 'test-token',
+    setAuthToken: vi.fn(),
+    clearAuthToken: vi.fn(),
+    // Keep these in step with the exports of src/lib/api.ts.
+    authApi: group(...),
+    setupApi: group(...),
+    moviesApi: group(...),
+    settingsApi: group(...),
+    syncApi: group(...),
+    historyApi: group(...),
+    rapidApiApi: group(...),
+    statsApi: group(...),
+    versionApi: group(...),
+    systemApi: group(...),
+    radarrApi: group(...),
+    apiKeyApi: group(...),
+  }
+}
+```
+
+Read `src/Themearr.Web/src/lib/api.ts` and fill in each `group(...)` with that object's
+real method names. A missing one fails at import time with an unhelpful error, so
+transcribe them all rather than guessing from usage.
+
+- [ ] **Step 6: Write a test that proves the harness works**
 
 Create `src/Themearr.Web/src/test/harness.test.tsx`:
 
@@ -111,19 +164,33 @@ describe('test harness', () => {
 })
 ```
 
-- [ ] **Step 6: Run it**
+Add a third case to that file proving the shared mock is usable:
+
+```tsx
+describe('the shared API mock', () => {
+  it('exposes every api export as a spy', async () => {
+    const { makeApiMock } = await import('@/test/apiMock')
+    const mock = makeApiMock()
+
+    expect(typeof mock.moviesApi.list).toBe('function')
+    expect(typeof mock.settingsApi.get).toBe('function')
+  })
+})
+```
+
+- [ ] **Step 7: Run it**
 
 Run: `cd src/Themearr.Web && npm test`
-Expected: PASS — 2 tests passed.
+Expected: PASS — 3 tests passed.
 
-- [ ] **Step 7: Confirm nothing else broke**
+- [ ] **Step 8: Confirm nothing else broke**
 
 Run: `cd src/Themearr.Web && npx tsc --noEmit && npm run lint && npm run build`
 Expected: typecheck clean, lint 0 errors with the 3 pre-existing warnings, build succeeds into `out/`.
 
 If lint now reports errors inside test files, add the test glob to the ESLint config the way the existing config handles other file groups — do not disable rules inline.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
 git add src/Themearr.Web/package.json src/Themearr.Web/package-lock.json \
@@ -314,23 +381,7 @@ import { render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('@/lib/api', () => ({
-  getAuthToken: () => 'test-token',
-  setAuthToken: vi.fn(),
-  clearAuthToken: vi.fn(),
-  moviesApi:   { list: vi.fn(), search: vi.fn(), download: vi.fn() },
-  historyApi:  { get: vi.fn() },
-  settingsApi: { get: vi.fn(), save: vi.fn() },
-  syncApi:     { start: vi.fn(), status: vi.fn() },
-  statsApi:    { get: vi.fn() },
-  versionApi:  { get: vi.fn(), refresh: vi.fn() },
-  systemApi:   { health: vi.fn(), tasks: vi.fn(), runTask: vi.fn() },
-  setupApi:    { status: vi.fn(), logout: vi.fn() },
-  rapidApiApi: { status: vi.fn(), save: vi.fn(), remove: vi.fn() },
-  radarrApi:   { get: vi.fn(), save: vi.fn(), test: vi.fn() },
-  apiKeyApi:   { get: vi.fn(), regenerate: vi.fn() },
-  authApi:     { verify: vi.fn() },
-}))
+vi.mock('@/lib/api', async () => (await import('@/test/apiMock')).makeApiMock())
 
 const api = await import('@/lib/api')
 
@@ -393,7 +444,7 @@ describe('a successful empty load still shows the empty state', () => {
 })
 ```
 
-The mocked module must export every name the pages import. Read `src/Themearr.Web/src/lib/api.ts` and include them all — a missing export fails at import time with an unhelpful error.
+The shared `makeApiMock()` from Task 1 supplies every export, so this file only configures the calls each test cares about.
 
 - [ ] **Step 2: Run tests to verify they fail**
 
@@ -446,10 +497,13 @@ git commit -m "fix(web): stop a failed load rendering as an empty library"
 
 - [ ] **Step 1: Write the failing tests**
 
-Create `src/Themearr.Web/src/app/settings-load.test.tsx`, reusing the same `vi.mock('@/lib/api', …)` block as `pages-failure.test.tsx` (copy it — the mock is per-file):
+Create `src/Themearr.Web/src/app/settings-load.test.tsx`. `vi.mock` is per-file, so
+repeat the one-line mock call and the `renderPage`/`beforeEach` scaffolding — but the
+mock's *contents* come from the shared `makeApiMock()`, so nothing substantive is copied:
 
 ```tsx
-// … same vi.mock('@/lib/api', …) block and beforeEach as pages-failure.test.tsx …
+vi.mock('@/lib/api', async () => (await import('@/test/apiMock')).makeApiMock())
+// … plus the same renderPage helper and beforeEach as pages-failure.test.tsx …
 
 describe('Settings load failures', () => {
   it('shows an error with a retry instead of spinning forever', async () => {
@@ -537,7 +591,8 @@ The three sites:
 
 - [ ] **Step 1: Write the failing tests**
 
-Create `src/Themearr.Web/src/app/actions-failure.test.tsx`, reusing the same `vi.mock('@/lib/api', …)` block, and add:
+Create `src/Themearr.Web/src/app/actions-failure.test.tsx` with the same one-line
+`vi.mock` call and `renderPage`/`beforeEach` scaffolding, and add:
 
 ```tsx
 describe('an action that fails does not report success', () => {
@@ -623,7 +678,8 @@ git commit -m "fix(web): stop failed actions reporting success"
 
 - [ ] **Step 1: Write the failing test**
 
-Create `src/Themearr.Web/src/app/queue-race.test.tsx`, reusing the same `vi.mock('@/lib/api', …)` block:
+Create `src/Themearr.Web/src/app/queue-race.test.tsx` with the same one-line `vi.mock`
+call and `renderPage`/`beforeEach` scaffolding:
 
 ```tsx
 it('a slow status response cannot advance the queue twice', async () => {
@@ -694,7 +750,8 @@ git commit -m "fix(web): stop a slow status poll skipping a movie in the queue"
 
 Five poll sites are *supposed* to swallow failures — blanking a populated view over one dropped request is worse than a stale value, and that was a deliberate earlier fix. Nothing currently stops a future change "fixing" them.
 
-Create `src/Themearr.Web/src/app/polls-stay-silent.test.tsx`, reusing the same `vi.mock('@/lib/api', …)` block:
+Create `src/Themearr.Web/src/app/polls-stay-silent.test.tsx` with the same one-line
+`vi.mock` call and `renderPage`/`beforeEach` scaffolding:
 
 ```tsx
 it('a failed background poll does not blank an already-loaded page', async () => {
@@ -777,7 +834,11 @@ git commit -m "ci: run the frontend tests on every release build"
 
 **Two tasks touch the same files.** Tasks 3 and 5 both edit `queue/page.tsx`, and Tasks 4 and 5 both edit `settings/page.tsx`. They change different functions, so this is not a conflict, but the tasks must run in order and a reviewer should expect the second diff to sit alongside the first rather than replace it.
 
-**The API mock block is duplicated across four test files.** That is deliberate — `vi.mock` is per-file and hoisted, so a shared helper cannot be imported into it without care. If the implementer finds a clean way to share it, that is an improvement; forcing one is not.
+**The API mock is shared, not duplicated.** `vi.mock` is per-file and hoisted, so each
+test file repeats the one-line `vi.mock('@/lib/api', …)` call — but its factory dynamically
+imports the single `makeApiMock()` built in Task 1, so the export list exists in exactly one
+place. Only the `renderPage` helper and the `beforeEach` defaults are repeated per file,
+which is ordinary test scaffolding.
 
 **Two places where the plan tells the implementer to check rather than assume.** The Auto toggle's rendered role in Task 5, and the real download-status function name and queue-item shape in Task 6. Both were written from a partial reading, and Task 6 explicitly says to report back rather than reshape the component if the test cannot be written as described.
 
