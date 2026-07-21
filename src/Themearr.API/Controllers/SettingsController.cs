@@ -173,10 +173,11 @@ public class SettingsController(Database db, RadarrLibrarySource radarr, IApiKey
 
     // ── Themearr's own API key ───────────────────────────────────────────────
 
-    // A credential must not be able to manage credentials: the API key is for operating
-    // Themearr (triggering a sync, reading status), not for administering the key itself —
-    // otherwise whoever holds the API key can re-issue it forever and lock the operator
-    // out of their own integration. Only the master bearer token may read or regenerate it.
+    // The API key must not be able to read or regenerate itself: otherwise whoever holds
+    // it could re-issue it forever and lock the operator out of their own integration.
+    // Only the master bearer token may read or regenerate it. This is the one carve-out —
+    // the API key otherwise authenticates like the bearer token everywhere else, including
+    // endpoints that overwrite the Radarr key or Plex token; see the README's API key section.
     private bool AuthenticatedWithBearerToken =>
         HttpContext.Items.TryGetValue(ApiAuthMiddleware.AuthSchemeItemKey, out var scheme) &&
         (scheme as string) == ApiAuthMiddleware.BearerScheme;

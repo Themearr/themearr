@@ -159,6 +159,13 @@ Send it as an `X-Api-Key` header on any `/api/…` request:
 curl -H "X-Api-Key: <your key>" http://themearr:8080/api/system/tasks
 ```
 
+> **Warning: this is a full-access credential, not a read-only one.** It authenticates
+> exactly like the access token you sign in with, on every `/api/*` endpoint except the
+> two that manage the key itself. Whoever holds it can reset setup, trigger an update
+> that restarts the service, and overwrite your stored Plex token, Radarr API key, and
+> RapidAPI key — the only thing it can't do is read or regenerate itself. Handle it with
+> the same care as the access token, and don't paste it anywhere you wouldn't paste that.
+
 It is separate from the access token you sign in with, so you can regenerate it
 without logging anyone out — and regenerating immediately stops the old one working.
 
