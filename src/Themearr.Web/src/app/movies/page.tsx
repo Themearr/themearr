@@ -50,6 +50,16 @@ export default function MoviesPage() {
   // `loadMovies` itself: the sync-status poll's own post-sync refresh must
   // still run on its own terms, since skipping it in favour of a retry started
   // *before* the sync finished would show a list that predates the import.
+  //
+  // That argument only rules out a *guard* (something that drops a call
+  // outright) -- it leaves a residual race between this Retry and the poll's
+  // own `loadMovies` call, since neither response is stamped, so a slower one
+  // can still overwrite a newer one. The right fix for that residual, if it's
+  // ever worth closing, is a monotonic sequence stamp -- the same `latest`-ref
+  // pattern `useResource` (src/lib/useResource.ts) already uses -- which
+  // discards a response older than the newest *issued* rather than skipping a
+  // call outright, so it isn't subject to the objection above. Not done here:
+  // it would mean touching the poll path, which is out of scope for this fix.
   const [retrying, setRetrying] = useState(false)
   async function retryLoadMovies() {
     if (retrying) return

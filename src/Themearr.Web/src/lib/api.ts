@@ -129,8 +129,11 @@ export const moviesApi = {
       body: JSON.stringify({ movieId, url }),
     }),
 
-  downloadStatus: (movieId: string) =>
-    request<{ inProgress: boolean; finished: boolean; error: string | null; logs: string[] }>(`/api/download/status/${encodeURIComponent(movieId)}`),
+  // `init` lets a caller pass an AbortSignal (e.g. the queue's polled status
+  // check bounds it with a timeout so a hung request can't wedge the poll's
+  // in-flight guard forever). Every other call site omits it and behaves as before.
+  downloadStatus: (movieId: string, init?: RequestInit) =>
+    request<{ inProgress: boolean; finished: boolean; error: string | null; logs: string[] }>(`/api/download/status/${encodeURIComponent(movieId)}`, init),
 
   autoDownload: (movieId: string) =>
     request<{ started: boolean; movieId: string; videoId: string; videoTitle: string }>(`/api/auto-download/${encodeURIComponent(movieId)}`, { method: 'POST' }),

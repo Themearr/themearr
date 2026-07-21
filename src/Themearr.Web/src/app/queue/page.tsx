@@ -5,6 +5,18 @@ import { AppShell } from '@/components/layout/AppShell'
 import { Button, EmptyState, ErrorIcon, Input, Spinner } from '@/components/ui'
 import { useResource } from '@/lib/useResource'
 
+// Bounds the polled `downloadStatus` request below (the "in-flight" guard's
+// own comment explains what it's guarding against). `request()` in
+// src/lib/api.ts is a bare `fetch` with no built-in timeout, so a request
+// that never settles would hold the poll's `inFlight` flag forever -- and
+// with it, Skip and Ignore, which both check `downloading`. The server side
+// of this call (`DownloadStatus` in Themearr.API) is a plain in-memory
+// lookup with no I/O, so a healthy round trip is well under a second; 8x the
+// 1s poll interval is comfortably clear of that, while still short enough
+// that a genuinely wedged queue unwedges itself in single-digit seconds --
+// long before a person would give up and reload the page.
+const STATUS_TIMEOUT_MS = 8000
+
 export default function QueuePage() {
   const [currentIdx,   setCurrentIdx]   = useState(0)
   const [results,      setResults]      = useState<YoutubeResult[]>([])
@@ -112,7 +124,7 @@ export default function QueuePage() {
   // no theme, no error and no trace) is completely silent. Callers acting on
   // the user's behalf — Skip, Ignore — pass nothing and always advance.
   function advanceQueue(forMovieId?: string) {
-    if (forMovieId && downloadingMovieId.current !== forMovieId) return
+    if (forMovieId !== undefined && downloadingMovieId.current !== forMovieId) return
     setCurrentIdx((i: number) => i + 1)
     setResults([])
     setError('')
@@ -166,8 +178,18 @@ export default function QueuePage() {
     const id = setInterval(async () => {
       if (inFlight) return
       inFlight = true
+
+      // A request that never settles (dropped connection, a server stuck
+      // mid-request) would otherwise hold `inFlight` forever with no recovery
+      // path -- unlike a rejection, which the catch below already recovers
+      // from. The abort turns "never settles" into "rejects after
+      // STATUS_TIMEOUT_MS", so it lands in the same catch/finally and polling
+      // resumes on schedule.
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), STATUS_TIMEOUT_MS)
+
       try {
-        const st = await moviesApi.downloadStatus(movieId)
+        const st = await moviesApi.downloadStatus(movieId, { signal: controller.signal })
         if (st.logs?.length) setDownloadLogs(st.logs)
         if (!st.finished) return
         clearInterval(id)
@@ -184,8 +206,11 @@ export default function QueuePage() {
         } else {
           advanceQueue(movieId)
         }
-      } catch { /* ignore transient fetch errors */ }
-      finally { inFlight = false }
+      } catch { /* ignore transient fetch errors, including our own timeout abort above */ }
+      finally {
+        clearTimeout(timeoutId)
+        inFlight = false
+      }
     }, 1000)
 
     return () => clearInterval(id)

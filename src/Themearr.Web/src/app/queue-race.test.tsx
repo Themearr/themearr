@@ -110,3 +110,55 @@ describe('the download-status poll cannot skip a movie', () => {
     expect(screen.queryByText('3 movies left in queue')).toBeNull()
   })
 })
+
+describe('the download-status poll cannot be wedged by a hung request', () => {
+  it('recovers -- polling resumes and controls re-enable -- when a request never settles', async () => {
+    // A dropped connection or a server stuck mid-request never resolves *and*
+    // never rejects on its own -- unlike every other failure mode the existing
+    // tests cover. The only thing that ever settles it is the production
+    // code's own AbortController firing, exactly like a real `fetch` handed
+    // an AbortSignal: it stays pending until aborted, then rejects. A second,
+    // independent call (a fresh connection after the first was abandoned)
+    // succeeds normally, which is what proves polling actually resumed rather
+    // than the queue just sitting there.
+    let calls = 0
+    vi.mocked(api.moviesApi.downloadStatus).mockImplementation(
+      ((_movieId: string, init?: RequestInit) => {
+        calls++
+        if (calls === 1) {
+          return new Promise((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () =>
+              reject(new DOMException('The operation was aborted', 'AbortError')))
+          })
+        }
+        return Promise.resolve({ inProgress: false, finished: true, error: null, logs: [] })
+      }) as never,
+    )
+
+    const { default: QueuePage } = await import('@/app/queue/page')
+    renderPage(<QueuePage />)
+
+    await flush(50)
+    await startDownload()
+
+    // While the first request is hung, the queue is stuck on Movie A and its
+    // only in-app escapes -- Skip and Ignore -- are disabled.
+    await flush(2000)
+    expect(calls).toBe(1)
+    expect(screen.getByRole('button', { name: /^skip$/i })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /^ignore$/i })).toBeDisabled()
+
+    // Past the timeout, the hung request is aborted and rejects, the
+    // in-flight flag clears, and a later poll tick issues a fresh request
+    // that succeeds.
+    await flush(9000)
+
+    // The queue recovered on its own -- no reload needed: a second request
+    // went out, the queue advanced off Movie A, and the controls are usable
+    // again.
+    expect(calls).toBeGreaterThan(1)
+    expect(screen.queryByText('2 movies left in queue')).not.toBeNull()
+    expect(screen.getByRole('button', { name: /^skip$/i })).not.toBeDisabled()
+    expect(screen.getByRole('button', { name: /^ignore$/i })).not.toBeDisabled()
+  })
+})
