@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiKeyApi, radarrApi, rapidApiApi, settingsApi, setupApi, versionApi } from '@/lib/api'
 import type { Settings, VersionInfo } from '@/lib/types'
 import { AppShell } from '@/components/layout/AppShell'
-import { Button, Input, Spinner } from '@/components/ui'
+import { Button, EmptyState, ErrorIcon, Input, Spinner } from '@/components/ui'
+import { useResource } from '@/lib/useResource'
 
 const LIBRARY_SOURCE_OPTIONS: { value: 'plex' | 'radarr'; label: string }[] = [
   { value: 'plex', label: 'Plex' },
@@ -12,10 +13,19 @@ const LIBRARY_SOURCE_OPTIONS: { value: 'plex' | 'radarr'; label: string }[] = [
 export default function SettingsPage() {
   const [settings, setSettings] = useState<Settings | null>(null)
   const [version,  setVersion]  = useState<VersionInfo | null>(null)
+  // Set when the initial version fetch fails. Supplementary -- unlike
+  // settingsApi.get() below, nothing else on the page depends on the
+  // version, so this only ever drives a small note in the Updates section
+  // rather than gating the page.
+  const [versionLoadError, setVersionLoadError] = useState('')
   const [saving,         setSaving]         = useState(false)
   const [saved,          setSaved]          = useState(false)
   const [error,          setError]          = useState('')
   const [rapidApiOk,       setRapidApiOk]       = useState<boolean | null>(null)
+  // Set when checking whether a RapidAPI key is stored fails. Supplementary
+  // like versionLoadError: it leaves rapidApiOk at null (unknown) rather
+  // than guessing, and surfaces only inside the RapidAPI section.
+  const [rapidApiCheckError, setRapidApiCheckError] = useState('')
   const [rapidApiKey,      setRapidApiKey]      = useState('')
   const [rapidApiUsername, setRapidApiUsername] = useState('')
   const [rapidApiSaving,   setRapidApiSaving]   = useState(false)
@@ -51,10 +61,34 @@ export default function SettingsPage() {
   const [checking,      setChecking]      = useState(false)
   const logEndRef = useRef<HTMLDivElement>(null)
 
+  // Loads settings -- the data the rest of the page (Library Source, API Key
+  // and RapidAPI sections) can't function without. Routed through
+  // useResource so a failed request surfaces as an error screen with a
+  // retry, rather than leaving the page spinning forever.
+  const loadSettings = useCallback(async () => {
+    const s = await settingsApi.get()
+    setSettings(s)
+    return s
+  }, [])
+  const { error: settingsError, retry: retrySettings } = useResource(loadSettings)
+
   useEffect(() => {
-    settingsApi.get().then(setSettings).catch(() => null)
-    versionApi.get().then(setVersion).catch(() => null)
-    rapidApiApi.status().then(s => setRapidApiOk(s.configured)).catch(() => null)
+    // Version and RapidAPI status are supplementary: nothing else on the
+    // page depends on them, so their failures stay local to their own small
+    // areas (the Updates section / the RapidAPI section below) instead of
+    // gating the whole page the way a failed settingsApi.get() does.
+    versionApi.get().then(v => {
+      setVersion(v)
+      setVersionLoadError('')
+    }).catch(e => {
+      setVersionLoadError((e as Error)?.message || 'Failed to load version info.')
+    })
+    rapidApiApi.status().then(s => {
+      setRapidApiOk(s.configured)
+      setRapidApiCheckError('')
+    }).catch(e => {
+      setRapidApiCheckError((e as Error)?.message || 'Failed to check RapidAPI status.')
+    })
     radarrApi.get().then(s => {
       setLibrarySource(s.source)
       setRadarrUrl(s.url)
@@ -188,6 +222,28 @@ export default function SettingsPage() {
     }
   }
 
+  // Retry action for the supplementary version load above.
+  async function loadVersion() {
+    try {
+      const v = await versionApi.get()
+      setVersion(v)
+      setVersionLoadError('')
+    } catch (e) {
+      setVersionLoadError((e as Error)?.message || 'Failed to load version info.')
+    }
+  }
+
+  // Retry action for the supplementary RapidAPI status check above.
+  async function checkRapidApiStatus() {
+    try {
+      const s = await rapidApiApi.status()
+      setRapidApiOk(s.configured)
+      setRapidApiCheckError('')
+    } catch (e) {
+      setRapidApiCheckError((e as Error)?.message || 'Failed to check RapidAPI status.')
+    }
+  }
+
   async function regenerateApiKey() {
     if (!confirm('Regenerate the API key? Any Radarr connection using the current key will stop working until you update it there.')) return
     setApiKeyRegenerating(true)
@@ -304,6 +360,23 @@ export default function SettingsPage() {
     } catch (e) {
       setError((e as Error).message)
     }
+  }
+
+  // Settings genuinely gates the page -- Library Source, API Key and
+  // RapidAPI all sit behind it -- so a failure here is the one load on this
+  // page that shows a full error screen with a retry, rather than a small
+  // in-place notice.
+  if (settings === null && settingsError) {
+    return (
+      <AppShell title="Settings">
+        <EmptyState
+          icon={<ErrorIcon />}
+          title="Couldn&apos;t load settings"
+          description={settingsError}
+          action={<Button variant="secondary" size="sm" onClick={retrySettings}>Retry</Button>}
+        />
+      </AppShell>
+    )
   }
 
   if (!settings) {
@@ -554,7 +627,16 @@ export default function SettingsPage() {
             </ol>
           </div>
 
-          {rapidApiOk === null ? (
+          {rapidApiOk === null && rapidApiCheckError ? (
+            // Supplementary: we don't know whether a key is configured, but
+            // showing the "add a key" form as if there definitely isn't one
+            // would risk masking a key that's actually there. Say so instead,
+            // without blocking anything else on the page.
+            <div className="flex items-center justify-between gap-3 rounded-lg border border-[#B42318]/40 bg-[#FEF3F2]/5 px-3.5 py-2.5">
+              <p className="text-sm text-[#FDA29B]">Couldn&apos;t check whether a RapidAPI key is stored: {rapidApiCheckError}</p>
+              <Button variant="secondary" size="sm" onClick={checkRapidApiStatus}>Retry</Button>
+            </div>
+          ) : rapidApiOk === null ? (
             <div className="flex items-center gap-2 text-sm text-[#475467]"><Spinner size={13} className="text-[#BB0000]" /> Checking…</div>
           ) : rapidApiOk ? (
             <div className="space-y-3">
@@ -630,6 +712,18 @@ export default function SettingsPage() {
                   </Button>
                 )}
               </div>
+            </div>
+          </Section>
+        )}
+        {!version && versionLoadError && (
+          // Supplementary: the version check failing shouldn't strand the
+          // rest of Settings, so this is just a small note rather than an
+          // error screen -- and it doesn't reuse "Check for updates" (that
+          // action belongs to a working version load, not a failed one).
+          <Section title="Updates">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-sm text-[#667085]">Couldn&apos;t check the current version: {versionLoadError}</p>
+              <Button variant="secondary" size="sm" onClick={loadVersion}>Retry</Button>
             </div>
           </Section>
         )}
