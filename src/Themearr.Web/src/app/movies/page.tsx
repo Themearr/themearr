@@ -43,6 +43,20 @@ export default function MoviesPage() {
     }
   }, [])
 
+  // The Retry buttons on a failed refresh, wrapping `loadMovies` so repeated
+  // clicks can't put several `GET /api/movies` in flight at once -- there's no
+  // staleness protection on those responses, so a slower earlier one would
+  // overwrite a newer one. Deliberately a wrapper rather than a guard inside
+  // `loadMovies` itself: the sync-status poll's own post-sync refresh must
+  // still run on its own terms, since skipping it in favour of a retry started
+  // *before* the sync finished would show a list that predates the import.
+  const [retrying, setRetrying] = useState(false)
+  async function retryLoadMovies() {
+    if (retrying) return
+    setRetrying(true)
+    try { await loadMovies() } finally { setRetrying(false) }
+  }
+
   // The initial load. Routed through useResource so a failed request surfaces
   // as an error screen instead of an empty library. Success also seeds the
   // mutable `movies` copy the rest of the page reads/updates, and triggers an
@@ -159,14 +173,14 @@ export default function MoviesPage() {
           icon={<ErrorIcon />}
           title="Couldn&apos;t refresh your movies"
           description={`${refreshError} — your list may be out of date.`}
-          action={<Button variant="secondary" size="sm" onClick={loadMovies}>Retry</Button>}
+          action={<Button variant="secondary" size="sm" onClick={retryLoadMovies} loading={retrying}>Retry</Button>}
         />
       ) : (
         <>
           {refreshError && (
             <div className="mb-5 flex items-center justify-between gap-3 rounded-lg border border-[#B42318]/40 bg-[#FEF3F2]/5 px-4 py-3">
               <p className="text-sm text-[#FDA29B]">Couldn&apos;t refresh movies: {refreshError} — your list may be out of date.</p>
-              <Button variant="secondary" size="sm" onClick={loadMovies}>Retry</Button>
+              <Button variant="secondary" size="sm" onClick={retryLoadMovies} loading={retrying}>Retry</Button>
             </div>
           )}
           <MovieGrid movies={movies} onMovieUpdated={handleMovieUpdated} sourceLabel={sourceLabel} />

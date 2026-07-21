@@ -29,6 +29,7 @@ export default function SettingsPage() {
   const [rapidApiKey,      setRapidApiKey]      = useState('')
   const [rapidApiUsername, setRapidApiUsername] = useState('')
   const [rapidApiSaving,   setRapidApiSaving]   = useState(false)
+  const [rapidApiRemoving, setRapidApiRemoving] = useState(false)
   const [rapidApiError,    setRapidApiError]    = useState('')
   const [librarySource,    setLibrarySource]    = useState<'plex' | 'radarr'>('plex')
   const [radarrUrl,        setRadarrUrl]        = useState('')
@@ -194,7 +195,13 @@ export default function SettingsPage() {
     }
   }
 
+  // Guarded against a second click landing while the first DELETE is still in
+  // flight: two responses can settle in either order, and a success followed by
+  // a failure would leave the page showing the key as gone *and* an error
+  // saying the removal failed.
   async function removeRapidApiKey() {
+    if (rapidApiRemoving) return
+    setRapidApiRemoving(true)
     setRapidApiError('')
     try {
       await rapidApiApi.remove()
@@ -206,6 +213,8 @@ export default function SettingsPage() {
       // spending quota -- rapidApiOk must stay whatever it already was rather
       // than being set to false, or the UI would claim the key is gone.
       setRapidApiError(`Couldn't remove the RapidAPI key: ${(e as Error)?.message || 'unknown error'}`)
+    } finally {
+      setRapidApiRemoving(false)
     }
   }
 
@@ -661,7 +670,7 @@ export default function SettingsPage() {
                   <svg width="13" height="13" viewBox="0 0 12 12" fill="none" stroke="#12B76A" strokeWidth="2.5" strokeLinecap="round"><path d="M2 6l3 3 5-5" /></svg>
                   <p className="text-sm text-[#D0D5DD]">API key configured</p>
                 </div>
-                <Button variant="ghost" size="sm" onClick={removeRapidApiKey}>Remove</Button>
+                <Button variant="ghost" size="sm" onClick={removeRapidApiKey} loading={rapidApiRemoving}>Remove</Button>
               </div>
               <div className="space-y-2">
                 <Input placeholder="New RapidAPI key…" value={rapidApiKey} onChange={e => setRapidApiKey(e.target.value)} className="font-mono text-xs" />

@@ -15,6 +15,7 @@ export default function QueuePage() {
   const [downloading,   setDownloading]   = useState(false)
   const [downloadLogs,  setDownloadLogs]  = useState<string[]>([])
   const [autoMode,      setAutoMode]      = useState(false)
+  const [savingAuto,    setSavingAuto]    = useState(false)
 
   // Holds the movieId being downloaded so the polling closure keeps the right id
   const downloadingMovieId = useRef<string | null>(null)
@@ -50,8 +51,16 @@ export default function QueuePage() {
   // rest of the settings back before writing them -- there's no way to avoid
   // that round trip without adding a backend route, which is out of scope
   // here.
+  //
+  // Because the switch doesn't move until the round trip finishes, a slow save
+  // would otherwise look like a dead control -- no movement, no spinner, no
+  // error -- and invite repeated clicks, each firing its own get+save pair.
+  // `savingAuto` both disables the control and puts a spinner where the switch
+  // is, so the wait is visible and only one save is ever in flight.
   async function toggleAutoMode() {
+    if (savingAuto) return
     const next = !autoMode
+    setSavingAuto(true)
     setError('')
     try {
       const s = await settingsApi.get()
@@ -59,6 +68,8 @@ export default function QueuePage() {
       setAutoMode(next)
     } catch (e) {
       setError(`Couldn't turn auto mode ${next ? 'on' : 'off'}: ${(e as Error)?.message || 'unknown error'}`)
+    } finally {
+      setSavingAuto(false)
     }
   }
 
@@ -274,11 +285,16 @@ export default function QueuePage() {
         <div className="flex items-center gap-2">
           <button
             onClick={toggleAutoMode}
-            className={`flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors ${autoMode ? 'bg-[#12B76A]/15 text-[#12B76A]' : 'bg-[#1D2939] text-[#667085] hover:text-[#D0D5DD]'}`}
+            disabled={savingAuto}
+            className={`flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors disabled:cursor-not-allowed ${autoMode ? 'bg-[#12B76A]/15 text-[#12B76A]' : 'bg-[#1D2939] text-[#667085] hover:text-[#D0D5DD]'}`}
           >
-            <span className={`relative inline-flex h-4 w-7 flex-shrink-0 rounded-full border-2 border-transparent transition-colors ${autoMode ? 'bg-[#12B76A]' : 'bg-[#344054]'}`}>
-              <span className={`inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform ${autoMode ? 'translate-x-3' : 'translate-x-0'}`} />
-            </span>
+            {savingAuto ? (
+              <Spinner size={16} className="flex-shrink-0" />
+            ) : (
+              <span className={`relative inline-flex h-4 w-7 flex-shrink-0 rounded-full border-2 border-transparent transition-colors ${autoMode ? 'bg-[#12B76A]' : 'bg-[#344054]'}`}>
+                <span className={`inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform ${autoMode ? 'translate-x-3' : 'translate-x-0'}`} />
+              </span>
+            )}
             Auto
           </button>
           <Button variant="ghost" size="sm" onClick={skipForever} disabled={downloading} title="Never show this movie in the queue again">
