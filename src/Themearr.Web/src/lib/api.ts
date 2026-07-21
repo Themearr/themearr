@@ -1,7 +1,7 @@
 import type {
   Movie, YoutubeResult, PlexServer, PlexLibrary,
   SetupStatus, Settings, SyncStatus, VersionInfo, HistoryEntry, DashboardStats,
-  HealthResponse, SystemTask, RadarrSettings,
+  HealthResponse, SystemTask, RadarrSettings, ApiKey,
 } from './types'
 
 const BASE = (import.meta.env.VITE_API_URL ?? '').replace(/\/$/, '')
@@ -243,4 +243,12 @@ export const radarrApi = {
       method: 'POST',
       body: JSON.stringify({ source: 'radarr', url, apiKey }),
     }),
+}
+
+// ── API key (for Radarr and scripts) ──────────────────────────────────────────
+
+export const apiKeyApi = {
+  get: () => request<ApiKey>('/api/settings/apikey'),
+  regenerate: () =>
+    request<ApiKey>('/api/settings/apikey/regenerate', { method: 'POST' }),
 }

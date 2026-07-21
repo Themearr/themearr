@@ -140,3 +140,7 @@ export interface RadarrSettings {
   /** The API key is never sent to the browser; this only says whether one is stored. */
   configured: boolean
 }
+
+export interface ApiKey {
+  key: string
+}
