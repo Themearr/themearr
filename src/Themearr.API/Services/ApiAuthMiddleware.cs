@@ -3,8 +3,17 @@ using System.Text;
 
 namespace Themearr.API.Services;
 
-public class ApiAuthMiddleware(RequestDelegate next, IConfiguration config, ILogger<ApiAuthMiddleware> log)
+public class ApiAuthMiddleware(
+    RequestDelegate next, IConfiguration config, ILogger<ApiAuthMiddleware> log, IApiKeyStore keys)
 {
+    // Marks which credential authenticated a request, so downstream code can tell the
+    // master bearer token apart from the (regeneratable, externally-held) API key —
+    // e.g. to refuse letting the API key manage itself. Deliberately just this one bit,
+    // not a general scope/permission system.
+    public const string AuthSchemeItemKey = "auth.scheme";
+    public const string BearerScheme = "bearer";
+    public const string ApiKeyScheme = "apikey";
+
     private readonly byte[] _expected = LoadToken(config, log);
 
     public async Task Invoke(HttpContext ctx)
@@ -16,6 +25,24 @@ public class ApiAuthMiddleware(RequestDelegate next, IConfiguration config, ILog
             if (provided.Length == _expected.Length &&
                 CryptographicOperations.FixedTimeEquals(provided, _expected))
             {
+                ctx.Items[AuthSchemeItemKey] = BearerScheme;
+                await next(ctx);
+                return;
+            }
+        }
+
+        // Only touch the key store when the header is actually present. The browser
+        // sends Bearer and never sets this, so its hot path — every page load, the
+        // health poll, the sync poll — never reads the database.
+        var apiKey = ctx.Request.Headers["X-Api-Key"].ToString().Trim();
+        if (!string.IsNullOrEmpty(apiKey))
+        {
+            var provided = Encoding.UTF8.GetBytes(apiKey);
+            var expected = Encoding.UTF8.GetBytes(keys.Current);
+            if (provided.Length == expected.Length &&
+                CryptographicOperations.FixedTimeEquals(provided, expected))
+            {
+                ctx.Items[AuthSchemeItemKey] = ApiKeyScheme;
                 await next(ctx);
                 return;
             }

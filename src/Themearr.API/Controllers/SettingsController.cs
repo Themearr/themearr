@@ -1,13 +1,14 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Http;
 using Themearr.API.Data;
+using Themearr.API.Services;
 using Themearr.API.Services.Sources;
 
 namespace Themearr.API.Controllers;
 
 [ApiController]
 [Route("api/settings")]
-public class SettingsController(Database db, RadarrLibrarySource radarr) : ControllerBase
+public class SettingsController(Database db, RadarrLibrarySource radarr, IApiKeyStore keys) : ControllerBase
 {
     [HttpGet]
     public IActionResult Get() => Ok(new
@@ -169,6 +170,43 @@ public class SettingsController(Database db, RadarrLibrarySource radarr) : Contr
     }
 
     public record RadarrPayload(string? Source, string? Url, string? ApiKey);
+
+    // ── Themearr's own API key ───────────────────────────────────────────────
+
+    // The API key must not be able to read or regenerate itself: otherwise whoever holds
+    // it could re-issue it forever and lock the operator out of their own integration.
+    // Only the master bearer token may read or regenerate it. This is the one carve-out —
+    // the API key otherwise authenticates like the bearer token everywhere else, including
+    // endpoints that overwrite the Radarr key or Plex token; see the README's API key section.
+    private bool AuthenticatedWithBearerToken =>
+        HttpContext.Items.TryGetValue(ApiAuthMiddleware.AuthSchemeItemKey, out var scheme) &&
+        (scheme as string) == ApiAuthMiddleware.BearerScheme;
+
+    private IActionResult ApiKeyManagementForbidden() => StatusCode(StatusCodes.Status403Forbidden,
+        new { detail = "Managing the API key requires the access token, not the API key." });
+
+    /// <summary>
+    /// Returns the API key in full. Unlike Radarr's key — which Themearr holds and never
+    /// discloses — this one is issued to the operator to paste into an external tool, so
+    /// it has to be readable.
+    /// </summary>
+    [HttpGet("apikey")]
+    public IActionResult GetApiKey()
+    {
+        if (!AuthenticatedWithBearerToken) return ApiKeyManagementForbidden();
+
+        Response.Headers.CacheControl = "no-store";
+        return Ok(new { key = keys.Current });
+    }
+
+    [HttpPost("apikey/regenerate")]
+    public IActionResult RegenerateApiKey()
+    {
+        if (!AuthenticatedWithBearerToken) return ApiKeyManagementForbidden();
+
+        Response.Headers.CacheControl = "no-store";
+        return Ok(new { key = keys.Regenerate() });
+    }
 }
 
 public record RapidApiKeyPayload(string Key, string Username);

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { radarrApi, rapidApiApi, settingsApi, setupApi, versionApi } from '@/lib/api'
+import { apiKeyApi, radarrApi, rapidApiApi, settingsApi, setupApi, versionApi } from '@/lib/api'
 import type { Settings, VersionInfo } from '@/lib/types'
 import { AppShell } from '@/components/layout/AppShell'
 import { Button, Input, Spinner } from '@/components/ui'
@@ -31,6 +31,16 @@ export default function SettingsPage() {
   const [radarrError,      setRadarrError]      = useState('')
   const [radarrLoaded,     setRadarrLoaded]     = useState(false)
   const [radarrLoadError,  setRadarrLoadError]  = useState('')
+  const [apiKey,             setApiKey]             = useState('')
+  const [apiKeyLoaded,       setApiKeyLoaded]       = useState(false)
+  const [apiKeyLoadError,    setApiKeyLoadError]    = useState('')
+  const [apiKeyRegenerating, setApiKeyRegenerating] = useState(false)
+  const [apiKeyRegenerated,  setApiKeyRegenerated]  = useState(false)
+  const [apiKeyError,        setApiKeyError]        = useState('')
+  const [keyCopied,          setKeyCopied]          = useState(false)
+  const [webhookCopied,      setWebhookCopied]      = useState(false)
+  const keyFieldRef     = useRef<HTMLDivElement>(null)
+  const webhookFieldRef = useRef<HTMLDivElement>(null)
 
   // Update modal state
   const [updateOpen,    setUpdateOpen]    = useState(false)
@@ -54,6 +64,14 @@ export default function SettingsPage() {
     }).catch(e => {
       setRadarrLoaded(false)
       setRadarrLoadError((e as Error)?.message || 'Failed to load the current library source.')
+    })
+    apiKeyApi.get().then(k => {
+      setApiKey(k.key)
+      setApiKeyLoaded(true)
+      setApiKeyLoadError('')
+    }).catch(e => {
+      setApiKeyLoaded(false)
+      setApiKeyLoadError((e as Error)?.message || 'Failed to load the API key.')
     })
   }, [])
 
@@ -158,6 +176,66 @@ export default function SettingsPage() {
     }
   }
 
+  async function loadApiKey() {
+    try {
+      const k = await apiKeyApi.get()
+      setApiKey(k.key)
+      setApiKeyLoaded(true)
+      setApiKeyLoadError('')
+    } catch (e) {
+      setApiKeyLoaded(false)
+      setApiKeyLoadError((e as Error)?.message || 'Failed to load the API key.')
+    }
+  }
+
+  async function regenerateApiKey() {
+    if (!confirm('Regenerate the API key? Any Radarr connection using the current key will stop working until you update it there.')) return
+    setApiKeyRegenerating(true)
+    setApiKeyError('')
+    try {
+      const k = await apiKeyApi.regenerate()
+      setApiKey(k.key)
+      setApiKeyRegenerated(true)
+      setTimeout(() => setApiKeyRegenerated(false), 2000)
+    } catch (e) {
+      setApiKeyError(`Couldn't regenerate the API key: ${(e as Error).message}`)
+    } finally {
+      setApiKeyRegenerating(false)
+    }
+  }
+
+  // Copies `text` to the clipboard when running in a secure context (HTTPS or
+  // localhost). Themearr is normally reached over plain HTTP on a LAN, where
+  // navigator.clipboard doesn't exist at all — so this always feature-detects
+  // first rather than relying on a thrown error. When the clipboard API is
+  // unavailable or the write itself fails, it falls back to selecting the
+  // field's text so the user can copy it manually.
+  async function copyToClipboard(text: string, fieldRef: React.RefObject<HTMLDivElement | null>, setCopied: (v: boolean) => void) {
+    setApiKeyError('')
+    if (window.isSecureContext && navigator.clipboard) {
+      try {
+        await navigator.clipboard.writeText(text)
+        setCopied(true)
+        setTimeout(() => setCopied(false), 2000)
+        return
+      } catch {
+        // Fall through to the manual-selection fallback below.
+      }
+    }
+    const input = fieldRef.current?.querySelector('input')
+    input?.focus()
+    input?.select()
+    setApiKeyError('Clipboard access needs HTTPS. The text has been selected — press Ctrl/Cmd+C to copy it.')
+  }
+
+  async function copyApiKey() {
+    await copyToClipboard(apiKey, keyFieldRef, setKeyCopied)
+  }
+
+  async function copyWebhookUrl() {
+    await copyToClipboard(webhookUrl, webhookFieldRef, setWebhookCopied)
+  }
+
   async function testRadarrConnection() {
     setRadarrTesting(true)
     setRadarrTestResult(null)
@@ -227,6 +305,7 @@ export default function SettingsPage() {
     setSettings(s => s ? { ...s, libraryPaths: fn(s.libraryPaths.length ? s.libraryPaths : ['']) } : s)
 
   const radarrUrlMissing = librarySource === 'radarr' && !radarrUrl.trim()
+  const webhookUrl = `${window.location.origin}/api/webhook/radarr`
 
   return (
     <AppShell title="Settings" actions={
@@ -334,6 +413,41 @@ export default function SettingsPage() {
                 {radarrSaved ? 'Saved ✓' : 'Save'}
               </Button>
               {radarrError && <p className="text-xs text-[#FDA29B]">{radarrError}</p>}
+            </div>
+          )}
+        </Section>
+
+        {/* API key */}
+        <Section title="API Key" hint="Used by Radarr and scripts to authenticate with Themearr. This is not the access token you sign in with.">
+          {apiKeyLoadError && (
+            <div className="flex items-center justify-between gap-3 rounded-lg border border-[#B42318]/40 bg-[#FEF3F2]/5 px-4 py-3">
+              <p className="text-sm text-[#FDA29B]">Couldn&apos;t load the API key: {apiKeyLoadError}</p>
+              <Button variant="secondary" size="sm" onClick={loadApiKey}>Retry</Button>
+            </div>
+          )}
+
+          {!apiKeyLoaded && !apiKeyLoadError && (
+            <div className="flex items-center gap-2 text-sm text-[#475467]"><Spinner size={13} className="text-[#BB0000]" /> Loading…</div>
+          )}
+
+          {apiKeyLoaded && (
+            <div className="space-y-3">
+              <div className="flex gap-2 items-end">
+                <div ref={keyFieldRef} className="flex-1">
+                  <Input label="Key" readOnly value={apiKey} className="flex-1 font-mono text-xs" />
+                </div>
+                <Button variant="secondary" size="sm" onClick={copyApiKey}>{keyCopied ? 'Copied ✓' : 'Copy'}</Button>
+              </div>
+              <div className="flex gap-2 items-end">
+                <div ref={webhookFieldRef} className="flex-1">
+                  <Input label="Radarr webhook URL" readOnly value={webhookUrl} className="flex-1 font-mono text-xs" />
+                </div>
+                <Button variant="secondary" size="sm" onClick={copyWebhookUrl}>{webhookCopied ? 'Copied ✓' : 'Copy'}</Button>
+              </div>
+              <Button variant="danger" size="sm" onClick={regenerateApiKey} loading={apiKeyRegenerating}>
+                {apiKeyRegenerated ? 'Regenerated ✓' : 'Regenerate'}
+              </Button>
+              {apiKeyError && <p className="text-xs text-[#FDA29B]">{apiKeyError}</p>}
             </div>
           )}
         </Section>

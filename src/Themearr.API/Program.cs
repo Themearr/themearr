@@ -57,6 +57,7 @@ builder.Services.AddSingleton<IThemeAudioProvider, RapidApiThemeAudioProvider>()
 builder.Services.AddSingleton<DownloadService>();
 // Signs short-lived poster URLs so the Plex token never appears in a client-visible URL.
 builder.Services.AddSingleton<PosterUrlSigner>();
+builder.Services.AddSingleton<IApiKeyStore, ApiKeyStore>();
 builder.Services.AddHostedService<AutoSyncService>();
 // Register AutoDownloadService as a singleton AND wire its hosted-service lifecycle
 // off the same instance so a controller can ask it for diagnostics.
@@ -118,6 +119,9 @@ var versionFile = Environment.GetEnvironmentVariable("THEMEARR_VERSION_FILE")
 var appVersion = Environment.GetEnvironmentVariable("APP_VERSION")?.Trim()
     ?? (File.Exists(versionFile) ? File.ReadAllText(versionFile).Trim() : "dev");
 db.SetSetting("app_version", appVersion);
+
+// Generate the external API key on first run, so it exists before anything asks for it.
+_ = app.Services.GetRequiredService<IApiKeyStore>().Current;
 
 // Security headers on every response (static SPA + API). Posters/themes are served
 // same-origin now, so a tight CSP doesn't need any external sources.

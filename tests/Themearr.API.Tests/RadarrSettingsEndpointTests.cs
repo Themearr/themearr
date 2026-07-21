@@ -42,7 +42,7 @@ public class RadarrSettingsEndpointTests
         var db = new Database(Path.Combine(dir.Path, "test.db"));
         db.Init();
         var radarr = new RadarrLibrarySource(db, new LocalFolderResolver(db), new StubFactory(handler));
-        return (new SettingsController(db, radarr), db);
+        return (new SettingsController(db, radarr, new ApiKeyStore(db)), db);
     }
 
     [Fact]
