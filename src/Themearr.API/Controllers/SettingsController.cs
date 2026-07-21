@@ -1,13 +1,14 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Http;
 using Themearr.API.Data;
+using Themearr.API.Services;
 using Themearr.API.Services.Sources;
 
 namespace Themearr.API.Controllers;
 
 [ApiController]
 [Route("api/settings")]
-public class SettingsController(Database db, RadarrLibrarySource radarr) : ControllerBase
+public class SettingsController(Database db, RadarrLibrarySource radarr, IApiKeyStore keys) : ControllerBase
 {
     [HttpGet]
     public IActionResult Get() => Ok(new
@@ -169,6 +170,19 @@ public class SettingsController(Database db, RadarrLibrarySource radarr) : Contr
     }
 
     public record RadarrPayload(string? Source, string? Url, string? ApiKey);
+
+    // ── Themearr's own API key ───────────────────────────────────────────────
+
+    /// <summary>
+    /// Returns the API key in full. Unlike Radarr's key — which Themearr holds and never
+    /// discloses — this one is issued to the operator to paste into an external tool, so
+    /// it has to be readable.
+    /// </summary>
+    [HttpGet("apikey")]
+    public IActionResult GetApiKey() => Ok(new { key = keys.Current });
+
+    [HttpPost("apikey/regenerate")]
+    public IActionResult RegenerateApiKey() => Ok(new { key = keys.Regenerate() });
 }
 
 public record RapidApiKeyPayload(string Key, string Username);
