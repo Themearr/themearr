@@ -6,6 +6,14 @@ namespace Themearr.API.Services;
 public class ApiAuthMiddleware(
     RequestDelegate next, IConfiguration config, ILogger<ApiAuthMiddleware> log, IApiKeyStore keys)
 {
+    // Marks which credential authenticated a request, so downstream code can tell the
+    // master bearer token apart from the (regeneratable, externally-held) API key —
+    // e.g. to refuse letting the API key manage itself. Deliberately just this one bit,
+    // not a general scope/permission system.
+    public const string AuthSchemeItemKey = "auth.scheme";
+    public const string BearerScheme = "bearer";
+    public const string ApiKeyScheme = "apikey";
+
     private readonly byte[] _expected = LoadToken(config, log);
 
     public async Task Invoke(HttpContext ctx)
@@ -17,6 +25,7 @@ public class ApiAuthMiddleware(
             if (provided.Length == _expected.Length &&
                 CryptographicOperations.FixedTimeEquals(provided, _expected))
             {
+                ctx.Items[AuthSchemeItemKey] = BearerScheme;
                 await next(ctx);
                 return;
             }
@@ -33,6 +42,7 @@ public class ApiAuthMiddleware(
             if (provided.Length == expected.Length &&
                 CryptographicOperations.FixedTimeEquals(provided, expected))
             {
+                ctx.Items[AuthSchemeItemKey] = ApiKeyScheme;
                 await next(ctx);
                 return;
             }

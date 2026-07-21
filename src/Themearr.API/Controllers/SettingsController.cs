@@ -173,16 +173,39 @@ public class SettingsController(Database db, RadarrLibrarySource radarr, IApiKey
 
     // ── Themearr's own API key ───────────────────────────────────────────────
 
+    // A credential must not be able to manage credentials: the API key is for operating
+    // Themearr (triggering a sync, reading status), not for administering the key itself —
+    // otherwise whoever holds the API key can re-issue it forever and lock the operator
+    // out of their own integration. Only the master bearer token may read or regenerate it.
+    private bool AuthenticatedWithBearerToken =>
+        HttpContext.Items.TryGetValue(ApiAuthMiddleware.AuthSchemeItemKey, out var scheme) &&
+        (scheme as string) == ApiAuthMiddleware.BearerScheme;
+
+    private IActionResult ApiKeyManagementForbidden() => StatusCode(StatusCodes.Status403Forbidden,
+        new { detail = "Managing the API key requires the access token, not the API key." });
+
     /// <summary>
     /// Returns the API key in full. Unlike Radarr's key — which Themearr holds and never
     /// discloses — this one is issued to the operator to paste into an external tool, so
     /// it has to be readable.
     /// </summary>
     [HttpGet("apikey")]
-    public IActionResult GetApiKey() => Ok(new { key = keys.Current });
+    public IActionResult GetApiKey()
+    {
+        if (!AuthenticatedWithBearerToken) return ApiKeyManagementForbidden();
+
+        Response.Headers.CacheControl = "no-store";
+        return Ok(new { key = keys.Current });
+    }
 
     [HttpPost("apikey/regenerate")]
-    public IActionResult RegenerateApiKey() => Ok(new { key = keys.Regenerate() });
+    public IActionResult RegenerateApiKey()
+    {
+        if (!AuthenticatedWithBearerToken) return ApiKeyManagementForbidden();
+
+        Response.Headers.CacheControl = "no-store";
+        return Ok(new { key = keys.Regenerate() });
+    }
 }
 
 public record RapidApiKeyPayload(string Key, string Username);
