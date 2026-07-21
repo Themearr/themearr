@@ -26,6 +26,15 @@ public sealed class ApiKeyStore(Database db) : IApiKeyStore
 
     private readonly object _lock = new();
 
+    // In-memory cache so a per-request read is a field access, not a database hit — an
+    // anonymous caller sending a junk X-Api-Key on every request must not be able to force
+    // a connection each time. Regenerate is the only supported way the key legitimately
+    // changes, and it updates this field as it writes, so a regenerated key still takes
+    // effect immediately with no restart. The trade-off: a key changed directly in the
+    // database, out of band, will not be noticed until restart. That's acceptable because
+    // Regenerate is the supported path.
+    private string? _cached;
+
     public string Current
     {
         get
@@ -34,8 +43,14 @@ public sealed class ApiKeyStore(Database db) : IApiKeyStore
             // Regenerate must not interleave with reads.
             lock (_lock)
             {
+                if (_cached is not null) return _cached;
+
                 var existing = db.GetSetting(SettingKey, "");
-                if (!string.IsNullOrEmpty(existing)) return existing;
+                if (!string.IsNullOrEmpty(existing))
+                {
+                    _cached = existing;
+                    return existing;
+                }
                 return RegenerateInternal();
             }
         }
@@ -53,6 +68,7 @@ public sealed class ApiKeyStore(Database db) : IApiKeyStore
     {
         var key = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(32));
         db.SetSetting(SettingKey, key);
+        _cached = key;
         return key;
     }
 }

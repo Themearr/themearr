@@ -56,6 +56,14 @@ public class ApiAuthMiddlewareTests
     }
 
     [Fact]
+    public async Task A_valid_api_key_with_surrounding_whitespace_is_accepted()
+    {
+        var (_, nextCalled, _) = await Run(c => c.Request.Headers["X-Api-Key"] = " the-api-key\n");
+
+        Assert.True(nextCalled);
+    }
+
+    [Fact]
     public async Task A_wrong_api_key_is_rejected()
     {
         var (status, nextCalled, _) = await Run(c => c.Request.Headers["X-Api-Key"] = "wrong");
@@ -71,6 +79,33 @@ public class ApiAuthMiddlewareTests
 
         Assert.Equal(StatusCodes.Status401Unauthorized, status);
         Assert.False(nextCalled);
+    }
+
+    [Fact]
+    public async Task An_empty_api_key_header_is_rejected()
+    {
+        var (status, nextCalled, _) = await Run(c => c.Request.Headers["X-Api-Key"] = "");
+
+        Assert.Equal(StatusCodes.Status401Unauthorized, status);
+        Assert.False(nextCalled);
+    }
+
+    [Fact]
+    public async Task A_whitespace_only_api_key_header_is_rejected()
+    {
+        var (status, nextCalled, _) = await Run(c => c.Request.Headers["X-Api-Key"] = "   ");
+
+        Assert.Equal(StatusCodes.Status401Unauthorized, status);
+        Assert.False(nextCalled);
+    }
+
+    [Fact]
+    public async Task The_key_store_is_read_when_the_api_key_header_is_present()
+    {
+        var (_, nextCalled, reads) = await Run(c => c.Request.Headers["X-Api-Key"] = "the-api-key");
+
+        Assert.True(nextCalled);
+        Assert.Equal(1, reads);
     }
 
     [Fact]

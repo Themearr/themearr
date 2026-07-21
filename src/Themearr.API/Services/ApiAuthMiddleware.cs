@@ -25,7 +25,7 @@ public class ApiAuthMiddleware(
         // Only touch the key store when the header is actually present. The browser
         // sends Bearer and never sets this, so its hot path — every page load, the
         // health poll, the sync poll — never reads the database.
-        var apiKey = ctx.Request.Headers["X-Api-Key"].ToString();
+        var apiKey = ctx.Request.Headers["X-Api-Key"].ToString().Trim();
         if (!string.IsNullOrEmpty(apiKey))
         {
             var provided = Encoding.UTF8.GetBytes(apiKey);

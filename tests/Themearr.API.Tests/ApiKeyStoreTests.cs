@@ -48,6 +48,21 @@ public class ApiKeyStoreTests
     }
 
     [Fact]
+    public void Regenerate_invalidates_the_cached_current_value_immediately()
+    {
+        using var dir = new TempDir();
+        var (store, _) = New(dir);
+        var before = store.Current; // populates the in-memory cache
+
+        var after = store.Regenerate();
+
+        // Current must reflect the regenerated key right away, not the value
+        // that was cached before Regenerate ran — no restart required.
+        Assert.NotEqual(before, after);
+        Assert.Equal(after, store.Current);
+    }
+
+    [Fact]
     public void An_existing_key_is_not_overwritten()
     {
         using var dir = new TempDir();
