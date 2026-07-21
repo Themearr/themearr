@@ -142,4 +142,91 @@ public class RadarrSettingsEndpointTests
         Assert.Equal("stored-key", db.GetSetting("radarr_api_key", ""));
         Assert.Equal("plex", db.GetSetting("library_source", ""));
     }
+
+    [Fact]
+    public void SaveRadarr_with_a_blank_key_falls_back_to_the_stored_key_when_the_url_is_unchanged()
+    {
+        // The normal "re-save without touching the key field" flow — the UI never gets
+        // the real key back, so resubmitting the same URL with a blank key must keep
+        // working exactly as before.
+        using var dir = new TempDir();
+        var handler = new StubHandler(_ => Json("[]"));
+        var (controller, db) = New(dir, handler);
+
+        db.SetSetting("radarr_url", "http://stored.local:7878");
+        db.SetSetting("radarr_api_key", "stored-key");
+
+        var result = Assert.IsType<OkObjectResult>(controller.SaveRadarr(
+            new SettingsController.RadarrPayload("radarr", "http://stored.local:7878", "")));
+
+        var configured = (bool)result.Value!.GetType().GetProperty("configured")!.GetValue(result.Value)!;
+        Assert.True(configured);
+        Assert.Equal("http://stored.local:7878", db.GetSetting("radarr_url", ""));
+        Assert.Equal("stored-key", db.GetSetting("radarr_api_key", ""));
+    }
+
+    [Fact]
+    public void SaveRadarr_with_a_blank_key_and_a_changed_url_is_rejected_and_leaves_stored_config_untouched()
+    {
+        // The vulnerability this guards against: an authenticated caller (this endpoint
+        // accepts the API key credential too) posts a new URL of their choosing with a
+        // blank apiKey. Without the fix, SaveRadarr would keep the real stored key and
+        // pair it with the attacker's URL — the next health poll or sync would then ship
+        // the real key, in an X-Api-Key header, to that host.
+        using var dir = new TempDir();
+        var handler = new StubHandler(_ => Json("[]"));
+        var (controller, db) = New(dir, handler);
+
+        db.SetSetting("radarr_url", "http://stored.local:7878");
+        db.SetSetting("radarr_api_key", "stored-key");
+
+        var result = Assert.IsType<BadRequestObjectResult>(controller.SaveRadarr(
+            new SettingsController.RadarrPayload("radarr", "http://attacker.example:1234", "")));
+
+        var detail = (string)result.Value!.GetType().GetProperty("detail")!.GetValue(result.Value)!;
+        Assert.Equal("Enter the API key for the new Radarr server.", detail);
+
+        // Neither the stored URL nor the stored key moved — the attacker's URL was never
+        // saved, and the real key never got paired with it.
+        Assert.Equal("http://stored.local:7878", db.GetSetting("radarr_url", ""));
+        Assert.Equal("stored-key", db.GetSetting("radarr_api_key", ""));
+    }
+
+    [Fact]
+    public void SaveRadarr_with_a_changed_url_and_a_supplied_key_saves_both()
+    {
+        using var dir = new TempDir();
+        var handler = new StubHandler(_ => Json("[]"));
+        var (controller, db) = New(dir, handler);
+
+        db.SetSetting("radarr_url", "http://stored.local:7878");
+        db.SetSetting("radarr_api_key", "stored-key");
+
+        var result = Assert.IsType<OkObjectResult>(controller.SaveRadarr(
+            new SettingsController.RadarrPayload("radarr", "http://new-host.local:9999", "new-key")));
+
+        var configured = (bool)result.Value!.GetType().GetProperty("configured")!.GetValue(result.Value)!;
+        Assert.True(configured);
+        Assert.Equal("http://new-host.local:9999", db.GetSetting("radarr_url", ""));
+        Assert.Equal("new-key", db.GetSetting("radarr_api_key", ""));
+    }
+
+    [Fact]
+    public void SaveRadarr_treats_a_trailing_slash_only_difference_as_unchanged_and_preserves_the_key()
+    {
+        using var dir = new TempDir();
+        var handler = new StubHandler(_ => Json("[]"));
+        var (controller, db) = New(dir, handler);
+
+        db.SetSetting("radarr_url", "http://stored.local:7878");
+        db.SetSetting("radarr_api_key", "stored-key");
+
+        var result = Assert.IsType<OkObjectResult>(controller.SaveRadarr(
+            new SettingsController.RadarrPayload("radarr", "http://stored.local:7878/", "")));
+
+        var configured = (bool)result.Value!.GetType().GetProperty("configured")!.GetValue(result.Value)!;
+        Assert.True(configured);
+        Assert.Equal("http://stored.local:7878", db.GetSetting("radarr_url", ""));
+        Assert.Equal("stored-key", db.GetSetting("radarr_api_key", ""));
+    }
 }
