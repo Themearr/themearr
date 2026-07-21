@@ -35,9 +35,12 @@ export default function SettingsPage() {
   const [apiKeyLoaded,       setApiKeyLoaded]       = useState(false)
   const [apiKeyLoadError,    setApiKeyLoadError]    = useState('')
   const [apiKeyRegenerating, setApiKeyRegenerating] = useState(false)
+  const [apiKeyRegenerated,  setApiKeyRegenerated]  = useState(false)
   const [apiKeyError,        setApiKeyError]        = useState('')
   const [keyCopied,          setKeyCopied]          = useState(false)
   const [webhookCopied,      setWebhookCopied]      = useState(false)
+  const keyFieldRef     = useRef<HTMLDivElement>(null)
+  const webhookFieldRef = useRef<HTMLDivElement>(null)
 
   // Update modal state
   const [updateOpen,    setUpdateOpen]    = useState(false)
@@ -192,31 +195,45 @@ export default function SettingsPage() {
     try {
       const k = await apiKeyApi.regenerate()
       setApiKey(k.key)
+      setApiKeyRegenerated(true)
+      setTimeout(() => setApiKeyRegenerated(false), 2000)
     } catch (e) {
-      setApiKeyError((e as Error).message)
+      setApiKeyError(`Couldn't regenerate the API key: ${(e as Error).message}`)
     } finally {
       setApiKeyRegenerating(false)
     }
   }
 
-  async function copyApiKey() {
-    try {
-      await navigator.clipboard.writeText(apiKey)
-      setKeyCopied(true)
-      setTimeout(() => setKeyCopied(false), 2000)
-    } catch (e) {
-      setApiKeyError((e as Error)?.message || 'Failed to copy the key.')
+  // Copies `text` to the clipboard when running in a secure context (HTTPS or
+  // localhost). Themearr is normally reached over plain HTTP on a LAN, where
+  // navigator.clipboard doesn't exist at all — so this always feature-detects
+  // first rather than relying on a thrown error. When the clipboard API is
+  // unavailable or the write itself fails, it falls back to selecting the
+  // field's text so the user can copy it manually.
+  async function copyToClipboard(text: string, fieldRef: React.RefObject<HTMLDivElement | null>, setCopied: (v: boolean) => void) {
+    setApiKeyError('')
+    if (window.isSecureContext && navigator.clipboard) {
+      try {
+        await navigator.clipboard.writeText(text)
+        setCopied(true)
+        setTimeout(() => setCopied(false), 2000)
+        return
+      } catch {
+        // Fall through to the manual-selection fallback below.
+      }
     }
+    const input = fieldRef.current?.querySelector('input')
+    input?.focus()
+    input?.select()
+    setApiKeyError('Clipboard access needs HTTPS. The text has been selected — press Ctrl/Cmd+C to copy it.')
+  }
+
+  async function copyApiKey() {
+    await copyToClipboard(apiKey, keyFieldRef, setKeyCopied)
   }
 
   async function copyWebhookUrl() {
-    try {
-      await navigator.clipboard.writeText(webhookUrl)
-      setWebhookCopied(true)
-      setTimeout(() => setWebhookCopied(false), 2000)
-    } catch (e) {
-      setApiKeyError((e as Error)?.message || 'Failed to copy the webhook URL.')
-    }
+    await copyToClipboard(webhookUrl, webhookFieldRef, setWebhookCopied)
   }
 
   async function testRadarrConnection() {
@@ -416,15 +433,19 @@ export default function SettingsPage() {
           {apiKeyLoaded && (
             <div className="space-y-3">
               <div className="flex gap-2 items-end">
-                <Input label="Key" readOnly value={apiKey} className="flex-1 font-mono text-xs" />
+                <div ref={keyFieldRef} className="flex-1">
+                  <Input label="Key" readOnly value={apiKey} className="flex-1 font-mono text-xs" />
+                </div>
                 <Button variant="secondary" size="sm" onClick={copyApiKey}>{keyCopied ? 'Copied ✓' : 'Copy'}</Button>
               </div>
               <div className="flex gap-2 items-end">
-                <Input label="Radarr webhook URL" readOnly value={webhookUrl} className="flex-1 font-mono text-xs" />
+                <div ref={webhookFieldRef} className="flex-1">
+                  <Input label="Radarr webhook URL" readOnly value={webhookUrl} className="flex-1 font-mono text-xs" />
+                </div>
                 <Button variant="secondary" size="sm" onClick={copyWebhookUrl}>{webhookCopied ? 'Copied ✓' : 'Copy'}</Button>
               </div>
               <Button variant="danger" size="sm" onClick={regenerateApiKey} loading={apiKeyRegenerating}>
-                Regenerate
+                {apiKeyRegenerated ? 'Regenerated ✓' : 'Regenerate'}
               </Button>
               {apiKeyError && <p className="text-xs text-[#FDA29B]">{apiKeyError}</p>}
             </div>
