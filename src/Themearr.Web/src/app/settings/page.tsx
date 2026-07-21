@@ -59,6 +59,10 @@ export default function SettingsPage() {
   const [updateError,   setUpdateError]   = useState('')
   const [updateLogs,    setUpdateLogs]    = useState<string[]>([])
   const [checking,      setChecking]      = useState(false)
+  // Set when a "Check for updates" click fails. Distinct from versionLoadError
+  // (the initial/retry load): this is the action's own failure, shown next to
+  // the button that triggered it, same as radarrError/apiKeyError elsewhere.
+  const [checkUpdatesError, setCheckUpdatesError] = useState('')
   const logEndRef = useRef<HTMLDivElement>(null)
 
   // Loads settings -- the data the rest of the page (Library Source, API Key
@@ -163,11 +167,15 @@ export default function SettingsPage() {
 
   async function checkForUpdates() {
     setChecking(true)
+    setCheckUpdatesError('')
     try {
       const v = await versionApi.refresh()
       setVersion(v)
-    } catch { /* ignore */ }
-    finally { setChecking(false) }
+    } catch (e) {
+      setCheckUpdatesError(`Couldn't check for updates: ${(e as Error)?.message || 'unknown error'}`)
+    } finally {
+      setChecking(false)
+    }
   }
 
   async function saveRapidApiKey() {
@@ -187,10 +195,18 @@ export default function SettingsPage() {
   }
 
   async function removeRapidApiKey() {
-    await rapidApiApi.remove().catch(() => null)
-    setRapidApiOk(false)
-    setRapidApiKey('')
-    setRapidApiUsername('')
+    setRapidApiError('')
+    try {
+      await rapidApiApi.remove()
+      setRapidApiOk(false)
+      setRapidApiKey('')
+      setRapidApiUsername('')
+    } catch (e) {
+      // The DELETE failed, so the key is still stored server-side and still
+      // spending quota -- rapidApiOk must stay whatever it already was rather
+      // than being set to false, or the UI would claim the key is gone.
+      setRapidApiError(`Couldn't remove the RapidAPI key: ${(e as Error)?.message || 'unknown error'}`)
+    }
   }
 
   // Loads the stored library source. Reused as a retry action after a failed
@@ -713,6 +729,7 @@ export default function SettingsPage() {
                 )}
               </div>
             </div>
+            {checkUpdatesError && <p className="text-xs text-[#FDA29B]">{checkUpdatesError}</p>}
           </Section>
         )}
         {!version && versionLoadError && (

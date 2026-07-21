@@ -42,13 +42,24 @@ export default function QueuePage() {
   // Keep ref in sync
   useEffect(() => { autoModeRef.current = autoMode }, [autoMode])
 
+  // Saves first and only flips the switch once the server confirms it, rather
+  // than flipping optimistically and trying to unwind it on failure -- so the
+  // control can never read "on" while the background auto-download worker
+  // never actually started. Settings only exposes a whole-object get/save
+  // (no narrower "just autoDownload" endpoint), so this still has to read the
+  // rest of the settings back before writing them -- there's no way to avoid
+  // that round trip without adding a backend route, which is out of scope
+  // here.
   async function toggleAutoMode() {
     const next = !autoMode
-    setAutoMode(next)
+    setError('')
     try {
       const s = await settingsApi.get()
       await settingsApi.save({ ...s, autoDownload: next })
-    } catch { /* ignore */ }
+      setAutoMode(next)
+    } catch (e) {
+      setError(`Couldn't turn auto mode ${next ? 'on' : 'off'}: ${(e as Error)?.message || 'unknown error'}`)
+    }
   }
 
   // ── Auto-search when displayed movie changes ───────────────────────────────
