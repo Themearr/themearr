@@ -113,18 +113,35 @@ public class SettingsController(Database db, RadarrLibrarySource radarr, IApiKey
         if (source is not ("plex" or "radarr"))
             return BadRequest(new { detail = "Library source must be 'plex' or 'radarr'." });
 
-        if (source == "radarr")
+        if (source == "radarr" && string.IsNullOrWhiteSpace(payload.Url))
+            return BadRequest(new { detail = "Radarr URL cannot be empty." });
+
+        // A blank URL or key normally means "keep what you had" — e.g. a Plex save submits
+        // neither, and must not wipe Radarr's stored config out from under it. But a blank
+        // key may only fall back to the stored one when the submitted URL is the one that
+        // key belongs to: the UI never receives the stored key back, so pairing a blank key
+        // with a *different* URL isn't "leave it as-is" — it's "no key was ever entered for
+        // this server". Falling back here would have the server ship the real key, in an
+        // X-Api-Key header, to whatever host the caller just named — and this endpoint
+        // accepts the very API key credential that's meant to be pasted into Radarr, so an
+        // authenticated caller could otherwise make the key exfiltrate itself. Same rule as
+        // TestRadarr and Database.SetPlexServersMergingTokens (see UrlsMatch below).
+        var storedUrl = db.GetSetting("radarr_url", "").Trim().TrimEnd('/');
+        var storedKey = db.GetSetting("radarr_api_key", "");
+        var submittedUrl = (payload.Url ?? "").Trim().TrimEnd('/');
+        var urlIsChanging = !string.IsNullOrWhiteSpace(submittedUrl) &&
+                             !string.IsNullOrEmpty(storedUrl) &&
+                             !UrlsMatch(submittedUrl, storedUrl);
+
+        if (string.IsNullOrWhiteSpace(payload.ApiKey))
         {
-            if (string.IsNullOrWhiteSpace(payload.Url))
-                return BadRequest(new { detail = "Radarr URL cannot be empty." });
-            if (string.IsNullOrWhiteSpace(payload.ApiKey) &&
-                string.IsNullOrWhiteSpace(db.GetSetting("radarr_api_key", "")))
+            if (urlIsChanging)
+                return BadRequest(new { detail = "Enter the API key for the new Radarr server." });
+            if (source == "radarr" && string.IsNullOrWhiteSpace(storedKey))
                 return BadRequest(new { detail = "Radarr API key cannot be empty." });
         }
 
         db.SetSetting("library_source", source);
-        // A blank URL or key means "keep what you had" — e.g. a Plex save submits neither,
-        // and must not wipe Radarr's stored config out from under it.
         if (!string.IsNullOrWhiteSpace(payload.Url))
             db.SetSetting("radarr_url", payload.Url.Trim().TrimEnd('/'));
         if (!string.IsNullOrWhiteSpace(payload.ApiKey))
@@ -132,6 +149,13 @@ public class SettingsController(Database db, RadarrLibrarySource radarr, IApiKey
 
         return Ok(new { source, configured = !string.IsNullOrWhiteSpace(db.GetSetting("radarr_api_key", "")) });
     }
+
+    // Ordinal comparison after trimming a single trailing slash — same rule as
+    // Database.UrlsMatch, which guards the equivalent Plex-token re-attachment case.
+    // Enough to treat "http://host:7878" and "http://host:7878/" as the same server
+    // without being lenient about anything that would actually change the destination.
+    private static bool UrlsMatch(string a, string b) =>
+        string.Equals(a.TrimEnd('/'), b.TrimEnd('/'), StringComparison.Ordinal);
 
     [HttpPost("radarr/test")]
     [Consumes("application/json")]
