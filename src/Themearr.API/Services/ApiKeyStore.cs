@@ -24,17 +24,32 @@ public sealed class ApiKeyStore(Database db) : IApiKeyStore
 {
     public const string SettingKey = "api_key";
 
+    private readonly object _lock = new();
+
     public string Current
     {
         get
         {
-            var existing = db.GetSetting(SettingKey, "");
-            if (!string.IsNullOrEmpty(existing)) return existing;
-            return Regenerate();
+            // Current can generate, so read-then-maybe-write must be atomic.
+            // Regenerate must not interleave with reads.
+            lock (_lock)
+            {
+                var existing = db.GetSetting(SettingKey, "");
+                if (!string.IsNullOrEmpty(existing)) return existing;
+                return RegenerateInternal();
+            }
         }
     }
 
     public string Regenerate()
+    {
+        lock (_lock)
+        {
+            return RegenerateInternal();
+        }
+    }
+
+    private string RegenerateInternal()
     {
         var key = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(32));
         db.SetSetting(SettingKey, key);
