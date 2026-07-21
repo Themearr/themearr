@@ -309,6 +309,16 @@ public class Database(string dbPath)
     // Persists an incoming server list while preserving any stored token for a server
     // whose incoming token is blank. Lets the UI load redacted servers and save them
     // back without wiping the token it was never shown.
+    //
+    // The stored token is only ever carried forward when the incoming url matches the
+    // url it was stored against for that id. Matching on id alone would let a caller
+    // POST { id: <existing id>, url: <attacker host>, token: "" } and have the real
+    // token re-attached to a URL the server never issued it to — PlexLibrarySource.CheckAsync
+    // (reachable from the unauthenticated /health endpoint) would then hand the real
+    // token to that host. If the url doesn't match and no token was supplied, the server
+    // ends up with no token; the existing health check already reports that Plex
+    // rejected the credential and the user should sign in again, which is the correct,
+    // safe outcome here too.
     public void SetPlexServersMergingTokens(List<Dictionary<string, object?>> incoming)
     {
         var storedTokens = GetPlexServersDict();
@@ -318,14 +328,23 @@ public class Database(string dbPath)
             var token = copy.GetValueOrDefault("token")?.ToString() ?? "";
             if (string.IsNullOrEmpty(token))
             {
-                var id = copy.GetValueOrDefault("id")?.ToString() ?? "";
-                if (!string.IsNullOrEmpty(id) && storedTokens.TryGetValue(id, out var s) && !string.IsNullOrEmpty(s.Token))
+                var id  = copy.GetValueOrDefault("id")?.ToString() ?? "";
+                var url = copy.GetValueOrDefault("url")?.ToString() ?? "";
+                if (!string.IsNullOrEmpty(id) && storedTokens.TryGetValue(id, out var s) &&
+                    !string.IsNullOrEmpty(s.Token) && UrlsMatch(url, s.Url))
                     copy["token"] = s.Token;
             }
             return copy;
         }).ToList();
         SetPlexServers(merged);
     }
+
+    // Ordinal comparison after trimming a single trailing slash — enough to treat
+    // "http://host:32400" and "http://host:32400/" as the same server without being
+    // lenient about anything that would actually change the destination (scheme, host,
+    // port, or case).
+    private static bool UrlsMatch(string a, string b) =>
+        string.Equals(a.TrimEnd('/'), b.TrimEnd('/'), StringComparison.Ordinal);
 
     // The stored token for the primary server, or "" — used to preserve plex_server_token
     // when a redacted save omits it.
