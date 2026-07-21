@@ -1,31 +1,33 @@
 using Microsoft.AspNetCore.Mvc;
 using Themearr.API.Data;
 using Themearr.API.Services;
+using Themearr.API.Services.Sources;
 
 namespace Themearr.API.Controllers;
 
 [ApiController]
 [Route("api/stats")]
-public class StatsController(Database db, PosterUrlSigner posterSigner) : ControllerBase
+public class StatsController(Database db, PosterUrlSigner posterSigner, LibrarySourceResolver sources)
+    : ControllerBase
 {
     [HttpGet]
     public IActionResult GetStats()
     {
         var stats     = db.GetStats();
         var posterExpiry = DateTimeOffset.UtcNow.AddHours(12);
+        var activeSource = sources.Active.Name;
 
         // Attach signed, token-free poster URLs (same as MoviesController).
         foreach (var movie in stats.RecentlyAdded)
         {
             var id = movie.GetValueOrDefault("id")?.ToString() ?? "";
 
-            // Plex stores "{serverId}:{ratingKey}" in source_ref; only Plex movies have a
-            // poster to sign a URL for (see PosterController).
-            var isPlex = movie.GetValueOrDefault("source")?.ToString() == "plex";
-            var parts  = (movie.GetValueOrDefault("sourceRef")?.ToString() ?? "").Split(':', 2);
-            var hasRef = parts.Length == 2 && parts.All(p => !string.IsNullOrEmpty(p));
+            // source_ref is opaque outside its own source (see PosterController); only a
+            // movie whose source matches the active one has a poster to sign a URL for.
+            var hasPoster = movie.GetValueOrDefault("source")?.ToString() == activeSource
+                         && !string.IsNullOrEmpty(movie.GetValueOrDefault("sourceRef")?.ToString());
 
-            movie["posterUrl"] = (!string.IsNullOrEmpty(id) && isPlex && hasRef)
+            movie["posterUrl"] = (!string.IsNullOrEmpty(id) && hasPoster)
                 ? posterSigner.PosterPath(id, posterExpiry)
                 : null;
         }

@@ -43,6 +43,11 @@ public class AutoSyncService(
 
         while (!ct.IsCancellationRequested)
         {
+            // The interval is a property of the active source, which the user can change
+            // at runtime. Register captured it once at startup, so refresh it each cycle
+            // rather than re-registering, which would wipe the task's run history.
+            registry.UpdateInterval(SyncTaskId, SyncInterval);
+
             try { await TryAutoSync(forced, ct); }
             catch (Exception ex) { log.LogWarning(ex, "AutoSync check failed"); }
 
@@ -82,9 +87,18 @@ public class AutoSyncService(
             (int)-JitterMax.TotalMilliseconds,
             (int) JitterMax.TotalMilliseconds));
 
+        // CheckInterval is sized for Plex's 24h cadence. A source with a shorter interval
+        // (e.g. Radarr's 15 minutes) needs the loop to wake more often than that, or the
+        // real cadence becomes CheckInterval±jitter regardless of what the source promises,
+        // and the Tasks tab shows the sync as perpetually overdue. Clamp the base wait to
+        // the source's own interval before applying jitter — for Plex, SyncInterval (24h)
+        // is always larger than CheckInterval, so this clamp is a no-op and the wait stays
+        // the existing 30±5 minutes.
+        var baseWait = CheckInterval < SyncInterval ? CheckInterval : SyncInterval;
+
         using var raceCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         var trigger = registry.WaitForTriggerAsync(SyncTaskId, raceCts.Token);
-        var delay   = Task.Delay(CheckInterval + jitter, raceCts.Token);
+        var delay   = Task.Delay(baseWait + jitter, raceCts.Token);
 
         await Task.WhenAny(trigger, delay);
 

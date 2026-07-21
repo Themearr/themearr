@@ -35,7 +35,6 @@ public sealed class TaskRegistry
     private sealed class Entry
     {
         public required string     Name       { get; init; }
-        public required TimeSpan   Interval   { get; init; }
 
         // Optional probe supplied at Register() time, e.g. backed by SyncService.InProgress.
         // When present it is the source of truth for IsRunning: it reflects reality even
@@ -44,6 +43,19 @@ public sealed class TaskRegistry
         // tasks registered without a probe, so callers with no probe keep working exactly
         // as before.
         public Func<bool>? IsRunningProbe { get; init; }
+
+        private long _intervalTicks;
+
+        // Interval is guarded independently via Volatile.Read/Write, not bundled into RunState.
+        // RunState is replaced wholesale (via 'with' in RecordRun and MarkRunning), so
+        // a concurrent UpdateInterval racing a RecordRun would lose an update if Interval
+        // were part of the record. This field mirrors the technique used for run state,
+        // giving it its own publication point.
+        public required TimeSpan Interval
+        {
+            get => TimeSpan.FromTicks(Volatile.Read(ref _intervalTicks));
+            set => Volatile.Write(ref _intervalTicks, value.Ticks);
+        }
 
         private RunState _state = RunState.Initial;
 
@@ -74,6 +86,17 @@ public sealed class TaskRegistry
     /// </summary>
     public void Register(string id, string name, TimeSpan interval, Func<bool>? isRunning = null) =>
         _tasks[id] = new Entry { Name = name, Interval = interval, IsRunningProbe = isRunning };
+
+    /// <summary>
+    /// Changes a task's displayed cadence without touching its run history.
+    /// Re-registering would replace the entry and wipe last-run state, so this exists
+    /// for the case where the interval is a property of something configurable — the
+    /// active library source — rather than a constant.
+    /// </summary>
+    public void UpdateInterval(string id, TimeSpan interval)
+    {
+        if (_tasks.TryGetValue(id, out var e)) e.Interval = interval;
+    }
 
     public bool Exists(string id) => _tasks.ContainsKey(id);
 

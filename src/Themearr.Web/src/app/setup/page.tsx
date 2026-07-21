@@ -6,11 +6,13 @@ import { Spinner } from '@/components/ui'
 
 export default function SetupPage() {
   const navigate = useNavigate()
-  const { loading, connected } = useAuth()
+  // Reaching the wizard only requires a valid bearer token — Plex sign-in is a
+  // property of the wizard's Plex branch, not a precondition for entering it.
+  const { loading, authorized } = useAuth()
 
   useEffect(() => {
-    if (!loading && !connected) navigate('/login', { replace: true })
-  }, [loading, connected, navigate])
+    if (!loading && !authorized) navigate('/login', { replace: true })
+  }, [loading, authorized, navigate])
 
   if (loading) {
     return (
@@ -20,7 +22,7 @@ export default function SetupPage() {
     )
   }
 
-  if (!connected) return null
+  if (!authorized) return null
 
   return (
     <div className="min-h-screen px-4 py-12">

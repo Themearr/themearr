@@ -37,6 +37,11 @@ builder.Services.AddSingleton<LocalFolderResolver>();
 builder.Services.AddSingleton<Themearr.API.Services.Sources.PlexLibrarySource>();
 builder.Services.AddSingleton<Themearr.API.Services.Sources.ILibrarySource>(
     sp => sp.GetRequiredService<Themearr.API.Services.Sources.PlexLibrarySource>());
+builder.Services.AddSingleton<Themearr.API.Services.Sources.RadarrLibrarySource>();
+builder.Services.AddSingleton<Themearr.API.Services.Sources.ILibrarySource>(
+    sp => sp.GetRequiredService<Themearr.API.Services.Sources.RadarrLibrarySource>());
+builder.Services.AddHttpClient(Themearr.API.Services.Sources.RadarrLibrarySource.ClientName,
+    c => c.Timeout = TimeSpan.FromSeconds(10));
 builder.Services.AddSingleton<Themearr.API.Services.Sources.LibrarySourceResolver>();
 builder.Services.AddSingleton<SyncService>();
 builder.Services.AddSingleton<UpdateService>();
@@ -69,12 +74,17 @@ builder.Services.AddSingleton<Themearr.API.Services.Health.IQuotaStatus>(
     sp => sp.GetRequiredService<DownloadService>());
 // A short timeout matters: an unreachable Plex server is the expected case here,
 // and without it the whole health page waits on a TCP hang.
-builder.Services.AddHttpClient(Themearr.API.Services.Health.PlexReachableCheck.ClientName,
+builder.Services.AddHttpClient(Themearr.API.Services.Sources.PlexLibrarySource.ClientName,
+    c => c.Timeout = TimeSpan.FromSeconds(3));
+// Same reasoning, same timeout, for Radarr's health probe — kept separate from the
+// "radarr" client above (10s) so an unreachable Radarr fails fast instead of racing
+// HealthCache's own 10s refresh budget and losing to its generic timeout message.
+builder.Services.AddHttpClient(Themearr.API.Services.Sources.RadarrLibrarySource.HealthClientName,
     c => c.Timeout = TimeSpan.FromSeconds(3));
 
 builder.Services.AddHealthChecks()
     .AddCheck<Themearr.API.Services.Health.LibraryPathsCheck>("libraryPaths")
-    .AddCheck<Themearr.API.Services.Health.PlexReachableCheck>("plex")
+    .AddCheck<Themearr.API.Services.Health.LibrarySourceCheck>("librarySource")
     .AddCheck<Themearr.API.Services.Health.RapidApiCheck>("rapidapi")
     .AddCheck<Themearr.API.Services.Health.DownloadWorkerCheck>("autoDownload");
 

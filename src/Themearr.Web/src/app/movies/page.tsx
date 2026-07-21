@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { moviesApi, syncApi } from '@/lib/api'
+import { moviesApi, radarrApi, syncApi } from '@/lib/api'
 import type { Movie, SyncStatus } from '@/lib/types'
 import { AppShell } from '@/components/layout/AppShell'
 import { MovieGrid } from '@/components/movies/MovieGrid'
@@ -10,6 +10,7 @@ export default function MoviesPage() {
   const [loading, setLoading] = useState(true)
   const [sync, setSync]       = useState<SyncStatus | null>(null)
   const [syncing, setSyncing] = useState(false)
+  const [source, setSource]   = useState<'plex' | 'radarr'>('plex')
 
   const loadMovies = useCallback(async () => {
     try { setMovies(await moviesApi.list()) } catch { /* ignore */ }
@@ -26,6 +27,11 @@ export default function MoviesPage() {
         }
       })
       .finally(() => setLoading(false))
+  }, [])
+
+  // Learn the active library source so the sync control doesn't hardcode "Plex".
+  useEffect(() => {
+    radarrApi.get().then(s => setSource(s.source)).catch(() => { /* default to plex */ })
   }, [])
 
   // Poll sync status while in progress
@@ -53,13 +59,14 @@ export default function MoviesPage() {
 
   const pending    = movies.filter(m => m.status === 'pending').length
   const downloaded = movies.filter(m => m.status === 'downloaded').length
+  const sourceLabel = source === 'radarr' ? 'Radarr' : 'Plex'
 
   return (
     <AppShell
       title="Movies"
       actions={
         <Button onClick={startSync} loading={syncing} variant="secondary" size="sm">
-          {syncing ? 'Syncing…' : 'Sync Plex'}
+          {syncing ? 'Syncing…' : `Sync ${sourceLabel}`}
         </Button>
       }
     >
@@ -84,7 +91,7 @@ export default function MoviesPage() {
         <div className="mb-5 rounded-xl border border-[#344054]/40 bg-[#1D2939]/40 p-4 space-y-2">
           <div className="flex items-center gap-2 text-sm text-[#D0D5DD]">
             <Spinner size={14} />
-            Syncing with Plex…
+            Syncing with {sourceLabel}…
           </div>
           {sync.logs.length > 0 && (
             <div className="max-h-36 overflow-y-auto rounded-lg bg-[#0C111D] px-3 py-2">
@@ -102,7 +109,7 @@ export default function MoviesPage() {
           <Spinner size={28} className="text-[#BB0000]" />
         </div>
       ) : (
-        <MovieGrid movies={movies} onMovieUpdated={handleMovieUpdated} />
+        <MovieGrid movies={movies} onMovieUpdated={handleMovieUpdated} sourceLabel={sourceLabel} />
       )}
     </AppShell>
   )

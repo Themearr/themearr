@@ -136,6 +136,25 @@ public class SetupController(Database db, PlexService plex) : ControllerBase
         return Ok(SetupPayload());
     }
 
+    // ── Non-Plex completion ──────────────────────────────────────────────────
+
+    /// <summary>
+    /// Marks setup complete for an install that is not using Plex. The Plex branch
+    /// finishes via plex/selection; a Radarr user never touches those endpoints.
+    /// </summary>
+    [HttpPost("complete")]
+    public IActionResult Complete()
+    {
+        if (db.GetSetting("library_source", "plex") != "radarr")
+            return BadRequest(new { detail = "Only a non-Plex library source can complete setup this way." });
+        if (string.IsNullOrWhiteSpace(db.GetSetting("radarr_url", "")) ||
+            string.IsNullOrWhiteSpace(db.GetSetting("radarr_api_key", "")))
+            return BadRequest(new { detail = "Configure Radarr before completing setup." });
+
+        db.MarkSetupComplete();
+        return Ok(new { setupComplete = true });
+    }
+
     // ── Logout ───────────────────────────────────────────────────────────────
 
     [HttpPost("plex/logout")]
@@ -165,9 +184,14 @@ public class SetupController(Database db, PlexService plex) : ControllerBase
         var selectedLibraries = db.GetSelectedLibraries();
         var libCount = selectedLibraries.Values.Sum(v => v.Count);
 
+        // A Radarr install never selects Plex libraries, so the library-count
+        // requirement only makes sense for the Plex source — otherwise setup can
+        // never be reported complete and /setup/complete becomes unobservable.
+        var isPlex = db.GetSetting("library_source", "plex") == "plex";
+
         return new
         {
-            setupComplete    = db.IsSetupComplete() && libCount > 0,
+            setupComplete    = db.IsSetupComplete() && (!isPlex || libCount > 0),
             plexConnected,
             plexAccountName  = db.GetSetting("plex_account_name"),
             selectedServers,
