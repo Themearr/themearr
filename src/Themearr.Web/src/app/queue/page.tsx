@@ -2,18 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { moviesApi, settingsApi } from '@/lib/api'
 import type { Movie, YoutubeResult } from '@/lib/types'
 import { AppShell } from '@/components/layout/AppShell'
-import { Button, EmptyState, Input, Spinner } from '@/components/ui'
+import { Button, EmptyState, ErrorIcon, Input, Spinner } from '@/components/ui'
 import { useResource } from '@/lib/useResource'
-
-// Shown when the initial load fails, so a network/server error never gets
-// mistaken for "the queue is empty".
-const ERROR_ICON = (
-  <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M12 9v4" />
-    <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
-    <path d="M12 17h.01" />
-  </svg>
-)
 
 export default function QueuePage() {
   const [currentIdx,   setCurrentIdx]   = useState(0)
@@ -204,7 +194,7 @@ export default function QueuePage() {
       <AppShell title="Queue">
         {moviesError ? (
           <EmptyState
-            icon={ERROR_ICON}
+            icon={<ErrorIcon />}
             title="Couldn&apos;t load the queue"
             description={moviesError}
             action={<Button variant="secondary" size="sm" onClick={retryMovies}>Retry</Button>}

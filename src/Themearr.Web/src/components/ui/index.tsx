@@ -186,6 +186,23 @@ export function Divider() {
   return <hr className="border-[#1D2939]" />
 }
 
+// ── Error icon ────────────────────────────────────────────────────────────────
+
+/**
+ * The warning-triangle icon pages pass to `EmptyState` when their initial load
+ * fails, so a network/server error never gets mistaken for "there's nothing
+ * here". Shared rather than redefined per page.
+ */
+export function ErrorIcon() {
+  return (
+    <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 9v4" />
+      <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
+      <path d="M12 17h.01" />
+    </svg>
+  )
+}
+
 // ── Empty state ───────────────────────────────────────────────────────────────
 
 export function EmptyState({ icon, title, description, action }: {

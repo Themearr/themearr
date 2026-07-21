@@ -1,20 +1,10 @@
 import { useCallback, useState } from 'react'
 import { historyApi } from '@/lib/api'
 import { AppShell } from '@/components/layout/AppShell'
-import { Button, EmptyState, Spinner } from '@/components/ui'
+import { Button, EmptyState, ErrorIcon, Spinner } from '@/components/ui'
 import { useResource } from '@/lib/useResource'
 
 type DateFilter = 'all' | 'today' | 'week' | 'month'
-
-// Shown when the initial load fails, so a network/server error never gets
-// mistaken for "you have no downloads".
-const ERROR_ICON = (
-  <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M12 9v4" />
-    <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
-    <path d="M12 17h.01" />
-  </svg>
-)
 
 export default function HistoryPage() {
   const [search,     setSearch]     = useState('')
@@ -56,7 +46,7 @@ export default function HistoryPage() {
     }>
       {entries === null && error ? (
         <EmptyState
-          icon={ERROR_ICON}
+          icon={<ErrorIcon />}
           title="Couldn&apos;t load your history"
           description={error}
           action={<Button variant="secondary" size="sm" onClick={retry}>Retry</Button>}

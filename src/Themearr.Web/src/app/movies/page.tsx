@@ -3,30 +3,44 @@ import { moviesApi, radarrApi, syncApi } from '@/lib/api'
 import type { Movie, SyncStatus } from '@/lib/types'
 import { AppShell } from '@/components/layout/AppShell'
 import { MovieGrid } from '@/components/movies/MovieGrid'
-import { Button, EmptyState, Spinner } from '@/components/ui'
+import { Button, EmptyState, ErrorIcon, Spinner } from '@/components/ui'
 import { useResource } from '@/lib/useResource'
-
-// Shown when the initial load fails, so a network/server error never gets
-// mistaken for "you have no movies".
-const ERROR_ICON = (
-  <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M12 9v4" />
-    <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
-    <path d="M12 17h.01" />
-  </svg>
-)
 
 export default function MoviesPage() {
   const [movies, setMovies]   = useState<Movie[]>([])
   const [sync, setSync]       = useState<SyncStatus | null>(null)
   const [syncing, setSyncing] = useState(false)
   const [source, setSource]   = useState<'plex' | 'radarr'>('plex')
+  // Set when a refresh *after* the page already has data fails -- currently
+  // only the sync-status poll's post-sync reload below. Distinct from the
+  // initial-load error tracked by `useResource`: by the time this can be set,
+  // the grid already has something to show (even if that's a confirmed-empty
+  // `[]`), so a failure here must never blank it -- only flag that what's
+  // shown may be stale.
+  const [refreshError, setRefreshError] = useState<string | null>(null)
+  // True once *any* fetch -- the initial load or a later refresh -- has
+  // produced real data. Normally this tracks `useResource`'s own `data`, but
+  // it can also flip true when a refresh succeeds after the initial load
+  // failed (e.g. the user manually retriggers a sync), which `useResource`
+  // has no way to reflect back onto its own `data`/`error`.
+  const [hasData, setHasData] = useState(false)
 
-  // Used only by the sync-status poll below, to silently refresh the list once
-  // a sync finishes. Left untouched: a dropped refresh there should stay quiet
-  // rather than blank an already-populated grid.
+  // Called by the sync-status poll below once a sync finishes, to refresh the
+  // grid with whatever it imported. Unlike the poll's own `syncApi.status`
+  // call (left silent on purpose -- a dropped status check must not disturb
+  // the page), this refresh is a direct consequence of a sync the user
+  // started, so its failure must be visible: it's surfaced as a non-blocking
+  // notice via `refreshError` rather than swallowed. It still never blanks
+  // `movies` -- a failed refresh just leaves the last known list in place.
   const loadMovies = useCallback(async () => {
-    try { setMovies(await moviesApi.list()) } catch { /* ignore */ }
+    try {
+      const list = await moviesApi.list()
+      setMovies(list)
+      setHasData(true)
+      setRefreshError(null)
+    } catch (e) {
+      setRefreshError(e instanceof Error && e.message ? e.message : 'Request failed')
+    }
   }, [])
 
   // The initial load. Routed through useResource so a failed request surfaces
@@ -37,13 +51,14 @@ export default function MoviesPage() {
   const loadInitialMovies = useCallback(async () => {
     const list = await moviesApi.list()
     setMovies(list)
+    setHasData(true)
     if (list.length === 0) {
       setSyncing(true)
       syncApi.start().catch(() => setSyncing(false))
     }
     return list
   }, [])
-  const { data: loadedMovies, error: moviesError, retry: retryMovies } = useResource(loadInitialMovies)
+  const { error: moviesError, retry: retryMovies } = useResource(loadInitialMovies)
 
   // Learn the active library source so the sync control doesn't hardcode "Plex".
   useEffect(() => {
@@ -120,22 +135,35 @@ export default function MoviesPage() {
       )}
 
       {/* Content */}
-      {loadedMovies === null && moviesError ? (
+      {!hasData && moviesError ? (
         <EmptyState
-          icon={ERROR_ICON}
+          icon={<ErrorIcon />}
           title="Couldn&apos;t load your movies"
           description={moviesError}
           action={<Button variant="secondary" size="sm" onClick={retryMovies}>Retry</Button>}
         />
-      ) : loadedMovies === null ? (
+      ) : !hasData ? (
         <div className="flex items-center justify-center py-24">
           <Spinner size={28} className="text-[#BB0000]" />
         </div>
+      ) : movies.length === 0 && refreshError ? (
+        // We have data (the page loaded successfully at some point), but the
+        // most recent refresh -- the one that would confirm whether the
+        // library is genuinely empty -- failed. Showing "No movies yet" here
+        // would be exactly the lie this page exists to avoid, so this stays
+        // an explicit "couldn't confirm" state instead.
+        <EmptyState
+          icon={<ErrorIcon />}
+          title="Couldn&apos;t refresh your movies"
+          description={`${refreshError} — your list may be out of date.`}
+          action={<Button variant="secondary" size="sm" onClick={loadMovies}>Retry</Button>}
+        />
       ) : (
         <>
-          {moviesError && (
-            <div className="mb-5 rounded-lg border border-[#B42318]/40 bg-[#FEF3F2]/5 px-4 py-3">
-              <p className="text-sm text-[#FDA29B]">Couldn&apos;t refresh movies: {moviesError}</p>
+          {refreshError && (
+            <div className="mb-5 flex items-center justify-between gap-3 rounded-lg border border-[#B42318]/40 bg-[#FEF3F2]/5 px-4 py-3">
+              <p className="text-sm text-[#FDA29B]">Couldn&apos;t refresh movies: {refreshError} — your list may be out of date.</p>
+              <Button variant="secondary" size="sm" onClick={loadMovies}>Retry</Button>
             </div>
           )}
           <MovieGrid movies={movies} onMovieUpdated={handleMovieUpdated} sourceLabel={sourceLabel} />
