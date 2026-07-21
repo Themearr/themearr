@@ -52,6 +52,9 @@ export default function MoviesPage() {
     const list = await moviesApi.list()
     setMovies(list)
     setHasData(true)
+    // This load just succeeded, so any earlier refresh failure is stale news.
+    // Left set, it would report a confirmed-empty library as a failed refresh.
+    setRefreshError(null)
     if (list.length === 0) {
       setSyncing(true)
       syncApi.start().catch(() => setSyncing(false))
