@@ -1,28 +1,26 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useState } from 'react'
 import { historyApi } from '@/lib/api'
-import type { HistoryEntry } from '@/lib/types'
 import { AppShell } from '@/components/layout/AppShell'
-import { Button, Spinner } from '@/components/ui'
+import { Button, EmptyState, Spinner } from '@/components/ui'
+import { useResource } from '@/lib/useResource'
 
 type DateFilter = 'all' | 'today' | 'week' | 'month'
 
+// Shown when the initial load fails, so a network/server error never gets
+// mistaken for "you have no downloads".
+const ERROR_ICON = (
+  <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 9v4" />
+    <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
+    <path d="M12 17h.01" />
+  </svg>
+)
+
 export default function HistoryPage() {
-  const [entries,    setEntries]    = useState<HistoryEntry[] | null>(null)
-  const [refreshing, setRefreshing] = useState(false)
   const [search,     setSearch]     = useState('')
   const [dateFilter, setDateFilter] = useState<DateFilter>('all')
 
-  function load() {
-    historyApi.get().then(setEntries).catch(() => setEntries([]))
-  }
-
-  useEffect(() => { load() }, [])
-
-  async function refresh() {
-    setRefreshing(true)
-    try { await historyApi.get().then(setEntries) } catch { /* ignore */ }
-    finally { setRefreshing(false) }
-  }
+  const { data: entries, error, loading, retry } = useResource(useCallback(() => historyApi.get(), []))
 
   const filtered = (entries ?? []).filter(e => {
     if (search.trim()) {
@@ -46,7 +44,7 @@ export default function HistoryPage() {
 
   return (
     <AppShell title="History" actions={
-      <Button variant="ghost" size="sm" onClick={refresh} loading={refreshing}>
+      <Button variant="ghost" size="sm" onClick={retry} loading={loading}>
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
           <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
           <path d="M21 3v5h-5" />
@@ -56,7 +54,14 @@ export default function HistoryPage() {
         Refresh
       </Button>
     }>
-      {entries === null ? (
+      {entries === null && error ? (
+        <EmptyState
+          icon={ERROR_ICON}
+          title="Couldn&apos;t load your history"
+          description={error}
+          action={<Button variant="secondary" size="sm" onClick={retry}>Retry</Button>}
+        />
+      ) : entries === null ? (
         <div className="flex justify-center py-24">
           <Spinner size={28} className="text-[#BB0000]" />
         </div>
@@ -71,6 +76,11 @@ export default function HistoryPage() {
         </div>
       ) : (
         <div className="max-w-2xl space-y-4">
+          {error && (
+            <div className="rounded-lg border border-[#B42318]/40 bg-[#FEF3F2]/5 px-4 py-3">
+              <p className="text-sm text-[#FDA29B]">Couldn&apos;t refresh history: {error}</p>
+            </div>
+          )}
           {/* Search + filter toolbar */}
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="relative">

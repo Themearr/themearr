@@ -1,11 +1,21 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { moviesApi, settingsApi } from '@/lib/api'
 import type { Movie, YoutubeResult } from '@/lib/types'
 import { AppShell } from '@/components/layout/AppShell'
-import { Button, Input, Spinner } from '@/components/ui'
+import { Button, EmptyState, Input, Spinner } from '@/components/ui'
+import { useResource } from '@/lib/useResource'
+
+// Shown when the initial load fails, so a network/server error never gets
+// mistaken for "the queue is empty".
+const ERROR_ICON = (
+  <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 9v4" />
+    <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
+    <path d="M12 17h.01" />
+  </svg>
+)
 
 export default function QueuePage() {
-  const [pending,      setPending]      = useState<Movie[] | null>(null)
   const [currentIdx,   setCurrentIdx]   = useState(0)
   const [results,      setResults]      = useState<YoutubeResult[]>([])
   const [searching,    setSearching]    = useState(false)
@@ -24,14 +34,16 @@ export default function QueuePage() {
   // Keep a ref in sync with autoMode so polling closures never see stale state
   const autoModeRef        = useRef(autoMode)
 
+  // The initial load. Routed through useResource so a failed request surfaces
+  // as an error screen instead of "every movie already has a theme".
+  const { data: movies, error: moviesError, retry: retryMovies } = useResource(useCallback(() => moviesApi.list(), []))
+  const pending = movies ? movies.filter(m => m.status === 'pending') : null
+
   const current   = pending?.[currentIdx] ?? null
   const remaining = pending ? Math.max(0, pending.length - currentIdx) : 0
 
-  // ── Load pending movies + auto mode setting ────────────────────────────────
+  // ── Load auto mode setting ──────────────────────────────────────────────────
   useEffect(() => {
-    moviesApi.list()
-      .then(movies => setPending(movies.filter(m => m.status === 'pending')))
-      .catch(() => setPending([]))
     settingsApi.get()
       .then(s => setAutoMode(s.autoDownload))
       .catch(() => null)
@@ -186,13 +198,22 @@ export default function QueuePage() {
     }
   }
 
-  // ── Loading ────────────────────────────────────────────────────────────────
+  // ── Loading / failed ───────────────────────────────────────────────────────
   if (pending === null) {
     return (
       <AppShell title="Queue">
-        <div className="flex justify-center py-24">
-          <Spinner size={28} className="text-[#BB0000]" />
-        </div>
+        {moviesError ? (
+          <EmptyState
+            icon={ERROR_ICON}
+            title="Couldn&apos;t load the queue"
+            description={moviesError}
+            action={<Button variant="secondary" size="sm" onClick={retryMovies}>Retry</Button>}
+          />
+        ) : (
+          <div className="flex justify-center py-24">
+            <Spinner size={28} className="text-[#BB0000]" />
+          </div>
+        )}
       </AppShell>
     )
   }
@@ -201,6 +222,11 @@ export default function QueuePage() {
   if (!current) {
     return (
       <AppShell title="Queue">
+        {moviesError && (
+          <div className="mb-5 rounded-lg border border-[#B42318]/40 bg-[#FEF3F2]/5 px-4 py-3">
+            <p className="text-sm text-[#FDA29B]">Couldn&apos;t refresh the queue: {moviesError}</p>
+          </div>
+        )}
         <div className="flex flex-col items-center justify-center py-24 gap-3 text-center">
           <div className="flex h-14 w-14 items-center justify-center rounded-full bg-[#12B76A]/15">
             <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#12B76A" strokeWidth="2" strokeLinecap="round">
@@ -244,6 +270,12 @@ export default function QueuePage() {
       }
     >
       <div className="max-w-2xl space-y-5">
+
+        {moviesError && (
+          <div className="rounded-lg border border-[#B42318]/40 bg-[#FEF3F2]/5 px-4 py-3">
+            <p className="text-sm text-[#FDA29B]">Couldn&apos;t refresh the queue: {moviesError}</p>
+          </div>
+        )}
 
         {/* Movie card */}
         <div className="flex items-start gap-4 rounded-xl border border-[#1D2939] bg-[#101828] p-4">

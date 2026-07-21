@@ -3,31 +3,47 @@ import { moviesApi, radarrApi, syncApi } from '@/lib/api'
 import type { Movie, SyncStatus } from '@/lib/types'
 import { AppShell } from '@/components/layout/AppShell'
 import { MovieGrid } from '@/components/movies/MovieGrid'
-import { Button, Spinner } from '@/components/ui'
+import { Button, EmptyState, Spinner } from '@/components/ui'
+import { useResource } from '@/lib/useResource'
+
+// Shown when the initial load fails, so a network/server error never gets
+// mistaken for "you have no movies".
+const ERROR_ICON = (
+  <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 9v4" />
+    <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
+    <path d="M12 17h.01" />
+  </svg>
+)
 
 export default function MoviesPage() {
   const [movies, setMovies]   = useState<Movie[]>([])
-  const [loading, setLoading] = useState(true)
   const [sync, setSync]       = useState<SyncStatus | null>(null)
   const [syncing, setSyncing] = useState(false)
   const [source, setSource]   = useState<'plex' | 'radarr'>('plex')
 
+  // Used only by the sync-status poll below, to silently refresh the list once
+  // a sync finishes. Left untouched: a dropped refresh there should stay quiet
+  // rather than blank an already-populated grid.
   const loadMovies = useCallback(async () => {
     try { setMovies(await moviesApi.list()) } catch { /* ignore */ }
   }, [])
 
-  useEffect(() => {
-    moviesApi.list()
-      .then(movies => {
-        setMovies(movies)
-        // Auto-sync on first load if no movies have been synced yet
-        if (movies.length === 0) {
-          setSyncing(true)
-          syncApi.start().catch(() => setSyncing(false))
-        }
-      })
-      .finally(() => setLoading(false))
+  // The initial load. Routed through useResource so a failed request surfaces
+  // as an error screen instead of an empty library. Success also seeds the
+  // mutable `movies` copy the rest of the page reads/updates, and triggers an
+  // auto-sync when the library comes back genuinely empty -- done here, inside
+  // the fetcher, rather than in a second effect derived from the result.
+  const loadInitialMovies = useCallback(async () => {
+    const list = await moviesApi.list()
+    setMovies(list)
+    if (list.length === 0) {
+      setSyncing(true)
+      syncApi.start().catch(() => setSyncing(false))
+    }
+    return list
   }, [])
+  const { data: loadedMovies, error: moviesError, retry: retryMovies } = useResource(loadInitialMovies)
 
   // Learn the active library source so the sync control doesn't hardcode "Plex".
   useEffect(() => {
@@ -104,12 +120,26 @@ export default function MoviesPage() {
       )}
 
       {/* Content */}
-      {loading ? (
+      {loadedMovies === null && moviesError ? (
+        <EmptyState
+          icon={ERROR_ICON}
+          title="Couldn&apos;t load your movies"
+          description={moviesError}
+          action={<Button variant="secondary" size="sm" onClick={retryMovies}>Retry</Button>}
+        />
+      ) : loadedMovies === null ? (
         <div className="flex items-center justify-center py-24">
           <Spinner size={28} className="text-[#BB0000]" />
         </div>
       ) : (
-        <MovieGrid movies={movies} onMovieUpdated={handleMovieUpdated} sourceLabel={sourceLabel} />
+        <>
+          {moviesError && (
+            <div className="mb-5 rounded-lg border border-[#B42318]/40 bg-[#FEF3F2]/5 px-4 py-3">
+              <p className="text-sm text-[#FDA29B]">Couldn&apos;t refresh movies: {moviesError}</p>
+            </div>
+          )}
+          <MovieGrid movies={movies} onMovieUpdated={handleMovieUpdated} sourceLabel={sourceLabel} />
+        </>
       )}
     </AppShell>
   )
