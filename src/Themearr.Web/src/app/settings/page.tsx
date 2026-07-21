@@ -208,8 +208,13 @@ export default function SettingsPage() {
   // localhost). Themearr is normally reached over plain HTTP on a LAN, where
   // navigator.clipboard doesn't exist at all — so this always feature-detects
   // first rather than relying on a thrown error. When the clipboard API is
-  // unavailable or the write itself fails, it falls back to selecting the
-  // field's text so the user can copy it manually.
+  // unavailable or the write itself fails, it selects the field's text and
+  // falls back to document.execCommand('copy'). That API is deprecated but
+  // still implemented by every current browser and, unlike the Clipboard API,
+  // it works on insecure origins — so on a plain-HTTP LAN install it's the
+  // path that actually copies. Only if it also fails do we ask the user to
+  // copy manually, leaving the text selected so that instruction is
+  // actionable.
   async function copyToClipboard(text: string, fieldRef: React.RefObject<HTMLDivElement | null>, setCopied: (v: boolean) => void) {
     setApiKeyError('')
     if (window.isSecureContext && navigator.clipboard) {
@@ -225,6 +230,17 @@ export default function SettingsPage() {
     const input = fieldRef.current?.querySelector('input')
     input?.focus()
     input?.select()
+    let copiedViaExecCommand = false
+    try {
+      copiedViaExecCommand = document.execCommand('copy')
+    } catch {
+      copiedViaExecCommand = false
+    }
+    if (copiedViaExecCommand) {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+      return
+    }
     setApiKeyError('Clipboard access needs HTTPS. The text has been selected — press Ctrl/Cmd+C to copy it.')
   }
 
