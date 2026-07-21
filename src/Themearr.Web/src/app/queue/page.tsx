@@ -90,7 +90,18 @@ export default function QueuePage() {
 
   // Declared before its first use — a hoisted call from above reads as a stale
   // reference to React's compiler lint (react-hooks/immutability).
-  function advanceQueue() {
+  //
+  // `forMovieId` makes the call idempotent for callers that are advancing on
+  // behalf of one specific download: the queue only moves if that download is
+  // still the one in flight. A duplicate call — a second status poll that
+  // resolved after the first already advanced — finds the ref cleared (or
+  // pointing at the next movie) and does nothing. The in-flight guard in the
+  // poll below should stop those duplicates ever happening; this is the second
+  // line of defence, because the failure mode it prevents (a movie skipped with
+  // no theme, no error and no trace) is completely silent. Callers acting on
+  // the user's behalf — Skip, Ignore — pass nothing and always advance.
+  function advanceQueue(forMovieId?: string) {
+    if (forMovieId && downloadingMovieId.current !== forMovieId) return
     setCurrentIdx((i: number) => i + 1)
     setResults([])
     setError('')
@@ -132,7 +143,18 @@ export default function QueuePage() {
     const movieId = downloadingMovieId.current
     if (!movieId) return
 
+    // A status request that takes longer than the interval used to leave two
+    // callbacks in flight at once. Both saw `finished`, and both advanced the
+    // queue — the `clearInterval` in the first came too late for the second —
+    // so a movie was silently skipped: no theme, no error, nothing to see. The
+    // guard makes an overlapping tick a no-op. It's a plain local rather than a
+    // ref so each run of this effect gets a fresh one: a request left hanging
+    // by a previous download can never block the next download's polling.
+    let inFlight = false
+
     const id = setInterval(async () => {
+      if (inFlight) return
+      inFlight = true
       try {
         const st = await moviesApi.downloadStatus(movieId)
         if (st.logs?.length) setDownloadLogs(st.logs)
@@ -145,13 +167,14 @@ export default function QueuePage() {
           if (autoModeRef.current) {
             setTimeout(() => {
               setError('')
-              advanceQueue()
+              advanceQueue(movieId)
             }, 3000)
           }
         } else {
-          advanceQueue()
+          advanceQueue(movieId)
         }
       } catch { /* ignore transient fetch errors */ }
+      finally { inFlight = false }
     }, 1000)
 
     return () => clearInterval(id)
@@ -261,7 +284,9 @@ export default function QueuePage() {
           <Button variant="ghost" size="sm" onClick={skipForever} disabled={downloading} title="Never show this movie in the queue again">
             Ignore
           </Button>
-          <Button variant="ghost" size="sm" onClick={advanceQueue} disabled={downloading}>
+          {/* Wrapped, not passed directly: advanceQueue's first parameter is a
+              movie id, and handing it the click event would make it a no-op. */}
+          <Button variant="ghost" size="sm" onClick={() => advanceQueue()} disabled={downloading}>
             Skip
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
               <path d="M5 12h14M12 5l7 7-7 7" />
