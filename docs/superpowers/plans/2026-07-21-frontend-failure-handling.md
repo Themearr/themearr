@@ -15,6 +15,10 @@
 - **The rule that sorts every site:** a user-initiated action that fails must say so; a background poll that fails stays silent; an initial load that fails must show an error, never an empty state.
 - **The five background-poll sites must keep failing silently** and must not be changed: `settings:95` (update status), `settings:294` (version re-check), `movies:45` (sync status), `system:87` (tasks), `login:39` (Plex PIN polling). Blanking a populated view over one dropped request is worse than a stale value — this was a deliberate earlier fix.
 - **Only `settings:55` gates the Settings page.** `settings:56` (version display) and `settings:57` (is a RapidAPI key stored) are supplementary: their failure must not block the rest of Settings.
+- **The `useResource` rendering rule, binding on every converted site.** A failure never clears `data`, so the three states a page must handle are:
+  - `data === null && error` → the error screen with a Retry button. There is nothing to show.
+  - `data !== null && error` → render the data, plus an error notice. **Never blank a populated view** — that is the same mistake as the empty-state lie, one layer down.
+  - `data === null && !error` → loading.
 - **Page tests assert the ABSENCE of the reassuring copy**, not merely that an error appeared. A page can show an error banner and still render "All caught up!" underneath — that is the current bug wearing a hat.
 - The exact strings that must not appear on failure: `All caught up!` (`app/queue/page.tsx:210`), `No downloads yet` (`app/history/page.tsx:69`), `No movies yet` (`components/movies/MovieGrid.tsx:114`).
 - Existing empty-state copy is kept — it simply stops being reachable by failure.

@@ -8,6 +8,17 @@ import { useCallback, useEffect, useRef, useState } from 'react'
  * empty state — "No movies yet", "All caught up!" — and an outage was
  * indistinguishable from an empty library. Keeping `error` separate from `data`
  * makes that confusion unrepresentable.
+ *
+ * A failure never clears `data`. So after a successful load followed by a failed
+ * refresh, `data` still holds the last good value and `error` is set alongside it.
+ * That is deliberate: blanking a populated view over one dropped request is worse
+ * than showing a stale value with a notice.
+ *
+ * Which gives callers their rendering rule:
+ *
+ *   data === null && error  ->  the error screen, with retry. Nothing to show.
+ *   data !== null && error  ->  the data, plus an error notice. Never blank it.
+ *   data === null && !error ->  loading.
  */
 export function useResource<T>(fetcher: () => Promise<T>) {
   const [data, setData] = useState<T | null>(null)

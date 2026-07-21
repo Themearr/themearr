@@ -40,6 +40,27 @@ describe('useResource', () => {
     expect(fetcher).toHaveBeenCalledTimes(2)
   })
 
+  it('keeps the last good data when a later refresh fails', async () => {
+    // History's Refresh button calls retry() on an already-loaded page. If a
+    // failure blanked `data`, one dropped request would wipe a populated table —
+    // the exact behaviour this plan exists to prevent, one layer down.
+    let call = 0
+    const fetcher = () => {
+      call++
+      return call === 1
+        ? Promise.resolve(['first-success'])
+        : Promise.reject(new Error('refresh-boom'))
+    }
+    const { result } = renderHook(() => useResource(fetcher))
+    await waitFor(() => expect(result.current.data).toEqual(['first-success']))
+
+    act(() => result.current.retry())
+
+    await waitFor(() => expect(result.current.error).toBe('refresh-boom'))
+    expect(result.current.data).toEqual(['first-success'])
+    expect(result.current.loading).toBe(false)
+  })
+
   it('ignores a slow first response that settles after a retry', async () => {
     // Without this guard a stale response can overwrite a newer one.
     let resolveFirst: (v: string[]) => void = () => {}
