@@ -150,6 +150,44 @@ Concretely:
 So switching is safe if Radarr manages your whole library, and lossy at the edges if it
 doesn't. Check Radarr's movie count against Themearr's before you switch.
 
+## API key and Radarr webhook
+
+**Settings → API key** shows a key that external tools can use to talk to Themearr.
+Send it as an `X-Api-Key` header on any `/api/…` request:
+
+```bash
+curl -H "X-Api-Key: <your key>" http://themearr:8080/api/system/tasks
+```
+
+It is separate from the access token you sign in with, so you can regenerate it
+without logging anyone out — and regenerating immediately stops the old one working.
+
+### Fetching themes the moment Radarr imports
+
+Instead of waiting for the next sync, have Radarr tell Themearr directly. In Radarr:
+**Settings → Connect → Add → Webhook**, then set:
+
+| Field | Value |
+|---|---|
+| Notification Triggers | **On Import** (also tick On Upgrade if you want) |
+| URL | `http://themearr:8080/api/webhook/radarr` |
+| Method | `POST` |
+| Headers | `X-Api-Key` = your key from Settings → API key |
+
+Press **Test** — Themearr answers, so a wrong URL or key shows up immediately rather
+than at the next import.
+
+Importing several movies at once is fine: Themearr collapses the burst into a single
+sync rather than one per movie.
+
+Two caveats:
+
+- This is most useful when **Radarr is your library source**. If you use Plex as the
+  source and Radarr only downloads, the webhook still fires — but Plex may not have
+  scanned the new file yet, so the theme may still wait for a later sync.
+- Radarr builds from before custom webhook headers were added (upstream, late 2024)
+  cannot send `X-Api-Key`.
+
 ## Updating
 
 - **In-app:** Settings → Updates. Downloads the latest release, preserves your data, and restarts.
