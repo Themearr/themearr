@@ -16,8 +16,9 @@ public class PassiveHealthCheckTests
             throw new NotSupportedException("not used by health checks");
     }
 
-    private sealed class FakeWorker(DateTime? lastTickAt, string lastResult) : IDownloadWorkerStatus
+    private sealed class FakeWorker(DateTime? lastTickAt, string lastResult, DateTime? startedAt = null) : IDownloadWorkerStatus
     {
+        public DateTime? StartedAt      => startedAt;
         public DateTime? LastTickAt     => lastTickAt;
         public string    LastTickResult => lastResult;
     }
@@ -142,8 +143,26 @@ public class PassiveHealthCheckTests
         using var dir = new TempDir();
         var db = NewDb(dir, setupComplete: true);
         db.SetSetting("auto_download", "true");
+        // Just started (within the 45s warm-up), so no tick yet is expected.
+        var worker = new FakeWorker(null, "never run", startedAt: DateTime.UtcNow);
 
-        Assert.Equal(HealthStatus.Healthy,
-            (await Run(new DownloadWorkerCheck(db, new FakeWorker(null, "never run")))).Status);
+        Assert.Equal(HealthStatus.Healthy, (await Run(new DownloadWorkerCheck(db, worker))).Status);
+    }
+
+    [Fact]
+    public async Task Worker_that_started_long_ago_but_never_ticked_is_an_error_not_forever_warming_up()
+    {
+        using var dir = new TempDir();
+        var db = NewDb(dir, setupComplete: true);
+        db.SetSetting("auto_download", "true");
+        // Started 10 minutes ago and STILL no tick: it died during warm-up rather
+        // than starting normally (a healthy worker ticks within a minute). This must
+        // NOT look identical to a worker that's still starting up.
+        var worker = new FakeWorker(null, "never run", startedAt: DateTime.UtcNow.AddMinutes(-10));
+
+        var result = await Run(new DownloadWorkerCheck(db, worker));
+
+        Assert.Equal(HealthStatus.Unhealthy, result.Status);
+        Assert.Contains("never", result.Description, StringComparison.OrdinalIgnoreCase);
     }
 }

@@ -7,6 +7,10 @@ namespace Themearr.API.Services.Health;
 /// </summary>
 public interface IDownloadWorkerStatus
 {
+    /// <summary>When the worker's loop began (before its warm-up delay); null if it
+    /// has not started yet. Lets the check tell "started but never ticked" (dead in
+    /// warm-up) from "just started".</summary>
+    DateTime? StartedAt      { get; }
     DateTime? LastTickAt     { get; }
     string    LastTickResult { get; }
 }

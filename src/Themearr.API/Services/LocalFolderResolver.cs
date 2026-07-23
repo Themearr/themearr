@@ -66,7 +66,7 @@ public class LocalFolderResolver(Database db)
                 if (Directory.Exists(candidate)) return candidate;
             }
 
-        var target = sourceParts[^1].ToLower();
+        var target = sourceParts[^1];
         var maxDirs = int.Parse(db.GetSetting("max_search_dirs", "20000"));
         var maxDepth = int.Parse(db.GetSetting("search_depth", "4"));
         var visited = 0;
@@ -75,9 +75,14 @@ public class LocalFolderResolver(Database db)
             foreach (var dir in Directory.EnumerateDirectories(root, "*", SearchOption.AllDirectories))
             {
                 if (++visited > maxDirs) return "";
-                var depth = dir[root.Length..].Count(c => c == Path.DirectorySeparatorChar);
+                // Depth via GetRelativePath so a trailing slash on the library path
+                // can't swallow a separator and undercount -- which would otherwise
+                // let the scan reach a level deeper than search_depth permits.
+                var depth = Path.GetRelativePath(root, dir).Split(Path.DirectorySeparatorChar).Length;
                 if (depth > maxDepth) continue;
-                if (Path.GetFileName(dir).ToLower() == target) return dir;
+                // OrdinalIgnoreCase, not ToLower(): ToLower() is culture-sensitive, so
+                // under e.g. Turkish an ASCII 'I' folder wouldn't match its source.
+                if (string.Equals(Path.GetFileName(dir), target, StringComparison.OrdinalIgnoreCase)) return dir;
             }
         return "";
     }

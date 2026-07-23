@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { moviesApi, radarrApi, syncApi } from '@/lib/api'
 import type { Movie, SyncStatus } from '@/lib/types'
 import { AppShell } from '@/components/layout/AppShell'
@@ -18,6 +18,7 @@ export default function MoviesPage() {
   // `[]`), so a failure here must never blank it -- only flag that what's
   // shown may be stale.
   const [refreshError, setRefreshError] = useState<string | null>(null)
+  const [syncError, setSyncError] = useState<string | null>(null)
   // True once *any* fetch -- the initial load or a later refresh -- has
   // produced real data. Normally this tracks `useResource`'s own `data`, but
   // it can also flip true when a refresh succeeds after the initial load
@@ -32,13 +33,22 @@ export default function MoviesPage() {
   // started, so its failure must be visible: it's surfaced as a non-blocking
   // notice via `refreshError` rather than swallowed. It still never blanks
   // `movies` -- a failed refresh just leaves the last known list in place.
+  // Monotonic stamp so a slower earlier refresh can't overwrite a newer one --
+  // the Retry button and the sync poll both call this, and neither response is
+  // otherwise ordered. Same `latest`-ref technique useResource (src/lib/
+  // useResource.ts) uses: each call claims a number at issue time and only
+  // writes state if it's still the newest issued when it resolves.
+  const loadSeq = useRef(0)
   const loadMovies = useCallback(async () => {
+    const mine = ++loadSeq.current
     try {
       const list = await moviesApi.list()
+      if (mine !== loadSeq.current) return
       setMovies(list)
       setHasData(true)
       setRefreshError(null)
     } catch (e) {
+      if (mine !== loadSeq.current) return
       setRefreshError(e instanceof Error && e.message ? e.message : 'Request failed')
     }
   }, [])
@@ -108,7 +118,15 @@ export default function MoviesPage() {
   async function startSync() {
     setSyncing(true)
     setSync(null)
-    try { await syncApi.start() } catch { setSyncing(false) }
+    setSyncError(null)
+    try {
+      await syncApi.start()
+    } catch (e) {
+      // Unlike the empty-library auto-sync above (deliberately silent), this
+      // sync is one the user explicitly asked for, so its failure must show.
+      setSyncing(false)
+      setSyncError(e instanceof Error && e.message ? e.message : 'Request failed')
+    }
   }
 
   function handleMovieUpdated(id: string, status: Movie['status']) {
@@ -158,6 +176,14 @@ export default function MoviesPage() {
               ))}
             </div>
           )}
+        </div>
+      )}
+
+      {/* A failed manual sync must not vanish silently. */}
+      {syncError && (
+        <div className="mb-5 flex items-center justify-between gap-3 rounded-lg border border-[#B42318]/40 bg-[#FEF3F2]/5 px-4 py-3">
+          <p className="text-sm text-[#FDA29B]">Couldn&apos;t start sync: {syncError}</p>
+          <Button variant="secondary" size="sm" onClick={startSync}>Retry</Button>
         </div>
       )}
 

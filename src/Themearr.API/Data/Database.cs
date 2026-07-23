@@ -53,7 +53,16 @@ public class Database(string dbPath)
         MigrateMoviesTableV2(conn);
         MigrateMoviesTableV3(conn);
         MigrateMoviesTableV4(conn);
+        PruneDeadSettings(conn);
     }
+
+    // These keys were written on every server save but read by nothing -- the live
+    // server list (and its token) lives in `plex_servers`. plex_server_token in
+    // particular is a redundant copy of a Plex credential, so dropping them from
+    // legacy installs is a small hygiene win, not just tidiness.
+    private static void PruneDeadSettings(SqliteConnection conn) =>
+        conn.Execute(
+            "DELETE FROM settings WHERE key IN ('plex_server_url', 'plex_server_token', 'plex_server_name')");
 
     private static void MigrateHistoryTable(SqliteConnection conn)
     {
@@ -345,14 +354,6 @@ public class Database(string dbPath)
     // port, or case).
     private static bool UrlsMatch(string a, string b) =>
         string.Equals(a.TrimEnd('/'), b.TrimEnd('/'), StringComparison.Ordinal);
-
-    // The stored token for the primary server, or "" — used to preserve plex_server_token
-    // when a redacted save omits it.
-    public string GetPrimaryServerToken()
-    {
-        var first = GetPlexServers().FirstOrDefault();
-        return first?.GetValueOrDefault("token")?.ToString() ?? "";
-    }
 
     public Dictionary<string, List<string>> GetSelectedLibraries() =>
         GetJsonSetting("plex_selected_libraries", new Dictionary<string, List<string>>());

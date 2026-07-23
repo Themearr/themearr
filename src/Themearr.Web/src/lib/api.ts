@@ -34,7 +34,16 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers['Authorization'] = `Bearer ${token}`
   }
 
-  const res = await fetch(`${BASE}${path}`, { ...init, headers })
+  let res: Response
+  try {
+    res = await fetch(`${BASE}${path}`, { ...init, headers })
+  } catch (e) {
+    // fetch rejects only on a transport-level failure (server unreachable, DNS,
+    // offline, CORS). The raw message -- "Failed to fetch", or Safari's "Load
+    // failed" -- is meaningless to a user, so translate it to something honest
+    // and actionable. Call sites interpolate this after their own static prefix.
+    throw new Error('Could not reach the server', { cause: e })
+  }
 
   if (res.status === 401 && !path.startsWith('/api/auth/')) {
     clearAuthToken()
@@ -48,7 +57,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const body = await res.json().catch(() => ({ detail: res.statusText }))
     throw new Error(body.detail ?? res.statusText)
   }
-  return res.json()
+
+  try {
+    return await res.json()
+  } catch (e) {
+    // A 2xx whose body isn't JSON -- e.g. a reverse proxy that answers 200 with
+    // an HTML error/login page -- would otherwise surface a raw SyntaxError.
+    throw new Error('Invalid response from the server', { cause: e })
+  }
 }
 
 // ── Auth ──────────────────────────────────────────────────────────────────────

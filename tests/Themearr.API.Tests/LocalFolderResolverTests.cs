@@ -1,3 +1,4 @@
+using System.Globalization;
 using Themearr.API.Data;
 using Themearr.API.Services;
 
@@ -133,5 +134,53 @@ public class LocalFolderResolverTests
 
         Assert.Equal("", folder);
         Assert.Equal("unresolved", mode);
+    }
+
+    [Fact]
+    public void The_depth_limit_is_measured_the_same_whether_the_library_path_has_a_trailing_slash()
+    {
+        using var dir = new TempDir();
+        var (resolver, db) = New(dir);
+        // A movie two directory levels below the library root.
+        var movieDir = Path.Combine(dir.Path, "sub", "Heat (1995)");
+        Directory.CreateDirectory(movieDir);
+        // Depth budget of 1: a folder two levels down must NOT be reachable by the scan.
+        db.SetSetting("search_depth", "1");
+        // Stored WITH a trailing slash, exactly as a user might type the path.
+        db.SetLibraryPaths([dir.Path + Path.DirectorySeparatorChar]);
+
+        // A source path whose suffix can't locate the folder (it's under 'sub'),
+        // forcing the depth-limited directory scan.
+        var (folder, mode) = resolver.Resolve("/plex/Heat (1995)/heat.mkv");
+
+        // The folder is genuinely 2 levels deep, past the depth-1 budget, so it
+        // must be unresolved regardless of the trailing slash. The bug lets the
+        // slash swallow a separator so it counts as depth 1 and wrongly matches.
+        Assert.Equal("", folder);
+        Assert.Equal("unresolved", mode);
+    }
+
+    [Fact]
+    public void Folder_name_matching_is_case_insensitive_even_under_a_non_invariant_culture()
+    {
+        var original = CultureInfo.CurrentCulture;
+        // Turkish lowercases ASCII 'I' to dotless 'ı', so a culture-sensitive
+        // ToLower() would fail to match a lowercase source segment.
+        CultureInfo.CurrentCulture = new CultureInfo("tr-TR");
+        try
+        {
+            using var dir = new TempDir();
+            var (resolver, db) = New(dir);
+            var movieDir = Path.Combine(dir.Path, "sub", "TITANIC (1997)");
+            Directory.CreateDirectory(movieDir);
+            db.SetLibraryPaths([dir.Path]);
+
+            // Under 'sub' so suffix can't find it -> the name-matching scan runs.
+            var (folder, mode) = resolver.Resolve("/plex/titanic (1997)/movie.mkv");
+
+            Assert.Equal(movieDir, folder);
+            Assert.Equal("suffix", mode);
+        }
+        finally { CultureInfo.CurrentCulture = original; }
     }
 }

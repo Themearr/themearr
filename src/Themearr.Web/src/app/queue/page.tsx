@@ -17,6 +17,12 @@ import { useResource } from '@/lib/useResource'
 // long before a person would give up and reload the page.
 const STATUS_TIMEOUT_MS = 8000
 
+// A single timed-out/dropped status check is transient -- the next tick recovers
+// it. But if this many in a row fail, the server's effectively unreachable, and
+// continuing to show "Downloading…" with Skip/Ignore disabled would wedge the
+// queue behind a reload. At that point we give up tracking and hand control back.
+const STATUS_MAX_FAILURES = 3
+
 export default function QueuePage() {
   const [currentIdx,   setCurrentIdx]   = useState(0)
   const [results,      setResults]      = useState<YoutubeResult[]>([])
@@ -136,7 +142,15 @@ export default function QueuePage() {
 
   async function skipForever() {
     if (!current) return
-    try { await moviesApi.ignoreMovie(current.id) } catch { /* ignore */ }
+    try {
+      await moviesApi.ignoreMovie(current.id)
+    } catch (e) {
+      // The server didn't record the ignore, so advancing would hide a movie it
+      // still has as pending -- it'd reappear on the next load, making the button
+      // look like it did nothing. Surface the failure and stay on this movie.
+      setError((e as Error).message)
+      return
+    }
     advanceQueue()
   }
 
@@ -174,6 +188,9 @@ export default function QueuePage() {
     // ref so each run of this effect gets a fresh one: a request left hanging
     // by a previous download can never block the next download's polling.
     let inFlight = false
+    // Counts consecutive failed status checks; any success resets it. Local to
+    // this effect run so a fresh download always starts from a clean slate.
+    let failures = 0
 
     const id = setInterval(async () => {
       if (inFlight) return
@@ -190,6 +207,7 @@ export default function QueuePage() {
 
       try {
         const st = await moviesApi.downloadStatus(movieId, { signal: controller.signal })
+        failures = 0 // a status came back -- we're still in contact with the server
         if (st.logs?.length) setDownloadLogs(st.logs)
         if (!st.finished) return
         clearInterval(id)
@@ -206,7 +224,21 @@ export default function QueuePage() {
         } else {
           advanceQueue(movieId)
         }
-      } catch { /* ignore transient fetch errors, including our own timeout abort above */ }
+      } catch {
+        // A transient drop/timeout: the next tick normally recovers it. But if
+        // enough fail in a row the server is unreachable, and staying in the
+        // "Downloading…" state would wedge the queue with Skip/Ignore disabled.
+        // Give up tracking, say so, and re-enable the in-app escapes. We can't
+        // know the download's real outcome, so we don't advance -- a reload (or
+        // the next visit) will reflect whatever actually happened server-side.
+        failures++
+        if (failures >= STATUS_MAX_FAILURES) {
+          clearInterval(id)
+          setError('Lost contact with the server while tracking this download. It may still finish — reload to check.')
+          setDownloading(false)
+          downloadingMovieId.current = null
+        }
+      }
       finally {
         clearTimeout(timeoutId)
         inFlight = false

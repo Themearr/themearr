@@ -73,4 +73,31 @@ describe('a deliberately silent background poll', () => {
     // A later poll fails; the row that was already loaded must survive.
     expect(screen.queryByText('Sync Library')).not.toBeNull()
   })
+
+  it("the movies sync-status poll failing does not blank the grid or surface an error", async () => {
+    // This sits right next to the manual Sync button, whose failure IS surfaced.
+    // The poll must stay on the other side of that line: a dropped status check
+    // is not something to shout about, and must never blank the loaded grid.
+    vi.mocked(api.moviesApi.list).mockResolvedValue([
+      { id: 'a', source: 'plex', sourceRef: 'ra', title: 'Movie A', year: 2001, sourcePath: null, folderName: 'Movie A', status: 'pending', posterUrl: null },
+    ] as never)
+    vi.mocked(api.radarrApi.get).mockResolvedValue({ source: 'plex', url: '', configured: false } as never)
+    vi.mocked(api.systemApi.health).mockResolvedValue({ status: 'ok', checks: [] } as never)
+    vi.mocked(api.syncApi.start).mockResolvedValue({ started: true } as never)
+    // The poll itself fails on every tick.
+    vi.mocked(api.syncApi.status).mockRejectedValue(new Error('dropped poll'))
+    const { default: MoviesPage } = await import('@/app/movies/page')
+
+    renderPage(<MoviesPage />)
+    await flush(50)
+    expect(screen.queryAllByText('Movie A').length).toBeGreaterThan(0)
+
+    // Start a sync so the status poll runs, then let several ticks fail.
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /sync/i })) })
+    await flush(6000)
+
+    // Grid intact, and the silent poll surfaced nothing (only the manual button would).
+    expect(screen.queryAllByText('Movie A').length).toBeGreaterThan(0)
+    expect(screen.queryByText(/couldn't/i)).toBeNull()
+  })
 })

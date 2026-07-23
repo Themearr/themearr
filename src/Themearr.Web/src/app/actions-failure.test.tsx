@@ -116,4 +116,46 @@ describe('an action that fails does not report success', () => {
 
     await waitFor(() => expect(screen.queryByText(/couldn't|could not|failed/i)).not.toBeNull())
   })
+
+  it('the movies Sync button says so when the sync fails to start', async () => {
+    const user = userEvent.setup()
+    // A non-empty library, so the empty-library auto-sync path (which is
+    // deliberately silent) doesn't fire and mask the manual button under test.
+    vi.mocked(api.moviesApi.list).mockResolvedValue([
+      { id: 'm1', source: 'plex', sourceRef: 'r1', title: 'Movie 1', year: 2020, sourcePath: null, folderName: 'Movie 1', status: 'pending', posterUrl: null },
+    ] as never)
+    vi.mocked(api.syncApi.start).mockRejectedValue(new Error('Could not reach the server'))
+    const { default: MoviesPage } = await import('@/app/movies/page')
+    renderPage(<MoviesPage />)
+
+    const sync = await screen.findByRole('button', { name: /sync/i })
+    await user.click(sync)
+
+    await waitFor(() => expect(screen.queryByText(/couldn't start sync/i)).not.toBeNull())
+    // And it must not get stuck pretending it's still syncing.
+    expect(screen.queryByRole('button', { name: /syncing/i })).toBeNull()
+  })
+
+  it('the queue Ignore button says so and does not advance when the ignore fails', async () => {
+    const user = userEvent.setup()
+    vi.mocked(api.moviesApi.list).mockResolvedValue([
+      { id: 'm1', source: 'plex', sourceRef: 'r1', title: 'First',  year: 2020, sourcePath: null, folderName: 'First',  status: 'pending', posterUrl: null },
+      { id: 'm2', source: 'plex', sourceRef: 'r2', title: 'Second', year: 2021, sourcePath: null, folderName: 'Second', status: 'pending', posterUrl: null },
+    ] as never)
+    vi.mocked(api.settingsApi.get).mockResolvedValue({ autoDownload: false } as never)
+    vi.mocked(api.moviesApi.search).mockResolvedValue({ movie: {}, results: [] } as never)
+    vi.mocked(api.moviesApi.ignoreMovie).mockRejectedValue(new Error('server down'))
+    const { default: QueuePage } = await import('@/app/queue/page')
+    renderPage(<QueuePage />)
+
+    // First movie is the current one; two movies are queued.
+    expect(await screen.findByText(/2 movies left in queue/i)).not.toBeNull()
+    await user.click(screen.getByRole('button', { name: /ignore/i }))
+
+    // The ignore failed, so the movie was NOT recorded ignored: the queue must
+    // say so, and must not have quietly advanced past it (which would hide a
+    // movie the server still has as pending).
+    await waitFor(() => expect(screen.queryByText('server down')).not.toBeNull())
+    expect(screen.queryByText(/2 movies left in queue/i)).not.toBeNull()
+  })
 })

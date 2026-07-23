@@ -47,16 +47,6 @@ public class SettingsController(Database db, RadarrLibrarySource radarr, IApiKey
         db.SetSetting("auto_download", req.AutoDownload ? "true" : "false");
         db.SetSetting("auto_sync",     req.AutoSync     ? "true" : "false");
 
-        if (req.SelectedServers.Count > 0)
-        {
-            var p = req.SelectedServers[0];
-            db.SetSetting("plex_server_name",  p.GetValueOrDefault("name",  "")?.ToString() ?? "");
-            db.SetSetting("plex_server_url",   p.GetValueOrDefault("url",   "")?.ToString() ?? "");
-            // Preserve the stored token when the save omits it (redacted round-trip).
-            var incomingToken = p.GetValueOrDefault("token", "")?.ToString() ?? "";
-            db.SetSetting("plex_server_token",
-                string.IsNullOrEmpty(incomingToken) ? db.GetPrimaryServerToken() : incomingToken);
-        }
         if (req.SelectedServers.Count > 0 && req.SelectedLibraries.Values.Sum(v => v.Count) > 0)
             db.MarkSetupComplete();
 
