@@ -1,11 +1,23 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { moviesApi, settingsApi } from '@/lib/api'
 import type { Movie, YoutubeResult } from '@/lib/types'
 import { AppShell } from '@/components/layout/AppShell'
-import { Button, Input, Spinner } from '@/components/ui'
+import { Button, EmptyState, ErrorIcon, Input, Spinner } from '@/components/ui'
+import { useResource } from '@/lib/useResource'
+
+// Bounds the polled `downloadStatus` request below (the "in-flight" guard's
+// own comment explains what it's guarding against). `request()` in
+// src/lib/api.ts is a bare `fetch` with no built-in timeout, so a request
+// that never settles would hold the poll's `inFlight` flag forever -- and
+// with it, Skip and Ignore, which both check `downloading`. The server side
+// of this call (`DownloadStatus` in Themearr.API) is a plain in-memory
+// lookup with no I/O, so a healthy round trip is well under a second; 8x the
+// 1s poll interval is comfortably clear of that, while still short enough
+// that a genuinely wedged queue unwedges itself in single-digit seconds --
+// long before a person would give up and reload the page.
+const STATUS_TIMEOUT_MS = 8000
 
 export default function QueuePage() {
-  const [pending,      setPending]      = useState<Movie[] | null>(null)
   const [currentIdx,   setCurrentIdx]   = useState(0)
   const [results,      setResults]      = useState<YoutubeResult[]>([])
   const [searching,    setSearching]    = useState(false)
@@ -15,6 +27,7 @@ export default function QueuePage() {
   const [downloading,   setDownloading]   = useState(false)
   const [downloadLogs,  setDownloadLogs]  = useState<string[]>([])
   const [autoMode,      setAutoMode]      = useState(false)
+  const [savingAuto,    setSavingAuto]    = useState(false)
 
   // Holds the movieId being downloaded so the polling closure keeps the right id
   const downloadingMovieId = useRef<string | null>(null)
@@ -24,14 +37,16 @@ export default function QueuePage() {
   // Keep a ref in sync with autoMode so polling closures never see stale state
   const autoModeRef        = useRef(autoMode)
 
+  // The initial load. Routed through useResource so a failed request surfaces
+  // as an error screen instead of "every movie already has a theme".
+  const { data: movies, error: moviesError, retry: retryMovies } = useResource(useCallback(() => moviesApi.list(), []))
+  const pending = movies ? movies.filter(m => m.status === 'pending') : null
+
   const current   = pending?.[currentIdx] ?? null
   const remaining = pending ? Math.max(0, pending.length - currentIdx) : 0
 
-  // ── Load pending movies + auto mode setting ────────────────────────────────
+  // ── Load auto mode setting ──────────────────────────────────────────────────
   useEffect(() => {
-    moviesApi.list()
-      .then(movies => setPending(movies.filter(m => m.status === 'pending')))
-      .catch(() => setPending([]))
     settingsApi.get()
       .then(s => setAutoMode(s.autoDownload))
       .catch(() => null)
@@ -40,13 +55,34 @@ export default function QueuePage() {
   // Keep ref in sync
   useEffect(() => { autoModeRef.current = autoMode }, [autoMode])
 
+  // Saves first and only flips the switch once the server confirms it, rather
+  // than flipping optimistically and trying to unwind it on failure -- so the
+  // control can never read "on" while the background auto-download worker
+  // never actually started. Settings only exposes a whole-object get/save
+  // (no narrower "just autoDownload" endpoint), so this still has to read the
+  // rest of the settings back before writing them -- there's no way to avoid
+  // that round trip without adding a backend route, which is out of scope
+  // here.
+  //
+  // Because the switch doesn't move until the round trip finishes, a slow save
+  // would otherwise look like a dead control -- no movement, no spinner, no
+  // error -- and invite repeated clicks, each firing its own get+save pair.
+  // `savingAuto` both disables the control and puts a spinner where the switch
+  // is, so the wait is visible and only one save is ever in flight.
   async function toggleAutoMode() {
+    if (savingAuto) return
     const next = !autoMode
-    setAutoMode(next)
+    setSavingAuto(true)
+    setError('')
     try {
       const s = await settingsApi.get()
       await settingsApi.save({ ...s, autoDownload: next })
-    } catch { /* ignore */ }
+      setAutoMode(next)
+    } catch (e) {
+      setError(`Couldn't turn auto mode ${next ? 'on' : 'off'}: ${(e as Error)?.message || 'unknown error'}`)
+    } finally {
+      setSavingAuto(false)
+    }
   }
 
   // ── Auto-search when displayed movie changes ───────────────────────────────
@@ -77,7 +113,18 @@ export default function QueuePage() {
 
   // Declared before its first use — a hoisted call from above reads as a stale
   // reference to React's compiler lint (react-hooks/immutability).
-  function advanceQueue() {
+  //
+  // `forMovieId` makes the call idempotent for callers that are advancing on
+  // behalf of one specific download: the queue only moves if that download is
+  // still the one in flight. A duplicate call — a second status poll that
+  // resolved after the first already advanced — finds the ref cleared (or
+  // pointing at the next movie) and does nothing. The in-flight guard in the
+  // poll below should stop those duplicates ever happening; this is the second
+  // line of defence, because the failure mode it prevents (a movie skipped with
+  // no theme, no error and no trace) is completely silent. Callers acting on
+  // the user's behalf — Skip, Ignore — pass nothing and always advance.
+  function advanceQueue(forMovieId?: string) {
+    if (forMovieId !== undefined && downloadingMovieId.current !== forMovieId) return
     setCurrentIdx((i: number) => i + 1)
     setResults([])
     setError('')
@@ -119,9 +166,30 @@ export default function QueuePage() {
     const movieId = downloadingMovieId.current
     if (!movieId) return
 
+    // A status request that takes longer than the interval used to leave two
+    // callbacks in flight at once. Both saw `finished`, and both advanced the
+    // queue — the `clearInterval` in the first came too late for the second —
+    // so a movie was silently skipped: no theme, no error, nothing to see. The
+    // guard makes an overlapping tick a no-op. It's a plain local rather than a
+    // ref so each run of this effect gets a fresh one: a request left hanging
+    // by a previous download can never block the next download's polling.
+    let inFlight = false
+
     const id = setInterval(async () => {
+      if (inFlight) return
+      inFlight = true
+
+      // A request that never settles (dropped connection, a server stuck
+      // mid-request) would otherwise hold `inFlight` forever with no recovery
+      // path -- unlike a rejection, which the catch below already recovers
+      // from. The abort turns "never settles" into "rejects after
+      // STATUS_TIMEOUT_MS", so it lands in the same catch/finally and polling
+      // resumes on schedule.
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), STATUS_TIMEOUT_MS)
+
       try {
-        const st = await moviesApi.downloadStatus(movieId)
+        const st = await moviesApi.downloadStatus(movieId, { signal: controller.signal })
         if (st.logs?.length) setDownloadLogs(st.logs)
         if (!st.finished) return
         clearInterval(id)
@@ -132,13 +200,17 @@ export default function QueuePage() {
           if (autoModeRef.current) {
             setTimeout(() => {
               setError('')
-              advanceQueue()
+              advanceQueue(movieId)
             }, 3000)
           }
         } else {
-          advanceQueue()
+          advanceQueue(movieId)
         }
-      } catch { /* ignore transient fetch errors */ }
+      } catch { /* ignore transient fetch errors, including our own timeout abort above */ }
+      finally {
+        clearTimeout(timeoutId)
+        inFlight = false
+      }
     }, 1000)
 
     return () => clearInterval(id)
@@ -186,13 +258,22 @@ export default function QueuePage() {
     }
   }
 
-  // ── Loading ────────────────────────────────────────────────────────────────
+  // ── Loading / failed ───────────────────────────────────────────────────────
   if (pending === null) {
     return (
       <AppShell title="Queue">
-        <div className="flex justify-center py-24">
-          <Spinner size={28} className="text-[#BB0000]" />
-        </div>
+        {moviesError ? (
+          <EmptyState
+            icon={<ErrorIcon />}
+            title="Couldn&apos;t load the queue"
+            description={moviesError}
+            action={<Button variant="secondary" size="sm" onClick={retryMovies}>Retry</Button>}
+          />
+        ) : (
+          <div className="flex justify-center py-24">
+            <Spinner size={28} className="text-[#BB0000]" />
+          </div>
+        )}
       </AppShell>
     )
   }
@@ -201,6 +282,11 @@ export default function QueuePage() {
   if (!current) {
     return (
       <AppShell title="Queue">
+        {moviesError && (
+          <div className="mb-5 rounded-lg border border-[#B42318]/40 bg-[#FEF3F2]/5 px-4 py-3">
+            <p className="text-sm text-[#FDA29B]">Couldn&apos;t refresh the queue: {moviesError}</p>
+          </div>
+        )}
         <div className="flex flex-col items-center justify-center py-24 gap-3 text-center">
           <div className="flex h-14 w-14 items-center justify-center rounded-full bg-[#12B76A]/15">
             <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#12B76A" strokeWidth="2" strokeLinecap="round">
@@ -224,17 +310,24 @@ export default function QueuePage() {
         <div className="flex items-center gap-2">
           <button
             onClick={toggleAutoMode}
-            className={`flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors ${autoMode ? 'bg-[#12B76A]/15 text-[#12B76A]' : 'bg-[#1D2939] text-[#667085] hover:text-[#D0D5DD]'}`}
+            disabled={savingAuto}
+            className={`flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors disabled:cursor-not-allowed ${autoMode ? 'bg-[#12B76A]/15 text-[#12B76A]' : 'bg-[#1D2939] text-[#667085] hover:text-[#D0D5DD]'}`}
           >
-            <span className={`relative inline-flex h-4 w-7 flex-shrink-0 rounded-full border-2 border-transparent transition-colors ${autoMode ? 'bg-[#12B76A]' : 'bg-[#344054]'}`}>
-              <span className={`inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform ${autoMode ? 'translate-x-3' : 'translate-x-0'}`} />
-            </span>
+            {savingAuto ? (
+              <Spinner size={16} className="flex-shrink-0" />
+            ) : (
+              <span className={`relative inline-flex h-4 w-7 flex-shrink-0 rounded-full border-2 border-transparent transition-colors ${autoMode ? 'bg-[#12B76A]' : 'bg-[#344054]'}`}>
+                <span className={`inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform ${autoMode ? 'translate-x-3' : 'translate-x-0'}`} />
+              </span>
+            )}
             Auto
           </button>
           <Button variant="ghost" size="sm" onClick={skipForever} disabled={downloading} title="Never show this movie in the queue again">
             Ignore
           </Button>
-          <Button variant="ghost" size="sm" onClick={advanceQueue} disabled={downloading}>
+          {/* Wrapped, not passed directly: advanceQueue's first parameter is a
+              movie id, and handing it the click event would make it a no-op. */}
+          <Button variant="ghost" size="sm" onClick={() => advanceQueue()} disabled={downloading}>
             Skip
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
               <path d="M5 12h14M12 5l7 7-7 7" />
@@ -244,6 +337,12 @@ export default function QueuePage() {
       }
     >
       <div className="max-w-2xl space-y-5">
+
+        {moviesError && (
+          <div className="rounded-lg border border-[#B42318]/40 bg-[#FEF3F2]/5 px-4 py-3">
+            <p className="text-sm text-[#FDA29B]">Couldn&apos;t refresh the queue: {moviesError}</p>
+          </div>
+        )}
 
         {/* Movie card */}
         <div className="flex items-start gap-4 rounded-xl border border-[#1D2939] bg-[#101828] p-4">

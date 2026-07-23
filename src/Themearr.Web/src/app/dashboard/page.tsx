@@ -1,17 +1,30 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { statsApi } from '@/lib/api'
-import type { DashboardStats } from '@/lib/types'
 import { AppShell } from '@/components/layout/AppShell'
-import { Spinner } from '@/components/ui'
+import { Button, EmptyState, ErrorIcon, Spinner } from '@/components/ui'
+import { useResource } from '@/lib/useResource'
 
 export default function DashboardPage() {
-  const [stats,   setStats]   = useState<DashboardStats | null>(null)
   const [imgErrors, setImgErrors] = useState<Record<string, boolean>>({})
 
-  useEffect(() => {
-    statsApi.get().then(setStats).catch(() => null)
-  }, [])
+  // The dashboard has nothing else to show, so a failed load is a plain
+  // gate: an error screen with retry rather than the blank page it rendered
+  // before (stats stuck at null with the failure silently swallowed).
+  const { data: stats, error, retry } = useResource(useCallback(() => statsApi.get(), []))
+
+  if (stats === null && error) {
+    return (
+      <AppShell title="Dashboard">
+        <EmptyState
+          icon={<ErrorIcon />}
+          title="Couldn&apos;t load the dashboard"
+          description={error}
+          action={<Button variant="secondary" size="sm" onClick={retry}>Retry</Button>}
+        />
+      </AppShell>
+    )
+  }
 
   if (!stats) {
     return (

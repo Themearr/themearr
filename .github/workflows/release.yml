@@ -82,6 +82,7 @@ jobs:
         working-directory: src/Themearr.Web
         run: |
           npm ci
+          npm test
           npm run build
 
       # ── Build .NET API ────────────────────────────────────────────────────────
