@@ -19,7 +19,16 @@ public sealed class DownloadWorkerCheck(Database db, IDownloadWorkerStatus worke
             return Task.FromResult(HealthCheckResult.Healthy("Auto-download is off"));
 
         if (worker.LastTickAt is not { } last)
+        {
+            // Never ticked. "Just started" is fine (there's a warm-up delay before the
+            // first tick), but a worker that started long ago and STILL hasn't ticked
+            // died during warm-up -- and must not masquerade as "starting up" forever.
+            if (worker.StartedAt is { } started && DateTime.UtcNow - started > MaxTickAge)
+                return Task.FromResult(HealthCheckResult.Unhealthy(
+                    $"The auto-download worker started {(int)(DateTime.UtcNow - started).TotalMinutes} minutes ago " +
+                    "but has never run a tick (it should run every 30 seconds). It may have died during start-up."));
             return Task.FromResult(HealthCheckResult.Healthy("Auto-download worker is starting up"));
+        }
 
         var age = DateTime.UtcNow - last;
         if (age > MaxTickAge)

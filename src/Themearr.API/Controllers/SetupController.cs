@@ -125,12 +125,6 @@ public class SetupController(Database db, PlexService plex) : ControllerBase
         db.SetPathMappings(req.PathMappings ?? []);
         db.SetLibraryPaths(req.LibraryPaths ?? []);
 
-        var primary = req.Servers[0];
-        db.SetSetting("plex_server_name", primary.GetValueOrDefault("name", "")?.ToString() ?? "");
-        db.SetSetting("plex_server_url",  primary.GetValueOrDefault("url",  "")?.ToString() ?? "");
-        var incomingToken = primary.GetValueOrDefault("token", "")?.ToString() ?? "";
-        db.SetSetting("plex_server_token",
-            string.IsNullOrEmpty(incomingToken) ? db.GetPrimaryServerToken() : incomingToken);
         db.MarkSetupComplete();
 
         return Ok(SetupPayload());

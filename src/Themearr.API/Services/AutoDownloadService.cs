@@ -40,7 +40,16 @@ public class AutoDownloadService(
     private int _ticksCompleted;
     private int _downloadsStarted;
 
+    // Set once when ExecuteAsync begins (before the warm-up delay). Stored as ticks
+    // so publication is a single volatile write, readable without a torn DateTime.
+    // 0 means the loop has not started yet.
+    private long _startedAtTicks;
+
     // Exposed for DownloadWorkerCheck: "is the worker alive, and what did it last do".
+    public DateTime? StartedAt
+    {
+        get { var t = Volatile.Read(ref _startedAtTicks); return t == 0 ? null : new DateTime(t, DateTimeKind.Utc); }
+    }
     public DateTime? LastTickAt     => Tick.At;
     public string    LastTickResult => Tick.Result;
 
@@ -73,6 +82,7 @@ public class AutoDownloadService(
     {
         log.LogInformation("AutoDownloadService started — first tick in 45s, then every {Sec}s",
             (int)CheckInterval.TotalSeconds);
+        Volatile.Write(ref _startedAtTicks, DateTime.UtcNow.Ticks);
 
         // Warm-up delay so DB init + Plex sync can land first
         await Task.Delay(TimeSpan.FromSeconds(45), ct);
