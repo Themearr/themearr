@@ -19,19 +19,23 @@
 
 ## What it does
 
-Themearr signs in with your Plex account, reads your movie libraries, and helps you add a `theme.mp3` to every movie folder — the file Plex uses to play background music while browsing.
+Themearr reads your movie library and helps you add a `theme.mp3` to every movie folder — the file Plex, Jellyfin, Emby and Kodi use to play background music while browsing.
 
-- Browse your full Plex library as a poster grid
+It reads your library from **either Plex or Radarr**. Radarr is a first-class source: if you don't use Plex, you never need a Plex account to run Themearr.
+
+- Read your library from **Plex** (OAuth sign-in) **or Radarr** (URL + API key)
+- Browse your whole library as a poster grid
 - Auto-search YouTube for each movie's theme
 - One-click download to `theme.mp3`
 - Automatic background downloading across the whole library
 - Paste any video URL to use a custom source
 - Downloaded status tracked per movie, verified against what's on disk
 - System page with health checks and scheduled tasks, arr-style
+- An API key plus a **Radarr webhook**, so a theme is fetched the moment a movie is imported
 
 ## Downloads require a RapidAPI key
 
-Theme audio is fetched through the [youtube-mp36](https://rapidapi.com/ytjar/api/youtube-mp36) API on RapidAPI. **Downloads will not work until you add your RapidAPI key and username** in **Settings → RapidAPI**. Plex sign-in and library browsing work without it — only downloading a `theme.mp3` needs it. The free RapidAPI tier is quota-limited, so Themearr backs off automatically when the quota is exhausted.
+Theme audio is fetched through the [youtube-mp36](https://rapidapi.com/ytjar/api/youtube-mp36) API on RapidAPI — Themearr does **not** bundle or shell out to `yt-dlp` or `ffmpeg`. **Downloads will not work until you add your RapidAPI key and username** in **Settings → RapidAPI**. Signing in and browsing your library work without it — only downloading a `theme.mp3` needs it. The free RapidAPI tier is quota-limited, so Themearr backs off automatically when the quota is exhausted.
 
 ## Install
 
@@ -43,7 +47,7 @@ Run this on your Proxmox host:
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/Themearr/ProxmoxVE/main/ct/themearr.sh)"
 ```
 
-The installer generates an access token, prints it at the end, and saves a copy to `/root/themearr.creds`. Open `http://<container-ip>:8080`, enter the token, and sign in with Plex.
+The installer generates an access token, prints it at the end, and saves a copy to `/root/themearr.creds`. Open `http://<container-ip>:8080`, enter the token, then pick your library source — sign in with Plex, or choose **"I don't use Plex"** to connect Radarr instead.
 
 ### Docker
 
