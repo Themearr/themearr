@@ -33,7 +33,7 @@ export default function HistoryPage() {
   })
 
   return (
-    <AppShell title="History" actions={
+    <AppShell width="narrow" title="History" actions={
       <Button variant="ghost" size="sm" onClick={retry} loading={loading}>
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
           <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
@@ -56,16 +56,18 @@ export default function HistoryPage() {
           <Spinner size={28} className="text-[#BB0000]" />
         </div>
       ) : entries.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-24 gap-3 text-center">
-          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#344054" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="12" r="10" />
-            <polyline points="12 6 12 12 16 14" />
-          </svg>
-          <p className="text-sm font-semibold text-[#D0D5DD]">No downloads yet</p>
-          <p className="text-sm text-[#667085]">Themes will appear here once downloaded</p>
-        </div>
+        <EmptyState
+          icon={
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10" />
+              <polyline points="12 6 12 12 16 14" />
+            </svg>
+          }
+          title="No downloads yet"
+          description="Themes will appear here once you've downloaded them."
+        />
       ) : (
-        <div className="max-w-2xl space-y-4">
+        <div className="space-y-6">
           {error && (
             <div className="rounded-lg border border-[#B42318]/40 bg-[#FEF3F2]/5 px-4 py-3">
               <p className="text-sm text-[#FDA29B]">Couldn&apos;t refresh history: {error}</p>

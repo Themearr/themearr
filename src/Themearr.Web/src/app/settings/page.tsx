@@ -393,7 +393,7 @@ export default function SettingsPage() {
   // in-place notice.
   if (settings === null && settingsError) {
     return (
-      <AppShell title="Settings">
+      <AppShell width="narrow" title="Settings">
         <EmptyState
           icon={<ErrorIcon />}
           title="Couldn&apos;t load settings"
@@ -406,7 +406,7 @@ export default function SettingsPage() {
 
   if (!settings) {
     return (
-      <AppShell title="Settings">
+      <AppShell width="narrow" title="Settings">
         <div className="flex justify-center py-24">
           <Spinner size={28} className="text-[#BB0000]" />
         </div>
@@ -422,12 +422,12 @@ export default function SettingsPage() {
   const webhookUrl = `${window.location.origin}/api/webhook/radarr`
 
   return (
-    <AppShell title="Settings" actions={
+    <AppShell width="narrow" title="Settings" actions={
       <Button onClick={save} loading={saving} size="sm">
         {saved ? 'Saved ✓' : 'Save changes'}
       </Button>
     }>
-      <div className="max-w-2xl space-y-6">
+      <div className="space-y-6">
 
         {error && (
           <div className="rounded-lg border border-[#B42318]/40 bg-[#FEF3F2]/5 px-4 py-3">
