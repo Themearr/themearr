@@ -161,4 +161,38 @@ describe('the download-status poll cannot be wedged by a hung request', () => {
     expect(screen.getByRole('button', { name: /^skip$/i })).not.toBeDisabled()
     expect(screen.getByRole('button', { name: /^ignore$/i })).not.toBeDisabled()
   })
+
+  it('hands control back instead of wedging forever when every status check fails', async () => {
+    // A total backend outage: unlike the single-hang case above, NO status
+    // request ever succeeds -- every one hangs until our own timeout aborts it.
+    // The single-hang recovery can't save this: there's no good request to
+    // resume onto, so `downloading` would stay true forever and Skip/Ignore
+    // (disabled={downloading}) would never re-enable. The only escape must not
+    // be a full page reload.
+    vi.mocked(api.moviesApi.downloadStatus).mockImplementation(
+      ((_movieId: string, init?: RequestInit) =>
+        new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () =>
+            reject(new DOMException('The operation was aborted', 'AbortError')))
+        })) as never,
+    )
+
+    const { default: QueuePage } = await import('@/app/queue/page')
+    renderPage(<QueuePage />)
+
+    await flush(50)
+    await startDownload()
+
+    // Each failed check costs ~1s wait + an 8s timeout; give several the room
+    // to accumulate.
+    await flush(60000)
+
+    // The queue gave up tracking, said so, and re-enabled the in-app escapes --
+    // no reload needed. It must NOT have advanced (it can't know the download's
+    // real fate with the server unreachable), so we're still on Movie A.
+    expect(screen.queryByText(/lost contact/i)).not.toBeNull()
+    expect(screen.getByRole('button', { name: /^skip$/i })).not.toBeDisabled()
+    expect(screen.getByRole('button', { name: /^ignore$/i })).not.toBeDisabled()
+    expect(screen.queryByText('3 movies left in queue')).not.toBeNull()
+  })
 })
