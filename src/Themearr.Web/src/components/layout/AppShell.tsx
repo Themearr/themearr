@@ -8,19 +8,9 @@ interface AppShellProps {
   children: ReactNode
   title?: string
   actions?: ReactNode
-  // The content column width. Data-dense pages (dashboard, movie grid, tables)
-  // use 'default'; reading- and form-oriented pages (queue, history, settings)
-  // use 'narrow' for a comfortable single column. Both are centered and the
-  // header shares the same column, so nothing jumps or misaligns between pages.
-  width?: 'default' | 'narrow'
 }
 
-const CONTENT_WIDTH: Record<NonNullable<AppShellProps['width']>, string> = {
-  default: 'max-w-[1024px]',
-  narrow:  'max-w-2xl',
-}
-
-export function AppShell({ children, title, actions, width = 'default' }: AppShellProps) {
+export function AppShell({ children, title, actions }: AppShellProps) {
   const navigate = useNavigate()
   const { loading, authorized } = useAuth()
 
@@ -39,27 +29,20 @@ export function AppShell({ children, title, actions, width = 'default' }: AppShe
     )
   }
 
-  // One centered column, shared by the header and the content, so the page
-  // title, header actions, and body all line up on the same left/right edges
-  // regardless of viewport or which page you're on.
-  const column = `mx-auto w-full ${CONTENT_WIDTH[width]}`
-
   return (
     <div className="flex min-h-screen">
       <Sidebar />
       <div className="flex flex-1 flex-col" style={{ marginLeft: 'var(--sidebar-w)' }}>
         {(title || actions) && (
-          <header className="sticky top-0 z-20 border-b border-[#1D2939] bg-[#0C111D]/90 px-6 py-4 backdrop-blur">
-            <div className={`${column} flex items-center justify-between gap-4`}>
-              {title
-                ? <h1 className="text-base font-semibold text-[#F9FAFB]">{title}</h1>
-                : <span aria-hidden />}
-              {actions && <div className="flex items-center gap-2">{actions}</div>}
-            </div>
+          <header className="sticky top-0 z-20 flex h-16 items-center justify-between gap-4 border-b border-[#1D2939] bg-[#0C111D]/90 px-6 backdrop-blur">
+            {title && (
+              <h1 className="text-base font-semibold text-[#F9FAFB]">{title}</h1>
+            )}
+            {actions && <div className="flex items-center gap-2">{actions}</div>}
           </header>
         )}
         <main className="flex-1 px-6 py-6">
-          <div className={column}>{children}</div>
+          <div className="mx-auto w-full max-w-[1024px]">{children}</div>
         </main>
       </div>
     </div>

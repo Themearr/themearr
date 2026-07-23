@@ -111,8 +111,9 @@ export function Sidebar() {
       className="fixed inset-y-0 left-0 z-30 flex flex-col"
       style={{ width: 'var(--sidebar-w)', background: '#101828', borderRight: '1px solid #1D2939' }}
     >
-      {/* Logo */}
-      <div className="px-4 py-4 border-b border-[#1D2939]">
+      {/* Logo — same fixed height as the AppShell header (h-16) so the two bottom
+          borders meet in one continuous line across the sidebar/content boundary. */}
+      <div className="flex h-16 items-center px-4 border-b border-[#1D2939]">
         <img src="/logo.svg" alt="Themearr" width={138} height={36} style={{ height: 36, width: 'auto' }} />
       </div>
 

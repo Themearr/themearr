@@ -293,7 +293,7 @@ export default function QueuePage() {
   // ── Loading / failed ───────────────────────────────────────────────────────
   if (pending === null) {
     return (
-      <AppShell width="narrow" title="Queue">
+      <AppShell title="Queue">
         {moviesError ? (
           <EmptyState
             icon={<ErrorIcon />}
@@ -313,7 +313,7 @@ export default function QueuePage() {
   // ── All done ───────────────────────────────────────────────────────────────
   if (!current) {
     return (
-      <AppShell width="narrow" title="Queue">
+      <AppShell title="Queue">
         {moviesError && (
           <div className="mb-5 rounded-lg border border-[#B42318]/40 bg-[#FEF3F2]/5 px-4 py-3">
             <p className="text-sm text-[#FDA29B]">Couldn&apos;t refresh the queue: {moviesError}</p>
@@ -337,7 +337,6 @@ export default function QueuePage() {
   // ── Queue ──────────────────────────────────────────────────────────────────
   return (
     <AppShell
-      width="narrow"
       title="Queue"
       actions={
         <div className="flex items-center gap-2">
@@ -369,7 +368,7 @@ export default function QueuePage() {
         </div>
       }
     >
-      <div className="space-y-6">
+      <div className="max-w-2xl space-y-5">
 
         {moviesError && (
           <div className="rounded-lg border border-[#B42318]/40 bg-[#FEF3F2]/5 px-4 py-3">

@@ -129,9 +129,7 @@ export default function SystemPage() {
       </div>
 
       {error && (
-        <div className="mb-4 rounded-lg border border-[#B42318]/40 bg-[#FEF3F2]/5 px-4 py-3">
-          <p className="text-sm text-[#FDA29B]">{error}</p>
-        </div>
+        <p className="mb-4 rounded-lg bg-[#F04438]/10 px-3 py-2 text-sm text-[#FDA29B]">{error}</p>
       )}
 
       {tab === 'health' && (
