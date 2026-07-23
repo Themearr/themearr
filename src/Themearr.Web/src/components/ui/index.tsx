@@ -1,32 +1,5 @@
 import { type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, useEffect, useRef } from 'react'
 
-// ── Badge ─────────────────────────────────────────────────────────────────────
-
-type BadgeVariant = 'success' | 'warning' | 'error' | 'default'
-
-const BADGE_STYLES: Record<BadgeVariant, string> = {
-  success: 'bg-[#ECFDF3]/10 text-[#6CE9A6] border border-[#027A48]/40',
-  warning: 'bg-[#FFFAEB]/10 text-[#FEC84B] border border-[#B54708]/40',
-  error:   'bg-[#FEF3F2]/10 text-[#FDA29B] border border-[#B42318]/40',
-  default: 'bg-[#1D2939] text-[#98A2B3] border border-[#344054]/60',
-}
-
-const BADGE_DOTS: Record<BadgeVariant, string> = {
-  success: 'bg-[#12B76A]',
-  warning: 'bg-[#F79009]',
-  error:   'bg-[#F04438]',
-  default: 'bg-[#667085]',
-}
-
-export function Badge({ variant = 'default', children }: { variant?: BadgeVariant; children: ReactNode }) {
-  return (
-    <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium ${BADGE_STYLES[variant]}`}>
-      <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${BADGE_DOTS[variant]}`} />
-      {children}
-    </span>
-  )
-}
-
 // ── Button ────────────────────────────────────────────────────────────────────
 
 type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger'
@@ -178,12 +151,6 @@ export function Modal({ open, onClose, title, children, size = 'md' }: ModalProp
       </div>
     </div>
   )
-}
-
-// ── Divider ───────────────────────────────────────────────────────────────────
-
-export function Divider() {
-  return <hr className="border-[#1D2939]" />
 }
 
 // ── Error icon ────────────────────────────────────────────────────────────────

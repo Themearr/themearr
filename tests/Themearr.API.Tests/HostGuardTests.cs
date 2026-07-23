@@ -18,6 +18,15 @@ public class HostGuardTests
     [InlineData("::1")]
     [InlineData("fc00::1")]         // IPv6 unique-local
     [InlineData("fe80::1")]         // IPv6 link-local
+    // IPv4-mapped IPv6 (::ffff:a.b.c.d) — must unwrap to the embedded v4 address and
+    // still be caught. A DNS name with an AAAA record of one of these is the reachable
+    // way past the guard; ::ffff:169.254.169.254 routes to cloud metadata on Linux.
+    [InlineData("::ffff:169.254.169.254")] // cloud metadata, mapped
+    [InlineData("::ffff:10.0.0.5")]
+    [InlineData("::ffff:192.168.1.1")]
+    [InlineData("::ffff:172.16.0.1")]
+    [InlineData("::ffff:127.0.0.1")]
+    [InlineData("::ffff:100.64.0.1")]      // CGNAT, mapped
     public void IsPrivateOrLoopback_privateLiteral_true(string host)
     {
         Assert.True(HostGuard.IsPrivateOrLoopback(host));
@@ -29,6 +38,7 @@ public class HostGuardTests
     [InlineData("93.184.216.34")] // example.com
     [InlineData("172.15.0.1")]    // just below the private 172.16/12 block
     [InlineData("172.32.0.1")]    // just above it
+    [InlineData("::ffff:8.8.8.8")] // a mapped PUBLIC v4 must stay allowed (no over-blocking)
     public void IsPrivateOrLoopback_publicLiteral_false(string host)
     {
         Assert.False(HostGuard.IsPrivateOrLoopback(host));
@@ -49,5 +59,16 @@ public class HostGuardTests
         Assert.True(HostGuard.IsPrivateAddress(IPAddress.Loopback));
         Assert.True(HostGuard.IsPrivateAddress(IPAddress.IPv6Loopback));
         Assert.False(HostGuard.IsPrivateAddress(IPAddress.Parse("8.8.8.8")));
+    }
+
+    [Fact]
+    public void IsPrivateAddress_unwrapsIpv4MappedIpv6()
+    {
+        // The mapped form has AddressFamily InterNetworkV6 but a private embedded v4
+        // address; before unwrapping it slipped past every v4 range check.
+        Assert.True(HostGuard.IsPrivateAddress(IPAddress.Parse("::ffff:169.254.169.254")));
+        Assert.True(HostGuard.IsPrivateAddress(IPAddress.Parse("::ffff:10.0.0.5")));
+        // A mapped public address must remain allowed.
+        Assert.False(HostGuard.IsPrivateAddress(IPAddress.Parse("::ffff:8.8.8.8")));
     }
 }

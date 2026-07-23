@@ -486,6 +486,37 @@ public class Database(string dbPath)
         return result;
     }
 
+    /// <summary>
+    /// Movies whose STORED status is 'pending' (never successfully downloaded), excluding
+    /// ignored ones. Unlike <see cref="GetAllMovies"/> this does NOT stat the filesystem:
+    /// it is the cheap pre-filter the auto-download worker runs every tick, so an idle,
+    /// fully-downloaded library costs one indexed query instead of a per-movie disk scan.
+    /// A caller that needs disk-verified state must still check each returned folder — a
+    /// row here may already have a theme added out-of-band (worker reconciles that).
+    /// </summary>
+    public List<Dictionary<string, object?>> GetPendingMovies()
+    {
+        using var conn = Open();
+        var result = new List<Dictionary<string, object?>>();
+        conn.Query(
+            "SELECT id, folderName, source, source_ref, title, year, sourcePath FROM movies WHERE status = 'pending' AND ignored = 0 ORDER BY title",
+            r =>
+            {
+                while (r.Read())
+                    result.Add(new Dictionary<string, object?>
+                    {
+                        ["id"]         = r.GetString(0),
+                        ["folderName"] = r.IsDBNull(1) ? "" : r.GetString(1),
+                        ["source"]     = r.GetString(2),
+                        ["sourceRef"]  = r.IsDBNull(3) ? null : r.GetString(3),
+                        ["title"]      = r.GetString(4),
+                        ["year"]       = r.IsDBNull(5) ? null : r.GetInt32(5),
+                        ["sourcePath"] = r.IsDBNull(6) ? null : r.GetString(6),
+                    });
+            });
+        return result;
+    }
+
     public void SetMovieStatus(string id, string status)
     {
         using var conn = Open();
@@ -633,8 +664,9 @@ public class Database(string dbPath)
         else
         {
             // A zero-byte/truncated theme.* is treated as not-downloaded so it gets
-            // retried rather than being marked done forever (see ThemeFiles).
-            status = ThemeFiles.HasUsableTheme(folder) ? "downloaded" : "pending";
+            // retried rather than being marked done forever (see ThemeFiles). Folder
+            // existence was just confirmed above, so skip the redundant re-stat.
+            status = ThemeFiles.HasUsableThemeInExistingFolder(folder) ? "downloaded" : "pending";
         }
 
         return new Dictionary<string, object?>

@@ -81,6 +81,14 @@ public class MoviesController(
             System.IO.File.Delete(f);
             deleted = true;
         }
+
+        // Reset the stored status so the column stays honest (this movie no longer has a
+        // theme) and the auto-download worker's cheap stored-status pre-filter re-adopts
+        // it. Without this, a movie deleted while auto-download is on would keep its stale
+        // 'downloaded' status and never be re-fetched once the worker stops disk-scanning
+        // every movie every tick.
+        if (deleted) db.SetMovieStatus(movieId, "pending");
+
         return Ok(new { deleted });
     }
 

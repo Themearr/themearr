@@ -90,6 +90,12 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
+      # Gate the release on the API test suite the same way npm test gates the frontend.
+      # This half — auth, the SSRF guard, path containment, the DB layer — is the most
+      # security-critical, so a regression here must block the release, not ship to GHCR.
+      - name: Run API tests
+        run: dotnet test tests/Themearr.API.Tests/Themearr.API.Tests.csproj -c Release --nologo
+
       - name: Publish linux-x64
         run: |
           dotnet publish src/Themearr.API/Themearr.API.csproj \

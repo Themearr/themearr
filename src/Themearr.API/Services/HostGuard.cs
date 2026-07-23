@@ -28,6 +28,12 @@ public static class HostGuard
 
     public static bool IsPrivateAddress(IPAddress ip)
     {
+        // Unwrap IPv4-mapped IPv6 (::ffff:a.b.c.d) first: its AddressFamily is
+        // InterNetworkV6, so without this the embedded v4 address (which can be a
+        // private/metadata range) skips every v4 range check below. Reachable via a DNS
+        // AAAA record even though the bracketed literal form fails to parse and is blocked.
+        if (ip.IsIPv4MappedToIPv6) ip = ip.MapToIPv4();
+
         if (IPAddress.IsLoopback(ip)) return true;
         if (ip.AddressFamily == AddressFamily.InterNetwork)
         {

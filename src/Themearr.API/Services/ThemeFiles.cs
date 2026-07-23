@@ -22,9 +22,19 @@ public static class ThemeFiles
     public static bool HasUsableTheme(string folder)
     {
         if (string.IsNullOrEmpty(folder) || !Directory.Exists(folder)) return false;
-        return Directory.EnumerateFiles(folder, "theme.*")
-            .Any(f => !IsNonTheme(f) && new FileInfo(f).Length > 0);
+        return HasUsableThemeInExistingFolder(folder);
     }
+
+    /// <summary>
+    /// As <see cref="HasUsableTheme"/> but WITHOUT the <c>Directory.Exists</c> guard, for
+    /// callers that have already confirmed the folder exists (e.g. per-movie status
+    /// derivation over a whole library). Skipping the redundant stat halves the filesystem
+    /// round-trips per movie — it matters on network-mounted libraries. Throws if the
+    /// folder does not exist, so only call it once existence is established.
+    /// </summary>
+    internal static bool HasUsableThemeInExistingFolder(string folder) =>
+        Directory.EnumerateFiles(folder, "theme.*")
+            .Any(f => !IsNonTheme(f) && new FileInfo(f).Length > 0);
 
     /// <summary>
     /// True if the service user can actually create a file in <paramref name="folder"/>.

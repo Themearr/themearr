@@ -192,9 +192,7 @@ public class SettingsController(Database db, RadarrLibrarySource radarr, IApiKey
     // Only the master bearer token may read or regenerate it. This is the one carve-out —
     // the API key otherwise authenticates like the bearer token everywhere else, including
     // endpoints that overwrite the Radarr key or Plex token; see the README's API key section.
-    private bool AuthenticatedWithBearerToken =>
-        HttpContext.Items.TryGetValue(ApiAuthMiddleware.AuthSchemeItemKey, out var scheme) &&
-        (scheme as string) == ApiAuthMiddleware.BearerScheme;
+    private bool AuthenticatedWithBearerToken => HttpContext.AuthenticatedWithBearerToken();
 
     private IActionResult ApiKeyManagementForbidden() => StatusCode(StatusCodes.Status403Forbidden,
         new { detail = "Managing the API key requires the access token, not the API key." });

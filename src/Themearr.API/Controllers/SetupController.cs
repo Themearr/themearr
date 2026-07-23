@@ -164,6 +164,12 @@ public class SetupController(Database db, PlexService plex) : ControllerBase
     [HttpPost("reset")]
     public IActionResult Reset()
     {
+        // Wiping all app state is a destructive, master-token-only operation — the
+        // externally-held API key must not be able to factory-reset the install.
+        if (!HttpContext.AuthenticatedWithBearerToken())
+            return StatusCode(StatusCodes.Status403Forbidden,
+                new { detail = "Resetting requires the access token, not the API key." });
+
         db.ResetAppState();
         return Ok(SetupPayload());
     }

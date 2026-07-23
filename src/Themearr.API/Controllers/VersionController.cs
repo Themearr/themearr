@@ -22,6 +22,12 @@ public class VersionController(UpdateService update) : ControllerBase
     [HttpPost("update")]
     public async Task<IActionResult> StartUpdate()
     {
+        // A root-level host update must require the master token, not the externally-held
+        // API key: otherwise a compromised Radarr (which holds that key) could trigger it.
+        if (!HttpContext.AuthenticatedWithBearerToken())
+            return StatusCode(StatusCodes.Status403Forbidden,
+                new { detail = "Starting an update requires the access token, not the API key." });
+
         var started = await update.StartAsync();
         return Ok(new { started, detail = started ? null : "Update already in progress" });
     }

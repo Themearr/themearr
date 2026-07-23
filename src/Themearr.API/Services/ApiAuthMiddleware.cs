@@ -82,3 +82,17 @@ public class ApiAuthMiddleware(
         return a.Length == b.Length && CryptographicOperations.FixedTimeEquals(a, b);
     }
 }
+
+public static class AuthSchemeExtensions
+{
+    /// <summary>
+    /// True when the request authenticated with the master bearer token rather than the
+    /// (regeneratable, externally-held) API key. Gate the most privileged operations —
+    /// reading/rotating the API key, triggering a root host update, wiping app state —
+    /// on this, so a leaked/compromised holder of the Radarr-side key can't reach them.
+    /// The marker is set by <see cref="ApiAuthMiddleware"/> on the authenticated request.
+    /// </summary>
+    public static bool AuthenticatedWithBearerToken(this HttpContext ctx) =>
+        ctx.Items.TryGetValue(ApiAuthMiddleware.AuthSchemeItemKey, out var scheme) &&
+        (scheme as string) == ApiAuthMiddleware.BearerScheme;
+}

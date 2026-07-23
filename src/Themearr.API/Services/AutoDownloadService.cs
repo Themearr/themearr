@@ -157,8 +157,30 @@ public class AutoDownloadService(
 
         ExpireCooldowns();
 
-        var movies = db.GetAllMovies();
-        var pending = movies.Where(m => (m["status"]?.ToString() ?? "") == "pending").ToList();
+        // Cheap pre-filter on the stored status column — no per-movie disk scan. On a
+        // fully-downloaded, idle library this is a single indexed query that returns
+        // nothing, instead of stat-ing every movie folder on every 30-second tick.
+        var storedPending = db.GetPendingMovies();
+
+        // Disk-verify only this candidate set (not the whole library) to find the genuinely
+        // pending movies. A stored-pending movie whose theme appeared out-of-band is
+        // reconciled to 'downloaded' so it leaves the cheap set on the next tick.
+        // (An in-app delete resets stored status to 'pending' — see MoviesController — so
+        // it re-enters here; only a theme deleted directly on disk for a 'downloaded'
+        // movie is not auto-re-fetched, and the movies page still shows it as pending.)
+        var pending = new List<Dictionary<string, object?>>();
+        foreach (var m in storedPending)
+        {
+            var folder = m["folderName"]?.ToString() ?? "";
+            if (string.IsNullOrEmpty(folder) || !Directory.Exists(folder)) continue;
+            if (ThemeFiles.HasUsableThemeInExistingFolder(folder))
+            {
+                db.SetMovieStatus(m["id"]?.ToString() ?? "", "downloaded");
+                continue;
+            }
+            pending.Add(m);
+        }
+
         var candidate = pending.FirstOrDefault(m =>
             !_cooldownUntil.ContainsKey(m["id"]?.ToString() ?? ""));
 
