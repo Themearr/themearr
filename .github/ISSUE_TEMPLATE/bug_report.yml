@@ -1,0 +1,67 @@
+name: Bug report
+description: Something in Themearr is broken
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report! Please search [existing issues](https://github.com/Themearr/themearr/issues) first.
+        **Security issues:** please don't report them here — use [private vulnerability reporting](https://github.com/Themearr/themearr/security/advisories/new) instead.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: Describe the bug
+      description: What happened?
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What should have happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Themearr version
+      placeholder: e.g. v1.44.5
+    validations:
+      required: true
+  - type: dropdown
+    id: install-method
+    attributes:
+      label: Install method
+      options:
+        - Proxmox LXC (install script)
+        - Docker
+        - Manual (release tarball)
+        - Running from source
+    validations:
+      required: true
+  - type: dropdown
+    id: library-source
+    attributes:
+      label: Library source
+      options:
+        - Plex
+        - Radarr
+        - Not applicable
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / screenshots
+      description: Anything relevant from the logs or UI. Please redact tokens and API keys.
