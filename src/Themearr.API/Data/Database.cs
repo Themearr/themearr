@@ -795,8 +795,8 @@ public class Database(string dbPath)
         var ignored = !r.IsDBNull(8) && r.GetInt32(8) == 1;
         var folder  = r.IsDBNull(1) ? "" : r.GetString(1);
 
-        // Always return ignored movies so they can be unignored from the UI;
-        // non-ignored movies with missing folders can't be used so filter them out.
+        // Always return ignored rows so they can be unignored from the UI;
+        // non-ignored rows with missing folders can't be used so filter them out.
         if (!ignored && (string.IsNullOrEmpty(folder) || !Directory.Exists(folder)))
             return null;
 

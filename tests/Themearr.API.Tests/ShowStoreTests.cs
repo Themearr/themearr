@@ -39,13 +39,17 @@ public class ShowStoreTests
         var needs   = Path.Combine(dir.Path, "Needs");   Directory.CreateDirectory(needs);
         var plexHas = Path.Combine(dir.Path, "PlexHas"); Directory.CreateDirectory(plexHas);
         var onDisk  = Path.Combine(dir.Path, "OnDisk");  Directory.CreateDirectory(onDisk);
+        var ignored = Path.Combine(dir.Path, "Ignored"); Directory.CreateDirectory(ignored);
         File.WriteAllText(Path.Combine(onDisk, "theme.mp3"), "x");   // already downloaded on disk
 
-        db.UpsertShows([Rec(needs, "Needs"), Rec(plexHas, "PlexHas", hasPlexTheme: true), Rec(onDisk, "OnDisk")]);
+        db.UpsertShows([Rec(needs, "Needs"), Rec(plexHas, "PlexHas", hasPlexTheme: true),
+                         Rec(onDisk, "OnDisk"), Rec(ignored, "Ignored")]);
+        db.SetShowIgnored(Themearr.API.Services.MediaFolderId.For(ignored), true);
 
         var pending = db.GetPendingShows();
         Assert.Contains(pending, s => (string)s["title"]! == "Needs");
         Assert.DoesNotContain(pending, s => (string)s["title"]! == "PlexHas");   // Plex provides a theme
+        Assert.DoesNotContain(pending, s => (string)s["title"]! == "Ignored");   // ignored is excluded
         // OnDisk stays status='pending' in the column (status is disk-derived at read time),
         // but GetPendingShows is the worker pre-filter keyed off the stored column, so it is
         // still listed here — the worker verifies the disk before acting (mirrors movies).
