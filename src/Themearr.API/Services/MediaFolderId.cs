@@ -8,7 +8,7 @@ namespace Themearr.API.Services;
 ///
 /// The folder is the real identity — it is what Themearr acts on, and every library
 /// source can name it — but folders are not usable as ids directly: they appear in
-/// URLs like /api/media/{id}/theme, where a raw path needs escaping, reads badly,
+/// URLs like /api/movies/{id}/theme, where a raw path needs escaping, reads badly,
 /// and leaks the server's filesystem layout to the browser. Hashing keeps the id
 /// short and URL-safe while staying derivable from the folder alone, so no mapping
 /// table is ever stored.
