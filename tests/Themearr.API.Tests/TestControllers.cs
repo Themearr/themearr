@@ -28,5 +28,13 @@ internal static class TestControllers
     }
 
     public static SettingsController NewSettingsController(Database db, IApiKeyStore keys) =>
-        new(db, new RadarrLibrarySource(db, new LocalFolderResolver(db), new UnusedHttpClientFactory()), keys);
+        NewSettingsController(db, keys, new UnusedHttpClientFactory());
+
+    // plexFactory supplies the HttpClient PlexLibrarySource.ProbeAsync uses — pass a stub
+    // returning canned responses for the /plex/test path; the default throws (probe unused).
+    public static SettingsController NewSettingsController(Database db, IApiKeyStore keys, IHttpClientFactory plexFactory) =>
+        new(db,
+            new RadarrLibrarySource(db, new LocalFolderResolver(db), new UnusedHttpClientFactory()),
+            new PlexLibrarySource(new PlexService(new HttpClient(), db, new LocalFolderResolver(db)), db, plexFactory),
+            keys);
 }

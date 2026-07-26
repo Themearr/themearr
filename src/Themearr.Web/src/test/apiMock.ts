@@ -34,6 +34,7 @@ export function makeApiMock() {
     versionApi: group('get', 'refresh', 'update', 'updateStatus'),
     systemApi: group('health', 'tasks', 'runTask'),
     radarrApi: group('get', 'save', 'test'),
+    plexApi: group('test', 'saveUrl'),
     apiKeyApi: group('get', 'regenerate'),
   }
 }

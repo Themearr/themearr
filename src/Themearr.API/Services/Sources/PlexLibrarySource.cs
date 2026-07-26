@@ -73,6 +73,17 @@ public class PlexLibrarySource(PlexService plex, Database db, IHttpClientFactory
         if (servers.Count == 0) return null;   // nothing configured is not a fault
 
         var (url, token) = servers.First().Value;
+        return await ProbeAsync(url, token, ct);
+    }
+
+    /// <summary>
+    /// Probes an arbitrary Plex <paramref name="url"/> with <paramref name="token"/> without
+    /// touching stored settings — used by CheckAsync (stored config) and the Settings Plex
+    /// "Test" endpoint (the URL the operator just typed). The token travels in the
+    /// X-Plex-Token header only, never the URI, and never appears in a returned message.
+    /// </summary>
+    public async Task<string?> ProbeAsync(string url, string token, CancellationToken ct)
+    {
         if (string.IsNullOrEmpty(url) || string.IsNullOrEmpty(token)) return null;
 
         var http = factory.CreateClient(ClientName);
