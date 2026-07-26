@@ -32,6 +32,21 @@ public class Database(string dbPath)
             )
             """);
         conn.Execute("""
+            CREATE TABLE IF NOT EXISTS shows (
+                id             TEXT PRIMARY KEY,
+                folderName     TEXT NOT NULL UNIQUE,
+                source         TEXT NOT NULL DEFAULT 'plex',
+                source_ref     TEXT,
+                title          TEXT NOT NULL,
+                year           INTEGER,
+                sourcePath     TEXT,
+                status         TEXT NOT NULL DEFAULT 'pending',
+                ignored        INTEGER NOT NULL DEFAULT 0,
+                synced_at      TEXT,
+                plex_has_theme INTEGER NOT NULL DEFAULT 0
+            )
+            """);
+        conn.Execute("""
             CREATE TABLE IF NOT EXISTS settings (
                 key   TEXT PRIMARY KEY,
                 value TEXT NOT NULL
@@ -757,3 +772,12 @@ public record MovieRecord(
     string Title,
     int? Year,
     string SourcePath);
+
+/// <summary>
+/// A TV show as reported by a library source. Identity is the resolved local (show
+/// root) folder; the stored id is derived from it via <see cref="Themearr.API.Services.MediaFolderId"/>.
+/// <paramref name="HasPlexTheme"/> is true when Plex already provides a theme for the
+/// show (its `theme` attribute is present) — such shows are not download candidates.
+/// </summary>
+public record ShowRecord(
+    string Folder, string Source, string SourceRef, string Title, int? Year, string SourcePath, bool HasPlexTheme);
