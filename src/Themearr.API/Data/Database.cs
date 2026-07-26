@@ -398,6 +398,12 @@ public class Database(string dbPath)
     public void SetSelectedLibraries(Dictionary<string, List<string>> libs) =>
         SetJsonSetting("plex_selected_libraries", libs);
 
+    public Dictionary<string, List<string>> GetSelectedShowLibraries() =>
+        GetJsonSetting("plex_selected_show_libraries", new Dictionary<string, List<string>>());
+
+    public void SetSelectedShowLibraries(Dictionary<string, List<string>> libs) =>
+        SetJsonSetting("plex_selected_show_libraries", libs);
+
     public List<Dictionary<string, string>> GetPathMappings() =>
         GetJsonSetting("path_mappings", new List<Dictionary<string, string>>());
 

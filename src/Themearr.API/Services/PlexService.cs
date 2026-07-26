@@ -174,7 +174,7 @@ public class PlexService(HttpClient http, Database db, LocalFolderResolver folde
     // ── Libraries ────────────────────────────────────────────────────────────
 
     public async Task<List<Dictionary<string, object>>> ListLibrariesAsync(
-        List<string> serverUrls, string serverToken)
+        List<string> serverUrls, string serverToken, string libraryType = "movie")
     {
         var clientId = GetClientIdentifier();
         Exception? last = null;
@@ -192,12 +192,12 @@ public class PlexService(HttpClient http, Database db, LocalFolderResolver folde
 
                 var xml = XDocument.Parse(await resp.Content.ReadAsStringAsync());
                 return xml.Descendants("Directory")
-                    .Where(d => d.Attribute("type")?.Value?.ToLower() == "movie")
+                    .Where(d => d.Attribute("type")?.Value?.ToLower() == libraryType)
                     .Select(d => new Dictionary<string, object>
                     {
                         ["key"]   = d.Attribute("key")?.Value ?? "",
-                        ["title"] = d.Attribute("title")?.Value ?? "Movies",
-                        ["type"]  = "movie",
+                        ["title"] = d.Attribute("title")?.Value ?? (libraryType == "movie" ? "Movies" : "TV Shows"),
+                        ["type"]  = libraryType,
                     })
                     .Where(lib => !string.IsNullOrEmpty(lib["key"]?.ToString()))
                     .ToList();
