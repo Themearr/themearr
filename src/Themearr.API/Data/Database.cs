@@ -348,6 +348,28 @@ public class Database(string dbPath)
         SetPlexServers(merged);
     }
 
+    /// <summary>
+    /// Points a stored Plex server at <paramref name="url"/> from an authenticated operator
+    /// action, keeping the existing token bound to the new address. Deliberately NOT
+    /// SetPlexServersMergingTokens: that path drops the token on a url change to stay safe for
+    /// the unauthenticated /health endpoint; this one is only reachable bearer-only, so it
+    /// rebinds directly. Returns false when no server has this id.
+    /// </summary>
+    public bool UpdatePlexServerUrl(string serverId, string url)
+    {
+        var servers = GetPlexServers();
+        var matched = false;
+        foreach (var srv in servers)
+        {
+            if ((srv.GetValueOrDefault("id")?.ToString() ?? "") != serverId) continue;
+            srv["url"]  = url;
+            srv["urls"] = new List<string> { url };
+            matched = true;
+        }
+        if (matched) SetPlexServers(servers);
+        return matched;
+    }
+
     // Ordinal comparison after trimming a single trailing slash — enough to treat
     // "http://host:32400" and "http://host:32400/" as the same server without being
     // lenient about anything that would actually change the destination (scheme, host,
