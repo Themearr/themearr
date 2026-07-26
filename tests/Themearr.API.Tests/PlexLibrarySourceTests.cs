@@ -152,6 +152,37 @@ public class PlexLibrarySourceTests
         Assert.DoesNotContain(Token, handler.LastRequest?.RequestUri?.ToString() ?? "");
     }
 
+    // ── ProbeAsync ───────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task ProbeAsync_returns_null_for_a_reachable_supplied_url()
+    {
+        using var dir = new TempDir();
+        var db = NewDb(dir, withServer: true);
+        var handler = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.OK));
+
+        var reason = await NewSource(db, handler)
+            .ProbeAsync("http://192.168.1.50:32400", Token, CancellationToken.None);
+
+        Assert.Null(reason);
+    }
+
+    [Fact]
+    public async Task ProbeAsync_reports_the_rejected_token_on_401_and_never_leaks_it()
+    {
+        using var dir = new TempDir();
+        var db = NewDb(dir, withServer: true);
+        var handler = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.Unauthorized));
+
+        var reason = await NewSource(db, handler)
+            .ProbeAsync("http://192.168.1.50:32400", Token, CancellationToken.None);
+
+        Assert.NotNull(reason);
+        Assert.Contains("token", reason, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(Token, reason);
+        Assert.DoesNotContain(Token, handler.LastRequest?.RequestUri?.ToString() ?? "");
+    }
+
     // ── FetchPosterAsync ─────────────────────────────────────────────────────
 
     [Fact]
