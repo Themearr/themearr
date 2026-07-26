@@ -44,6 +44,7 @@ builder.Services.AddHttpClient(Themearr.API.Services.Sources.RadarrLibrarySource
     c => c.Timeout = TimeSpan.FromSeconds(10));
 builder.Services.AddSingleton<Themearr.API.Services.Sources.LibrarySourceResolver>();
 builder.Services.AddSingleton<SyncService>();
+builder.Services.AddScoped<ShowSyncService>();
 builder.Services.AddSingleton<UpdateService>();
 builder.Services.AddHttpClient<PlexService>();
 builder.Services.AddTransient<YoutubeService>();
