@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { apiKeyApi, radarrApi, rapidApiApi, settingsApi, setupApi, versionApi } from '@/lib/api'
+import { apiKeyApi, plexApi, radarrApi, rapidApiApi, settingsApi, setupApi, versionApi } from '@/lib/api'
 import type { Settings, VersionInfo } from '@/lib/types'
 import { AppShell } from '@/components/layout/AppShell'
 import { Button, EmptyState, ErrorIcon, Input, Spinner } from '@/components/ui'
@@ -21,6 +21,15 @@ export default function SettingsPage() {
   const [saving,         setSaving]         = useState(false)
   const [saved,          setSaved]          = useState(false)
   const [error,          setError]          = useState('')
+  // Manual Plex server URL override (per-server, keyed by server id) -- lets
+  // a server's stored URL be edited, test-connected, and saved independently
+  // of the rest of Settings, mirroring the Radarr connect state below.
+  const [plexUrls,    setPlexUrls]    = useState<Record<string, string>>({})
+  const [plexTest,    setPlexTest]    = useState<{ ok: boolean; detail: string } | null>(null)
+  const [plexTesting, setPlexTesting] = useState(false)
+  const [plexSaving,  setPlexSaving]  = useState(false)
+  const [plexSaved,   setPlexSaved]   = useState(false)
+  const [plexError,   setPlexError]   = useState('')
   const [rapidApiOk,       setRapidApiOk]       = useState<boolean | null>(null)
   // Set when checking whether a RapidAPI key is stored fails. Supplementary
   // like versionLoadError: it leaves rapidApiOk at null (unknown) rather
@@ -73,6 +82,7 @@ export default function SettingsPage() {
   const loadSettings = useCallback(async () => {
     const s = await settingsApi.get()
     setSettings(s)
+    setPlexUrls(Object.fromEntries(s.selectedServers.map(srv => [srv.id, srv.url])))
     return s
   }, [])
   const { error: settingsError, retry: retrySettings } = useResource(loadSettings)
@@ -148,6 +158,40 @@ export default function SettingsPage() {
       setError((e as Error).message)
     } finally {
       setSaving(false)
+    }
+  }
+
+  async function testPlexUrl(serverId: string) {
+    setPlexTesting(true)
+    setPlexTest(null)
+    setPlexError('')
+    try {
+      setPlexTest(await plexApi.test(serverId, plexUrls[serverId] ?? ''))
+    } catch (e) {
+      setPlexError((e as Error).message) // surface, never swallow
+    } finally {
+      setPlexTesting(false)
+    }
+  }
+
+  async function savePlexUrl(serverId: string) {
+    setPlexSaving(true)
+    setPlexSaved(false)
+    setPlexError('')
+    try {
+      const res = await plexApi.saveUrl(serverId, plexUrls[serverId] ?? '')
+      // Sync to the response rather than trusting what was typed: the backend
+      // normalises the URL (adds a scheme, trims a trailing slash), and
+      // saveUrl() -- unlike radarrApi.save() -- already echoes the
+      // normalised value back, so there's no need for a separate re-fetch.
+      setSettings(s => s ? { ...s, selectedServers: res.selectedServers } : s)
+      setPlexUrls(p => ({ ...p, ...Object.fromEntries(res.selectedServers.map(srv => [srv.id, srv.url])) }))
+      setPlexSaved(true)
+      setTimeout(() => setPlexSaved(false), 2000)
+    } catch (e) {
+      setPlexError((e as Error).message)
+    } finally {
+      setPlexSaving(false)
     }
   }
 
@@ -436,15 +480,47 @@ export default function SettingsPage() {
         )}
 
         {/* Plex connection */}
-        <Section title="Plex Connection">
+        <Section title="Plex Connection" hint="Override a server's URL if Plex's own address for it doesn't work (e.g. behind a reverse proxy or on a different LAN path).">
           <div className="space-y-3">
             {settings.selectedServers.map(srv => (
-              <div key={srv.id} className="flex items-center gap-3 rounded-lg border border-[#1D2939] px-4 py-3">
-                <div className="h-2 w-2 rounded-full bg-[#12B76A]" />
-                <div className="min-w-0">
-                  <p className="text-sm font-medium text-[#F9FAFB]">{srv.name}</p>
-                  <p className="text-xs text-[#667085] truncate">{srv.url}</p>
+              <div key={srv.id} className="space-y-3 rounded-lg border border-[#1D2939] px-4 py-3">
+                <p className="text-sm font-medium text-[#F9FAFB]">{srv.name}</p>
+                <Input
+                  label="Server URL"
+                  placeholder="http://192.168.1.50:32400"
+                  value={plexUrls[srv.id] ?? srv.url}
+                  onChange={e => { setPlexUrls(p => ({ ...p, [srv.id]: e.target.value })); setPlexTest(null) }}
+                  className="font-mono text-xs"
+                />
+                {plexTest && (
+                  <div className={`rounded-lg border px-3.5 py-2.5 text-sm ${
+                    plexTest.ok
+                      ? 'border-[#12B76A]/30 bg-[#12B76A]/5 text-[#D0D5DD]'
+                      : 'border-[#B42318]/30 bg-[#FEF3F2]/5 text-[#FDA29B]'
+                  }`}>
+                    {plexTest.detail}
+                  </div>
+                )}
+                <div className="flex gap-2">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => testPlexUrl(srv.id)}
+                    loading={plexTesting}
+                    disabled={!(plexUrls[srv.id] ?? srv.url).trim()}
+                  >
+                    Test connection
+                  </Button>
+                  <Button
+                    size="sm"
+                    onClick={() => savePlexUrl(srv.id)}
+                    loading={plexSaving}
+                    disabled={!(plexUrls[srv.id] ?? srv.url).trim()}
+                  >
+                    {plexSaved ? 'Saved ✓' : 'Save'}
+                  </Button>
                 </div>
+                {plexError && <p className="text-xs text-[#FDA29B]">{plexError}</p>}
               </div>
             ))}
             {settings.selectedServers.length === 0 && (

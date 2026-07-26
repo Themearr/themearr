@@ -264,6 +264,21 @@ export const radarrApi = {
     }),
 }
 
+// ── Plex server (manual URL override) ─────────────────────────────────────────
+
+export const plexApi = {
+  test: (serverId: string, url: string) =>
+    request<{ ok: boolean; detail: string }>('/api/settings/plex/test', {
+      method: 'POST',
+      body: JSON.stringify({ serverId, url }),
+    }),
+  saveUrl: (serverId: string, url: string) =>
+    request<{ selectedServers: PlexServer[] }>('/api/settings/plex/server', {
+      method: 'POST',
+      body: JSON.stringify({ serverId, url }),
+    }),
+}
+
 // ── API key (for Radarr and scripts) ──────────────────────────────────────────
 
 export const apiKeyApi = {
