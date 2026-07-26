@@ -8,7 +8,7 @@ namespace Themearr.API.Controllers;
 
 [ApiController]
 [Route("api/settings")]
-public class SettingsController(Database db, RadarrLibrarySource radarr, IApiKeyStore keys) : ControllerBase
+public class SettingsController(Database db, RadarrLibrarySource radarr, PlexLibrarySource plex, IApiKeyStore keys) : ControllerBase
 {
     [HttpGet]
     public IActionResult Get() => Ok(new
@@ -184,6 +184,64 @@ public class SettingsController(Database db, RadarrLibrarySource radarr, IApiKey
     }
 
     public record RadarrPayload(string? Source, string? Url, string? ApiKey);
+
+    // ── Plex server URL (manual override) ──────────────────────────────────────
+    // Both endpoints are bearer-only: each sends or binds the stored Plex token to an
+    // operator-supplied host, so the externally-held API key must not reach them (same
+    // gate as apikey management above).
+    private IActionResult PlexUrlForbidden() => StatusCode(StatusCodes.Status403Forbidden,
+        new { detail = "Changing the Plex server URL requires the access token, not the API key." });
+
+    [HttpPost("plex/test")]
+    [Consumes("application/json")]
+    public async Task<IActionResult> TestPlex([FromBody] PlexUrlPayload payload, CancellationToken ct)
+    {
+        if (!AuthenticatedWithBearerToken) return PlexUrlForbidden();
+
+        var url = NormalizePlexUrl(payload.Url);
+        if (url is null)
+            return BadRequest(new { detail = "Enter a valid server address, e.g. http://192.168.1.50:32400." });
+
+        // Probe with the STORED token for that server — never a token from the request body.
+        if (!db.GetPlexServersDict().TryGetValue(payload.ServerId ?? "", out var srv))
+            return NotFound(new { detail = "That Plex server is not connected." });
+
+        var reason = await plex.ProbeAsync(url, srv.Token, ct);
+        return Ok(new { ok = reason is null, detail = reason ?? "Plex is reachable." });
+    }
+
+    [HttpPost("plex/server")]
+    [Consumes("application/json")]
+    public IActionResult SavePlexUrl([FromBody] PlexUrlPayload payload)
+    {
+        if (!AuthenticatedWithBearerToken) return PlexUrlForbidden();
+
+        var url = NormalizePlexUrl(payload.Url);
+        if (url is null)
+            return BadRequest(new { detail = "Enter a valid server address, e.g. http://192.168.1.50:32400." });
+
+        if (!db.UpdatePlexServerUrl(payload.ServerId ?? "", url))
+            return NotFound(new { detail = "That Plex server is not connected." });
+
+        return Ok(new { selectedServers = db.GetPlexServersRedacted() });
+    }
+
+    public record PlexUrlPayload(string? ServerId, string? Url);
+
+    // Normalizes a user-entered Plex address: trims, defaults to http:// when no scheme is
+    // given (Plex local is http on :32400), requires an http(s) URL with a host, and strips a
+    // trailing slash. Returns null when the input can't be a valid server address. Private and
+    // loopback hosts are allowed on purpose — Plex servers are private, like the discovered URLs.
+    private static string? NormalizePlexUrl(string? raw)
+    {
+        var text = (raw ?? "").Trim();
+        if (text.Length == 0) return null;
+        if (!text.Contains("://")) text = "http://" + text;
+        if (!Uri.TryCreate(text, UriKind.Absolute, out var uri)) return null;
+        if (uri.Scheme is not ("http" or "https")) return null;
+        if (string.IsNullOrEmpty(uri.Host)) return null;
+        return text.TrimEnd('/');
+    }
 
     // ── Themearr's own API key ───────────────────────────────────────────────
 
