@@ -506,7 +506,7 @@ public class Database(string dbPath)
         {
             while (r.Read())
             {
-                var row = ReadMovieRow(r);
+                var row = ReadMediaRow(r);
                 if (row != null) result.Add(row);
             }
         });
@@ -519,7 +519,7 @@ public class Database(string dbPath)
         Dictionary<string, object?>? result = null;
         conn.Query(
             "SELECT id, folderName, source, source_ref, title, year, sourcePath, status, ignored FROM movies WHERE id = @id",
-            r => { if (r.Read()) result = ReadMovieRow(r); }, ("@id", id));
+            r => { if (r.Read()) result = ReadMediaRow(r); }, ("@id", id));
         return result;
     }
 
@@ -564,6 +564,111 @@ public class Database(string dbPath)
     {
         using var conn = Open();
         conn.Execute("UPDATE movies SET ignored = @v WHERE id = @id", ("@v", ignored ? 1 : 0), ("@id", id));
+    }
+
+    // ── Shows ───────────────────────────────────────────────────────────────────
+
+    public void UpsertShows(IEnumerable<ShowRecord> shows)
+    {
+        using var conn = Open();
+        using var tx = conn.BeginTransaction();
+        foreach (var s in shows)
+        {
+            if (string.IsNullOrEmpty(s.Folder)) continue;
+            var id = MediaFolderId.For(s.Folder);
+            conn.Execute("""
+                INSERT INTO shows (id, folderName, source, source_ref, title, year, sourcePath, status, synced_at, plex_has_theme)
+                VALUES (@id, @f, @src, @ref, @t, @y, @sp, 'pending',
+                        COALESCE((SELECT synced_at FROM shows WHERE id = @id), strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+                        @pht)
+                ON CONFLICT(id) DO UPDATE SET
+                    folderName     = excluded.folderName,
+                    source         = excluded.source,
+                    source_ref     = excluded.source_ref,
+                    title          = excluded.title,
+                    year           = excluded.year,
+                    sourcePath     = excluded.sourcePath,
+                    plex_has_theme = excluded.plex_has_theme,
+                    synced_at      = COALESCE(shows.synced_at, excluded.synced_at)
+                """,
+                ("@id", id), ("@f", s.Folder), ("@src", s.Source), ("@ref", s.SourceRef),
+                ("@t", s.Title), ("@y", (object?)s.Year ?? DBNull.Value), ("@sp", s.SourcePath),
+                ("@pht", s.HasPlexTheme ? 1 : 0));
+        }
+        tx.Commit();
+    }
+
+    /// <summary>Deletes shows whose folder was not in the most recent sync; never deletes
+    /// ignored ones. Same contract as <see cref="PruneMoviesExcept"/>. Returns the count removed.</summary>
+    public int PruneShowsExcept(IEnumerable<string> keptFolders)
+    {
+        var keep = keptFolders.Where(f => !string.IsNullOrEmpty(f)).Select(MediaFolderId.For)
+                              .ToHashSet(StringComparer.Ordinal);
+        if (keep.Count == 0) return 0;
+
+        using var conn = Open();
+        var doomed = new List<string>();
+        conn.Query("SELECT id, ignored FROM shows", r =>
+        {
+            while (r.Read())
+                if (!keep.Contains(r.GetString(0)) && r.GetInt64(1) == 0) doomed.Add(r.GetString(0));
+        });
+        using var tx = conn.BeginTransaction();
+        foreach (var id in doomed) conn.Execute("DELETE FROM shows WHERE id = @id", ("@id", id));
+        tx.Commit();
+        return doomed.Count;
+    }
+
+    public List<Dictionary<string, object?>> GetAllShows()
+    {
+        using var conn = Open();
+        var result = new List<Dictionary<string, object?>>();
+        conn.Query("SELECT id, folderName, source, source_ref, title, year, sourcePath, status, ignored FROM shows ORDER BY status, title",
+            r => { while (r.Read()) { var row = ReadMediaRow(r); if (row != null) result.Add(row); } });
+        return result;
+    }
+
+    public Dictionary<string, object?>? GetShow(string id)
+    {
+        using var conn = Open();
+        Dictionary<string, object?>? result = null;
+        conn.Query("SELECT id, folderName, source, source_ref, title, year, sourcePath, status, ignored FROM shows WHERE id = @id",
+            r => { if (r.Read()) result = ReadMediaRow(r); }, ("@id", id));
+        return result;
+    }
+
+    /// <summary>Shows whose stored status is 'pending', not ignored, and that Plex does not
+    /// already theme. Cheap pre-filter for the show auto-download worker (no filesystem stat).</summary>
+    public List<Dictionary<string, object?>> GetPendingShows()
+    {
+        using var conn = Open();
+        var result = new List<Dictionary<string, object?>>();
+        conn.Query(
+            "SELECT id, folderName, source, source_ref, title, year, sourcePath FROM shows WHERE status = 'pending' AND ignored = 0 AND plex_has_theme = 0 ORDER BY title",
+            r =>
+            {
+                while (r.Read())
+                    result.Add(new Dictionary<string, object?>
+                    {
+                        ["id"] = r.GetString(0), ["folderName"] = r.IsDBNull(1) ? "" : r.GetString(1),
+                        ["source"] = r.GetString(2), ["sourceRef"] = r.IsDBNull(3) ? null : r.GetString(3),
+                        ["title"] = r.GetString(4), ["year"] = r.IsDBNull(5) ? null : r.GetInt32(5),
+                        ["sourcePath"] = r.IsDBNull(6) ? null : r.GetString(6),
+                    });
+            });
+        return result;
+    }
+
+    public void SetShowStatus(string id, string status)
+    {
+        using var conn = Open();
+        conn.Execute("UPDATE shows SET status = @s WHERE id = @id", ("@s", status), ("@id", id));
+    }
+
+    public void SetShowIgnored(string id, bool ignored)
+    {
+        using var conn = Open();
+        conn.Execute("UPDATE shows SET ignored = @v WHERE id = @id", ("@v", ignored ? 1 : 0), ("@id", id));
     }
 
     // ── Stats ─────────────────────────────────────────────────────────────────
@@ -685,7 +790,7 @@ public class Database(string dbPath)
         return result;
     }
 
-    private static Dictionary<string, object?>? ReadMovieRow(SqliteDataReader r)
+    private static Dictionary<string, object?>? ReadMediaRow(SqliteDataReader r)
     {
         var ignored = !r.IsDBNull(8) && r.GetInt32(8) == 1;
         var folder  = r.IsDBNull(1) ? "" : r.GetString(1);
