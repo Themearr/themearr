@@ -308,6 +308,7 @@ public class Database(string dbPath)
     {
         using var conn = Open();
         conn.Execute("DELETE FROM movies");
+        conn.Execute("DELETE FROM shows");
         conn.Execute("DELETE FROM settings");
     }
 
