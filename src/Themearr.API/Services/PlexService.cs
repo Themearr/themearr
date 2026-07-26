@@ -340,6 +340,99 @@ public class PlexService(HttpClient http, Database db, LocalFolderResolver folde
         return items;
     }
 
+    // ── Show fetch ────────────────────────────────────────────────────────────
+
+    public async Task<List<ShowRecord>> FetchShowsAsync(Action<string>? logFn = null)
+    {
+        var accessToken = db.GetSetting("plex_access_token").Trim();
+        var clientId    = db.GetSetting("plex_client_identifier").Trim();
+        if (string.IsNullOrEmpty(accessToken) || string.IsNullOrEmpty(clientId))
+            throw new InvalidOperationException("Plex sign-in has not been completed");
+
+        var servers  = db.GetPlexServers();
+        var libMap   = db.GetSelectedShowLibraries();
+        var result   = new List<ShowRecord>();
+        var seen     = new HashSet<string>();
+        var unresolvedCount = 0;
+        var unresolvedSample = "";
+
+        foreach (var srv in servers)
+        {
+            var serverId    = srv.GetValueOrDefault("id", "")?.ToString()?.Trim() ?? "";
+            var serverName  = srv.GetValueOrDefault("name", "")?.ToString()?.Trim() ?? "";
+            var primaryUrl  = srv.GetValueOrDefault("url", "")?.ToString()?.Trim() ?? "";
+            var urlList     = srv.GetValueOrDefault("urls") is JsonElement je && je.ValueKind == JsonValueKind.Array
+                ? je.EnumerateArray().Select(u => u.GetString() ?? "").Where(u => !string.IsNullOrEmpty(u)).ToList()
+                : new List<string> { primaryUrl };
+            var serverToken = srv.GetValueOrDefault("token", "")?.ToString()?.Trim() ?? "";
+            if (string.IsNullOrEmpty(serverId) || string.IsNullOrEmpty(serverToken)) continue;
+
+            var selectedKeys = libMap.GetValueOrDefault(serverId, []);
+            if (selectedKeys.Count == 0) continue;   // opt-in: nothing selected → skip this server
+
+            var libs = await ListLibrariesAsync(urlList, serverToken, "show");
+            libs = libs.Where(l => selectedKeys.Contains(l["key"]?.ToString() ?? "")).ToList();
+            logFn?.Invoke($"Scanning {libs.Count} show libraries on {serverName}");
+
+            foreach (var lib in libs)
+            {
+                var sectionKey = lib["key"]?.ToString() ?? "";
+                foreach (var show in await FetchShowsForSectionAsync(urlList, sectionKey, serverToken, clientId))
+                {
+                    if (string.IsNullOrEmpty(show.RatingKey)) continue;
+                    var showId = $"{serverId}:{show.RatingKey}";
+                    if (!seen.Add(showId)) continue;
+                    if (string.IsNullOrEmpty(show.RootFolder))
+                    {
+                        logFn?.Invoke($"Skipping {show.Title} — no folder reported by Plex");
+                        continue;
+                    }
+                    // Reuse the file-path resolver by appending a dummy filename, so the show's
+                    // ROOT folder is resolved through path-mappings (same trick as RadarrLibrarySource).
+                    var (folder, _) = folders.Resolve(show.RootFolder.TrimEnd('/', '\\') + "/placeholder.mkv");
+                    if (string.IsNullOrEmpty(folder))
+                    {
+                        unresolvedCount++;
+                        if (unresolvedSample.Length == 0) unresolvedSample = show.RootFolder;
+                        logFn?.Invoke($"Skipping {show.Title} — unresolved path: {show.RootFolder}  (add a Path Mapping)");
+                        continue;
+                    }
+                    result.Add(new ShowRecord(folder, "plex", showId, show.Title, show.Year, show.RootFolder, show.HasTheme));
+                }
+            }
+        }
+
+        db.SetSetting("last_show_sync_unresolved_count", unresolvedCount.ToString());
+        db.SetSetting("last_show_sync_unresolved_sample", unresolvedSample);
+        return result;
+    }
+
+    private async Task<List<PlexShow>> FetchShowsForSectionAsync(
+        List<string> serverUrls, string sectionKey, string serverToken, string clientId)
+    {
+        var shows = new List<PlexShow>();
+        var pageSize = 200; var start = 0; var activeUrl = serverUrls[0];
+        while (true)
+        {
+            var url = $"{activeUrl.TrimEnd('/')}/library/sections/{sectionKey}/all?" +
+                BuildQuery(ClientParams(clientId),
+                    ("type", "2"), ("X-Plex-Token", serverToken),
+                    ("X-Plex-Container-Start", start.ToString()), ("X-Plex-Container-Size", pageSize.ToString()));
+            var req = new HttpRequestMessage(HttpMethod.Get, url);
+            foreach (var (k, v) in ClientHeaders(clientId, serverToken)) req.Headers.TryAddWithoutValidation(k, v);
+            var resp = await http.SendAsync(req);
+            resp.EnsureSuccessStatusCode();
+            var body = await resp.Content.ReadAsStringAsync();
+            shows.AddRange(PlexShowThemes.Parse(body));
+            var root = XDocument.Parse(body).Root!;
+            var size = int.Parse(root.Attribute("size")?.Value ?? "0");
+            var totalSize = int.Parse(root.Attribute("totalSize")?.Value ?? size.ToString());
+            if (size <= 0 || start + size >= totalSize) break;
+            start += size;
+        }
+        return shows;
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private static string BuildAuthUrl(string code, string clientId, string forwardUrl)
