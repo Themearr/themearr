@@ -34,8 +34,8 @@ public class PendingMoviesTests
             new MovieRecord(d2.Path, "test", "2", "Bbb", 2021, ""),
             new MovieRecord(d3.Path, "test", "3", "Ccc", 2022, ""),
         ]);
-        db.SetMovieStatus(MovieFolderId.For(d2.Path), "downloaded");
-        db.SetMovieIgnored(MovieFolderId.For(d3.Path), true);
+        db.SetMovieStatus(MediaFolderId.For(d2.Path), "downloaded");
+        db.SetMovieIgnored(MediaFolderId.For(d3.Path), true);
 
         var pending = db.GetPendingMovies();
 

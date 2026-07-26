@@ -141,7 +141,7 @@ public class Database(string dbPath)
                     // Pre-resolution rows have no folder, so they cannot be acted on.
                     if (string.IsNullOrEmpty(folder)) continue;
 
-                    var newId = MovieFolderId.For(folder);
+                    var newId = MediaFolderId.For(folder);
                     remap[oldId] = newId;
 
                     raw.Add((newId, folder, "plex", $"{r.GetString(1)}:{r.GetString(2)}",
@@ -427,7 +427,7 @@ public class Database(string dbPath)
         foreach (var m in movies)
         {
             if (string.IsNullOrEmpty(m.Folder)) continue;
-            var id = MovieFolderId.For(m.Folder);
+            var id = MediaFolderId.For(m.Folder);
             conn.Execute("""
                 INSERT INTO movies (id, folderName, source, source_ref, title, year, sourcePath, status, synced_at)
                 VALUES (@id, @f, @src, @ref, @t, @y, @sp, 'pending',
@@ -459,12 +459,12 @@ public class Database(string dbPath)
     public int PruneMoviesExcept(IEnumerable<string> keptFolders)
     {
         // Build the kept set using derived IDs, not raw folder strings. folderName is stored
-        // verbatim (with or without trailing separators), but identity is MovieFolderId.For(folder)
+        // verbatim (with or without trailing separators), but identity is MediaFolderId.For(folder)
         // which normalizes those separators away. Comparing raw strings would incorrectly
         // delete a kept folder if the caller passes it with a different trailing-separator state.
         var keep = keptFolders
             .Where(f => !string.IsNullOrEmpty(f))
-            .Select(f => MovieFolderId.For(f))
+            .Select(f => MediaFolderId.For(f))
             .ToHashSet(StringComparer.Ordinal);
         if (keep.Count == 0) return 0;
 
@@ -748,7 +748,7 @@ public record StatsResult(
 
 /// <summary>
 /// A movie as reported by a library source. There is no id: identity is the resolved
-/// local folder, and the stored id is derived from it via <see cref="MovieFolderId"/>.
+/// local folder, and the stored id is derived from it via <see cref="MediaFolderId"/>.
 /// </summary>
 public record MovieRecord(
     string Folder,

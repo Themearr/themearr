@@ -81,7 +81,7 @@ public class MoviesMigrationTests
         new Database(path).Init();
 
         var db = new Database(path);
-        var heat = db.GetMovie(MovieFolderId.For(heatFolder));
+        var heat = db.GetMovie(MediaFolderId.For(heatFolder));
         Assert.NotNull(heat);
         Assert.Equal(heatFolder, heat!["folderName"]?.ToString());
 
@@ -93,11 +93,11 @@ public class MoviesMigrationTests
         using (var cmd = conn.CreateCommand())
         {
             cmd.CommandText = "SELECT status FROM movies WHERE id = @id";
-            cmd.Parameters.AddWithValue("@id", MovieFolderId.For(heatFolder));
+            cmd.Parameters.AddWithValue("@id", MediaFolderId.For(heatFolder));
             Assert.Equal("downloaded", (string)cmd.ExecuteScalar()!);
         }
 
-        var ronin = db.GetMovie(MovieFolderId.For(roninFolder));
+        var ronin = db.GetMovie(MediaFolderId.For(roninFolder));
         Assert.NotNull(ronin);
         Assert.Equal(1L, Convert.ToInt64(ronin!["ignored"]));
     }
@@ -112,7 +112,7 @@ public class MoviesMigrationTests
 
         new Database(path).Init();
 
-        var movie = new Database(path).GetMovie(MovieFolderId.For(heatFolder));
+        var movie = new Database(path).GetMovie(MediaFolderId.For(heatFolder));
         Assert.Equal("plex", movie!["source"]?.ToString());
         Assert.Equal("srv1:101", movie["sourceRef"]?.ToString());
     }
@@ -135,7 +135,7 @@ public class MoviesMigrationTests
 
         var history = new Database(path).GetThemeHistory();
         var entry = Assert.Single(history);
-        Assert.Equal(MovieFolderId.For("/movies/Heat (1995)"), entry["movieId"]?.ToString());
+        Assert.Equal(MediaFolderId.For("/movies/Heat (1995)"), entry["movieId"]?.ToString());
     }
 
     [Fact]
@@ -185,7 +185,7 @@ public class MoviesMigrationTests
         conn.Open();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = "SELECT status FROM movies WHERE id = @id";
-        cmd.Parameters.AddWithValue("@id", MovieFolderId.For(heatFolder));
+        cmd.Parameters.AddWithValue("@id", MediaFolderId.For(heatFolder));
         Assert.Equal("downloaded", (string)cmd.ExecuteScalar()!);
     }
 
