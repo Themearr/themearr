@@ -184,8 +184,11 @@ export default function SettingsPage() {
       // normalises the URL (adds a scheme, trims a trailing slash), and
       // saveUrl() -- unlike radarrApi.save() -- already echoes the
       // normalised value back, so there's no need for a separate re-fetch.
+      // Only the saved server's own entry is touched -- res.selectedServers
+      // is the full list, and overwriting every entry would silently discard
+      // any unsaved edit the user has typed into another server's field.
       setSettings(s => s ? { ...s, selectedServers: res.selectedServers } : s)
-      setPlexUrls(p => ({ ...p, ...Object.fromEntries(res.selectedServers.map(srv => [srv.id, srv.url])) }))
+      setPlexUrls(p => ({ ...p, [serverId]: res.selectedServers.find(srv => srv.id === serverId)?.url ?? p[serverId] }))
       setPlexSaved(true)
       setTimeout(() => setPlexSaved(false), 2000)
     } catch (e) {
