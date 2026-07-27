@@ -65,6 +65,7 @@ public class Database(string dbPath)
             """);
         MigrateMoviesTable(conn);
         MigrateHistoryTable(conn);
+        MigrateHistoryTableV2(conn);
         MigrateMoviesTableV2(conn);
         MigrateMoviesTableV3(conn);
         MigrateMoviesTableV4(conn);
@@ -91,6 +92,21 @@ public class Database(string dbPath)
             conn.Execute("ALTER TABLE theme_history ADD COLUMN theme_title TEXT");
         if (!columns.Contains("source_url"))
             conn.Execute("ALTER TABLE theme_history ADD COLUMN source_url TEXT");
+    }
+
+    // History predates TV shows, so every pre-existing row is a movie. The DEFAULT
+    // backfills them in place, which keeps GetThemeHistory's non-null read safe on
+    // upgraded installs without a separate UPDATE pass.
+    private static void MigrateHistoryTableV2(SqliteConnection conn)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "PRAGMA table_info(theme_history)";
+        var columns = new HashSet<string>();
+        using (var r = cmd.ExecuteReader())
+            while (r.Read()) columns.Add(r.GetString(1));
+
+        if (!columns.Contains("media_type"))
+            conn.Execute("ALTER TABLE theme_history ADD COLUMN media_type TEXT NOT NULL DEFAULT 'movie'");
     }
 
     private static void MigrateMoviesTableV2(SqliteConnection conn)
@@ -700,16 +716,19 @@ public class Database(string dbPath)
 
         var coverage = total > 0 ? Math.Round(downloaded * 100.0 / total, 1) : 0.0;
 
-        // Themes added in the last 7 days
+        // Themes added in the last 7 days. Scoped to movies: every other number on this
+        // dashboard (total, coverage, pending) comes from the movies table alone, so
+        // counting show themes here would inflate the week against a movies-only
+        // denominator. Shows get their own stats with the shows UI.
         int addedThisWeek = 0;
         var weekAgo = DateTime.UtcNow.AddDays(-7).ToString("o");
-        conn.Query("SELECT COUNT(*) FROM theme_history WHERE downloaded_at >= @w",
+        conn.Query("SELECT COUNT(*) FROM theme_history WHERE downloaded_at >= @w AND media_type = 'movie'",
             r => { if (r.Read()) addedThisWeek = (int)r.GetInt64(0); }, ("@w", weekAgo));
 
-        // Last 5 downloaded themes
+        // Last 5 downloaded movie themes (see above — this list feeds the movies dashboard).
         var recentActivity = new List<Dictionary<string, object?>>();
         conn.Query(
-            "SELECT id, movie_id, movie_title, movie_year, theme_title, source_url, downloaded_at FROM theme_history ORDER BY id DESC LIMIT 5",
+            "SELECT id, movie_id, movie_title, movie_year, theme_title, source_url, downloaded_at FROM theme_history WHERE media_type = 'movie' ORDER BY id DESC LIMIT 5",
             r =>
             {
                 while (r.Read())
@@ -762,16 +781,23 @@ public class Database(string dbPath)
 
     // ── History ───────────────────────────────────────────────────────────────
 
-    public void AddThemeHistory(string movieId, string movieTitle, int? movieYear, string? themeTitle, string? sourceUrl)
+    /// <summary>
+    /// Records a downloaded theme. The <c>movie_*</c> column names are historical — the
+    /// table now carries shows too, discriminated by <paramref name="mediaType"/>
+    /// ("movie" | "show"), which defaults to "movie" so every existing caller is unchanged.
+    /// </summary>
+    public void AddThemeHistory(string movieId, string movieTitle, int? movieYear,
+        string? themeTitle, string? sourceUrl, string mediaType = "movie")
     {
         using var conn = Open();
         conn.Execute(
-            "INSERT INTO theme_history (movie_id, movie_title, movie_year, theme_title, source_url, downloaded_at) VALUES (@mid, @t, @y, @tt, @url, @dt)",
+            "INSERT INTO theme_history (movie_id, movie_title, movie_year, theme_title, source_url, downloaded_at, media_type) VALUES (@mid, @t, @y, @tt, @url, @dt, @mt)",
             ("@mid", movieId), ("@t", movieTitle),
             ("@y",   (object?)movieYear  ?? DBNull.Value),
             ("@tt",  (object?)themeTitle ?? DBNull.Value),
             ("@url", (object?)sourceUrl  ?? DBNull.Value),
-            ("@dt",  DateTime.UtcNow.ToString("o")));
+            ("@dt",  DateTime.UtcNow.ToString("o")),
+            ("@mt",  mediaType));
     }
 
     public List<Dictionary<string, object?>> GetThemeHistory(int limit = 200)
@@ -779,7 +805,8 @@ public class Database(string dbPath)
         using var conn = Open();
         var result = new List<Dictionary<string, object?>>();
         conn.Query(
-            "SELECT id, movie_id, movie_title, movie_year, theme_title, source_url, downloaded_at FROM theme_history ORDER BY id DESC LIMIT @lim",
+            // media_type is appended last so the existing ordinal reads stay put.
+            "SELECT id, movie_id, movie_title, movie_year, theme_title, source_url, downloaded_at, media_type FROM theme_history ORDER BY id DESC LIMIT @lim",
             r =>
             {
                 while (r.Read())
@@ -792,6 +819,7 @@ public class Database(string dbPath)
                         ["themeTitle"]   = r.IsDBNull(4) ? null : r.GetString(4),
                         ["sourceUrl"]    = r.IsDBNull(5) ? null : r.GetString(5),
                         ["downloadedAt"] = r.GetString(6),
+                        ["mediaType"]    = r.GetString(7),
                     });
             }, ("@lim", limit));
         return result;
