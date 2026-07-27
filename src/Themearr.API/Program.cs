@@ -60,6 +60,7 @@ builder.Services.AddSingleton<DownloadService>();
 builder.Services.AddSingleton<PosterUrlSigner>();
 builder.Services.AddSingleton<IApiKeyStore, ApiKeyStore>();
 builder.Services.AddHostedService<AutoSyncService>();
+builder.Services.AddHostedService<ShowAutoSyncService>();
 // Register AutoDownloadService as a singleton AND wire its hosted-service lifecycle
 // off the same instance so a controller can ask it for diagnostics.
 builder.Services.AddSingleton<AutoDownloadService>();
