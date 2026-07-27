@@ -64,6 +64,9 @@ builder.Services.AddHostedService<AutoSyncService>();
 // off the same instance so a controller can ask it for diagnostics.
 builder.Services.AddSingleton<AutoDownloadService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<AutoDownloadService>());
+// Same shape for the show-side worker, so the shows API can read its diagnostics.
+builder.Services.AddSingleton<ShowAutoDownloadService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<ShowAutoDownloadService>());
 
 // ── System page: health checks + scheduled tasks ──────────────────────────────
 builder.Services.AddSingleton<TaskRegistry>();
