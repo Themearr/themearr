@@ -203,7 +203,7 @@ public class AutoDownloadService(
         List<Dictionary<string, object?>> results;
         try
         {
-            results = await yt.SearchAsync(query, maxResults: 8, movieTitle: title, movieYear: year);
+            results = await yt.SearchAsync(query, maxResults: 8, title: title, year: year);
         }
         catch (Exception ex)
         {

@@ -50,7 +50,7 @@ public class MoviesController(
 
         try
         {
-            var results = await youtube.SearchAsync(query, maxResults: 8, movieTitle: title, movieYear: yearInt);
+            var results = await youtube.SearchAsync(query, maxResults: 8, title: title, year: yearInt);
             return Ok(new { movie, results });
         }
         catch (Exception ex)
@@ -155,7 +155,7 @@ public class MoviesController(
         List<Dictionary<string, object?>> results;
         try
         {
-            results = await youtube.SearchAsync(query, maxResults: 8, movieTitle: title, movieYear: yearInt);
+            results = await youtube.SearchAsync(query, maxResults: 8, title: title, year: yearInt);
         }
         catch (Exception ex)
         {

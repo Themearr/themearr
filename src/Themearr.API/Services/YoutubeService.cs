@@ -7,7 +7,7 @@ public class YoutubeService
     private readonly YoutubeClient _yt = new();
 
     public async Task<List<Dictionary<string, object?>>> SearchAsync(
-        string query, int maxResults = 8, string? movieTitle = null, int? movieYear = null)
+        string query, int maxResults = 8, string? title = null, int? year = null)
     {
         var raw = new List<(Dictionary<string, object?> result, int score)>();
 
@@ -32,7 +32,7 @@ public class YoutubeService
                 ["bestMatch"] = false,
             };
 
-            var score = Score(video.Title, video.Author.ChannelTitle, video.Duration, movieTitle, movieYear);
+            var score = Score(video.Title, video.Author.ChannelTitle, video.Duration, title, year);
             raw.Add((result, score));
 
             if (raw.Count >= maxResults) break;
@@ -54,16 +54,16 @@ public class YoutubeService
     }
 
     private static int Score(string videoTitle, string channel, TimeSpan? duration,
-        string? movieTitle, int? movieYear)
+        string? title, int? year)
     {
         int score = 0;
         var vt = videoTitle.ToLowerInvariant();
         var ch = channel.ToLowerInvariant();
 
-        // ── Movie title match ─────────────────────────────────────────────────
-        if (!string.IsNullOrEmpty(movieTitle))
+        // ── Title match ───────────────────────────────────────────────────────
+        if (!string.IsNullOrEmpty(title))
         {
-            var mt = movieTitle.ToLowerInvariant();
+            var mt = title.ToLowerInvariant();
             if (vt.Contains(mt))
                 score += 30;
             else
