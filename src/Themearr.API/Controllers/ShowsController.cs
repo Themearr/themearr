@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Net.Http.Headers;
 using Themearr.API.Data;
 using Themearr.API.Services;
 
@@ -113,6 +114,66 @@ public class ShowsController(
 
     [HttpGet("{showId}/download/status")]
     public IActionResult DownloadStatus(string showId) => Ok(download.GetStatus(showId, "show"));
+
+    [HttpPost("{showId}/ignore")]
+    public IActionResult IgnoreShow(string showId)
+    {
+        if (db.GetShow(showId) == null) return NotFound(new { detail = "Show not found" });
+        db.SetShowIgnored(showId, true);
+        return Ok(new { ignored = true });
+    }
+
+    [HttpPost("{showId}/unignore")]
+    public IActionResult UnignoreShow(string showId)
+    {
+        if (db.GetShow(showId) == null) return NotFound(new { detail = "Show not found" });
+        db.SetShowIgnored(showId, false);
+        return Ok(new { ignored = false });
+    }
+
+    [HttpDelete("{showId}/theme")]
+    public IActionResult DeleteTheme(string showId)
+    {
+        var show = db.GetShow(showId);
+        if (show == null) return NotFound(new { detail = "Show not found" });
+
+        var folder = show["folderName"]?.ToString() ?? "";
+        if (string.IsNullOrEmpty(folder)) return BadRequest(new { detail = "Show has no folder" });
+
+        // Confine deletes to the configured library roots (see DownloadService).
+        var roots = db.GetLibraryPaths();
+        if (roots.Count > 0 && !ThemeFiles.IsWithinRoots(folder, roots))
+            return BadRequest(new { detail = "Refusing to delete outside the configured library roots." });
+
+        var deleted = ThemeFiles.DeleteThemes(folder);
+
+        // Reset the stored status so the column stays honest and the auto-download worker's
+        // stored-status pre-filter re-adopts this show — same contract as the movie endpoint.
+        if (deleted) db.SetShowStatus(showId, "pending");
+
+        return Ok(new { deleted });
+    }
+
+    [HttpGet("{showId}/theme/audio")]
+    public IActionResult GetThemeAudio(string showId)
+    {
+        var show = db.GetShow(showId);
+        if (show == null) return NotFound(new { detail = "Show not found" });
+
+        var folder = show["folderName"]?.ToString() ?? "";
+        if (string.IsNullOrEmpty(folder)) return NotFound(new { detail = "No folder" });
+
+        var themeFile = ThemeFiles.FindThemeFile(folder);
+        if (themeFile == null) return NotFound(new { detail = "No theme file" });
+
+        // ETag + Last-Modified so repeated visits don't re-download the same theme file.
+        // Framework honours If-None-Match / If-Modified-Since and returns 304 automatically.
+        var info = new FileInfo(themeFile);
+        var etag = new EntityTagHeaderValue($"\"{info.Length:x}-{info.LastWriteTimeUtc.Ticks:x}\"");
+        Response.Headers.CacheControl = "private, max-age=300";
+        return PhysicalFile(themeFile, ThemeFiles.ContentTypeFor(themeFile),
+            info.LastWriteTimeUtc, etag, enableRangeProcessing: true);
+    }
 }
 
 public record ShowDownloadRequest(string VideoId);

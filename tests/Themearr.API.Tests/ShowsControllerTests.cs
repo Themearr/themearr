@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -39,7 +40,13 @@ public class ShowsControllerTests
         var download = new DownloadService(new NullProvider(), db, new StubHttpClientFactory(), config,
             NullLogger<DownloadService>.Instance);
         return new ShowsController(db, new YoutubeService(), download, new PosterUrlSigner([1, 2, 3]),
-            NullLogger<ShowsController>.Instance);
+            NullLogger<ShowsController>.Instance)
+        {
+            // GetThemeAudio sets response cache headers, and `Response` throws without an
+            // HttpContext. A real request always has one; a directly-constructed controller
+            // does not, so supply a stand-in.
+            ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() },
+        };
     }
 
     [Fact]
