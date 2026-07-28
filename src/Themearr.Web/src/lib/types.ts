@@ -30,6 +30,39 @@ export interface PlexServer {
   presence: boolean
 }
 
+/** Every status any media type can report. Movies never use 'plexTheme'. */
+export type MediaStatus = 'pending' | 'downloaded' | 'plexTheme' | 'ignored'
+
+/**
+ * The shape MediaGrid renders. `Movie` is assignable to this — its narrower status
+ * union is a subset of MediaStatus — so nothing about movies has to change.
+ */
+export interface MediaItem {
+  id: string
+  source: string
+  sourceRef: string
+  title: string
+  year: number | null
+  sourcePath: string | null
+  folderName: string
+  status: MediaStatus
+  posterUrl: string | null
+}
+
+export interface Show extends MediaItem {
+  /** True when Plex already has a theme for this show (Plex Pass, or a local file it found). */
+  plexHasTheme: boolean
+}
+
+export interface ShowStats {
+  total: number
+  downloaded: number
+  plexTheme: number
+  pending: number
+  ignored: number
+  coverage: number
+}
+
 export interface PlexLibrary {
   key: string
   title: string
@@ -54,6 +87,8 @@ export interface SetupStatus {
 export interface Settings {
   selectedServers: PlexServer[]
   selectedLibraries: Record<string, string[]>
+  /** Optional: absent on a response from a server older than 1d. */
+  selectedShowLibraries?: Record<string, string[]>
   pathMappings: PathMapping[]
   libraryPaths: string[]
   advanced: {

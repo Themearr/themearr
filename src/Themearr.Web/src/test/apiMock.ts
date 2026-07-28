@@ -26,6 +26,10 @@ export function makeApiMock() {
       'list', 'search', 'download', 'downloadUrl', 'downloadStatus', 'autoDownload',
       'deleteTheme', 'ignoreMovie', 'unignoreMovie', 'themeAudioObjectUrl',
     ),
+    showsApi: group(
+      'list', 'search', 'download', 'downloadUrl', 'downloadStatus',
+      'deleteTheme', 'ignoreShow', 'unignoreShow', 'stats', 'themeAudioObjectUrl',
+    ),
     settingsApi: group('get', 'save'),
     syncApi: group('start', 'status'),
     historyApi: group('get'),
