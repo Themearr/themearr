@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiKeyApi, plexApi, radarrApi, rapidApiApi, settingsApi, setupApi, versionApi } from '@/lib/api'
-import type { Settings, VersionInfo } from '@/lib/types'
+import type { PlexLibrary, Settings, VersionInfo } from '@/lib/types'
 import { AppShell } from '@/components/layout/AppShell'
 import { Button, EmptyState, ErrorIcon, Input, Spinner } from '@/components/ui'
 import { useResource } from '@/lib/useResource'
@@ -12,6 +12,13 @@ const LIBRARY_SOURCE_OPTIONS: { value: 'plex' | 'radarr'; label: string }[] = [
 
 export default function SettingsPage() {
   const [settings, setSettings] = useState<Settings | null>(null)
+
+  // ── Show libraries (opt-in: nothing selected means shows stay off) ──────────
+  const [plexLibraries, setPlexLibraries] = useState<Record<string, PlexLibrary[]>>({})
+  const [showLibs,      setShowLibs]      = useState<Record<string, string[]>>({})
+  const [savingShowLibs, setSavingShowLibs] = useState(false)
+  const [showLibsSaved,  setShowLibsSaved]  = useState(false)
+  const [showLibsError,  setShowLibsError]  = useState('')
   const [version,  setVersion]  = useState<VersionInfo | null>(null)
   // Set when the initial version fetch fails. Supplementary -- unlike
   // settingsApi.get() below, nothing else on the page depends on the
@@ -83,6 +90,16 @@ export default function SettingsPage() {
     const s = await settingsApi.get()
     setSettings(s)
     setPlexUrls(Object.fromEntries(s.selectedServers.map(srv => [srv.id, srv.url])))
+    setShowLibs(s.selectedShowLibraries ?? {})
+
+    // The show-library picker needs the server's library list, which only the setup
+    // endpoint returns. Supplementary: a failure here leaves the picker empty with a
+    // notice rather than gating the whole settings page.
+    if (s.selectedServers.length > 0) {
+      setupApi.plexLibraries(s.selectedServers)
+        .then(r => setPlexLibraries(r.libraries))
+        .catch((e: Error) => setShowLibsError(e.message || 'Could not list your Plex libraries.'))
+    }
     return s
   }, [])
   const { error: settingsError, retry: retrySettings } = useResource(loadSettings)
@@ -158,6 +175,35 @@ export default function SettingsPage() {
       setError((e as Error).message)
     } finally {
       setSaving(false)
+    }
+  }
+
+  function toggleShowLib(serverId: string, key: string) {
+    setShowLibsSaved(false)
+    setShowLibs(prev => {
+      const cur = prev[serverId] ?? []
+      return { ...prev, [serverId]: cur.includes(key) ? cur.filter(k => k !== key) : [...cur, key] }
+    })
+  }
+
+  // Sends the whole settings object with the show selection replaced. The endpoint takes
+  // one payload and writes the other collections unconditionally, so a partial object
+  // would clear them. The key is always sent — the server reads an absent
+  // selectedShowLibraries as "leave unchanged", so omitting it when everything is
+  // unticked would look like a successful save that quietly kept the old selection.
+  async function saveShowLibraries() {
+    if (!settings) return
+    setSavingShowLibs(true)
+    setShowLibsError('')
+    try {
+      const next = { ...settings, selectedShowLibraries: showLibs }
+      await settingsApi.save(next)
+      setSettings(next)
+      setShowLibsSaved(true)
+    } catch (e) {
+      setShowLibsError((e as Error)?.message || 'Could not save the show libraries.')
+    } finally {
+      setSavingShowLibs(false)
     }
   }
 
@@ -529,6 +575,35 @@ export default function SettingsPage() {
             {settings.selectedServers.length === 0 && (
               <p className="text-sm text-[#667085]">No server connected.</p>
             )}
+          </div>
+        </Section>
+
+        {/* Show libraries — opt-in, and separate from the movie library selection */}
+        <Section title="Show Libraries" hint="Themearr only looks for show themes in the Plex libraries you pick here. Leave them all unticked to keep shows switched off.">
+          <div className="space-y-3">
+            {Object.entries(plexLibraries).flatMap(([serverId, libs]) =>
+              libs.filter(l => l.type === 'show').map(l => (
+                <label key={`${serverId}:${l.key}`} className="flex items-center gap-2 text-sm text-[#D0D5DD]">
+                  <input
+                    type="checkbox"
+                    checked={(showLibs[serverId] ?? []).includes(l.key)}
+                    onChange={() => toggleShowLib(serverId, l.key)}
+                  />
+                  {l.title}
+                </label>
+              )))}
+
+            {Object.values(plexLibraries).every(libs => !libs.some(l => l.type === 'show')) && (
+              <p className="text-sm text-[#667085]">No TV show libraries found on your Plex server.</p>
+            )}
+
+            <div className="flex items-center gap-3">
+              <Button size="sm" onClick={saveShowLibraries} loading={savingShowLibs}>
+                Save show libraries
+              </Button>
+              {showLibsSaved && <p className="text-xs text-[#12B76A]">Saved ✓</p>}
+            </div>
+            {showLibsError && <p className="text-xs text-[#FDA29B]">{showLibsError}</p>}
           </div>
         </Section>
 
