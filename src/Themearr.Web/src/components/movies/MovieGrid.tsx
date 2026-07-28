@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import type { Movie } from '@/lib/types'
 import { moviesApi } from '@/lib/api'
 import { Button, EmptyState, Spinner } from '@/components/ui'
-import { SearchModal } from './SearchModal'
+import { SearchModal } from '@/components/media/SearchModal'
+import { moviesAdapter } from '@/lib/media/adapter'
 
 interface MovieGridProps {
   movies: Movie[]
@@ -159,7 +160,8 @@ function MovieActionModal({ movie, onClose, onUpdated }: {
   if (view === 'search') {
     return (
       <SearchModal
-        movie={movie}
+        item={movie}
+        adapter={moviesAdapter}
         onClose={onClose}
         onDownloaded={id => onUpdated(id, 'downloaded')}
       />
