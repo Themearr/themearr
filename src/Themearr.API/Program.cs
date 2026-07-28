@@ -128,18 +128,12 @@ db.SetSetting("app_version", appVersion);
 // Generate the external API key on first run, so it exists before anything asks for it.
 _ = app.Services.GetRequiredService<IApiKeyStore>().Current;
 
-// Security headers on every response (static SPA + API). Posters/themes are served
-// same-origin now, so a tight CSP doesn't need any external sources.
+// Security headers on every response (static SPA + API). The policy lives in
+// SecurityHeaders so each allowance is pinned to the feature needing it — see
+// SecurityHeadersTests.
 app.Use(async (ctx, next) =>
 {
-    var h = ctx.Response.Headers;
-    h["X-Content-Type-Options"] = "nosniff";
-    h["X-Frame-Options"] = "DENY";
-    h["Referrer-Policy"] = "no-referrer";
-    h["Content-Security-Policy"] =
-        "default-src 'self'; img-src 'self' data:; media-src 'self'; " +
-        "style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; " +
-        "connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'";
+    Themearr.API.Services.SecurityHeaders.Apply(ctx.Response.Headers);
     await next();
 });
 
