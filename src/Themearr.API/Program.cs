@@ -147,13 +147,10 @@ app.UseRateLimiter();
 
 if (app.Environment.IsDevelopment()) app.UseCors();
 
-// Bearer-token auth for every /api/* route except /api/auth/*
+// Bearer-token auth for every /api/* route except the public prefixes — the predicate
+// lives in ApiAuthMiddleware.RequiresAuth so the boundary is unit-testable (AuthBoundaryTests).
 app.UseWhen(
-    ctx => ctx.Request.Path.StartsWithSegments("/api")
-           && !ctx.Request.Path.StartsWithSegments("/api/auth")
-           // Poster URLs self-authenticate via a signed, expiring query string so an
-           // <img> tag (which can't send a bearer header) can still load them.
-           && !ctx.Request.Path.StartsWithSegments("/api/poster"),
+    ctx => Themearr.API.Services.ApiAuthMiddleware.RequiresAuth(ctx.Request.Path),
     branch => branch.UseMiddleware<Themearr.API.Services.ApiAuthMiddleware>());
 
 app.UseDefaultFiles();
