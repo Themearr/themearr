@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { moviesApi, settingsApi } from '@/lib/api'
-import type { Movie, YoutubeResult } from '@/lib/types'
+import { settingsApi } from '@/lib/api'
+import type { MediaItem, YoutubeResult } from '@/lib/types'
 import { AppShell } from '@/components/layout/AppShell'
 import { Button, EmptyState, ErrorIcon, Input, Spinner } from '@/components/ui'
 import { useResource } from '@/lib/useResource'
+import { moviesAdapter, showsAdapter } from '@/lib/media/adapter'
 
 // Bounds the polled `downloadStatus` request below (the "in-flight" guard's
 // own comment explains what it's guarding against). `request()` in
@@ -24,6 +25,12 @@ const STATUS_TIMEOUT_MS = 8000
 const STATUS_MAX_FAILURES = 3
 
 export default function QueuePage() {
+  // Component state, deliberately not persisted and not in the URL: someone who once
+  // looked at shows would otherwise return to the Queue, find an empty triage list and
+  // conclude it is broken. Movies are the default library and the safe default view.
+  const [media, setMedia] = useState<'movies' | 'shows'>('movies')
+  const adapter = media === 'movies' ? moviesAdapter : showsAdapter
+
   const [currentIdx,   setCurrentIdx]   = useState(0)
   const [results,      setResults]      = useState<YoutubeResult[]>([])
   const [searching,    setSearching]    = useState(false)
@@ -45,8 +52,26 @@ export default function QueuePage() {
 
   // The initial load. Routed through useResource so a failed request surfaces
   // as an error screen instead of "every movie already has a theme".
-  const { data: movies, error: moviesError, retry: retryMovies } = useResource(useCallback(() => moviesApi.list(), []))
+  const { data: movies, error: moviesError, retry: retryMovies } = useResource(useCallback(() => adapter.list(), [adapter]))
+  // 'pending' only — a plexTheme show is not outstanding work, which matches
+  // GetPendingShows filtering on plex_has_theme = 0. Manual triage and the
+  // auto-download worker therefore agree on what is left to do.
   const pending = movies ? movies.filter(m => m.status === 'pending') : null
+
+  // useResource only refetches when retry() bumps its attempt counter — handing it a new
+  // fetcher identity is not enough — so switching media has to ask for the reload
+  // explicitly, and reset everything keyed to the old list.
+  function switchMedia(next: 'movies' | 'shows') {
+    if (next === media) return
+    setMedia(next)
+    setCurrentIdx(0)
+    setResults([])
+    setError('')
+    setManualUrl('')
+    searchedFor.current      = null
+    autoTriggeredFor.current = null
+    retryMovies()
+  }
 
   const current   = pending?.[currentIdx] ?? null
   const remaining = pending ? Math.max(0, pending.length - currentIdx) : 0
@@ -100,18 +125,18 @@ export default function QueuePage() {
     setManualUrl('')
     setSearchQuery('')
     setSearching(true)
-    moviesApi.search(current.id)
+    adapter.search(current.id)
       .then(data => setResults(data.results))
       .catch((e: Error) => setError(e.message))
       .finally(() => setSearching(false))
-  }, [current])
+  }, [current, adapter])
 
   function reSearch(q?: string) {
     if (!current) return
     setResults([])
     setError('')
     setSearching(true)
-    moviesApi.search(current.id, q || undefined)
+    adapter.search(current.id, q || undefined)
       .then(data => setResults(data.results))
       .catch((e: Error) => setError(e.message))
       .finally(() => setSearching(false))
@@ -143,7 +168,7 @@ export default function QueuePage() {
   async function skipForever() {
     if (!current) return
     try {
-      await moviesApi.ignoreMovie(current.id)
+      await adapter.ignore(current.id)
     } catch (e) {
       // The server didn't record the ignore, so advancing would hide a movie it
       // still has as pending -- it'd reappear on the next load, making the button
@@ -165,14 +190,14 @@ export default function QueuePage() {
     downloadingMovieId.current = current.id
     setDownloading(true)
     setError('')
-    moviesApi.autoDownload(current.id)
+    adapter.autoDownload(current.id)
       .catch((e: Error) => {
         setError(e.message)
         setDownloading(false)
         downloadingMovieId.current = null
         autoTriggeredFor.current = null // allow manual retry
       })
-  }, [autoMode, current, downloading])
+  }, [autoMode, current, downloading, adapter])
 
   // ── Poll download status while a download is in flight ────────────────────
   useEffect(() => {
@@ -206,7 +231,7 @@ export default function QueuePage() {
       const timeoutId = setTimeout(() => controller.abort(), STATUS_TIMEOUT_MS)
 
       try {
-        const st = await moviesApi.downloadStatus(movieId, { signal: controller.signal })
+        const st = await adapter.downloadStatus(movieId, { signal: controller.signal })
         failures = 0 // a status came back -- we're still in contact with the server
         if (st.logs?.length) setDownloadLogs(st.logs)
         if (!st.finished) return
@@ -246,7 +271,7 @@ export default function QueuePage() {
     }, 1000)
 
     return () => clearInterval(id)
-  }, [downloading])
+  }, [downloading, adapter])
 
   async function doDownload(videoId: string) {
     if (!current) return
@@ -254,7 +279,7 @@ export default function QueuePage() {
     setDownloading(true)
     setError('')
     try {
-      await moviesApi.download(current.id, videoId)
+      await adapter.download(current.id, videoId)
     } catch (e) {
       setError((e as Error).message)
       setDownloading(false)
@@ -268,7 +293,7 @@ export default function QueuePage() {
     setDownloading(true)
     setError('')
     try {
-      await moviesApi.downloadUrl(current.id, manualUrl.trim())
+      await adapter.downloadUrl(current.id, manualUrl.trim())
     } catch (e) {
       setError((e as Error).message)
       setDownloading(false)
@@ -282,7 +307,7 @@ export default function QueuePage() {
     setDownloading(true)
     setError('')
     try {
-      await moviesApi.autoDownload(current.id)
+      await adapter.autoDownload(current.id)
     } catch (e) {
       setError((e as Error).message)
       setDownloading(false)
@@ -290,10 +315,31 @@ export default function QueuePage() {
     }
   }
 
+  // Rendered on every return path, not just the populated one: with an empty movie queue
+  // the page shows "All caught up!", and without the toggle there would be no way to
+  // reach the show queue from there at all.
+  const mediaToggle = (
+    <div className="mb-5 flex w-fit items-center gap-1 rounded-lg border border-[#1D2939] bg-[#101828] p-1">
+      {/* Labels are real text, not CSS `capitalize` — the accessible name is what screen
+          readers announce, and a text-transform doesn't change it. */}
+      {([['movies', 'Movies'], ['shows', 'Shows']] as const).map(([value, label]) => (
+        <button
+          key={value}
+          onClick={() => switchMedia(value)}
+          className={`rounded-md px-3 py-1.5 text-xs font-medium transition-all
+            ${media === value ? 'bg-[#1D2939] text-[#F9FAFB] shadow-sm' : 'text-[#667085] hover:text-[#D0D5DD]'}`}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  )
+
   // ── Loading / failed ───────────────────────────────────────────────────────
   if (pending === null) {
     return (
       <AppShell title="Queue">
+        {mediaToggle}
         {moviesError ? (
           <EmptyState
             icon={<ErrorIcon />}
@@ -314,6 +360,7 @@ export default function QueuePage() {
   if (!current) {
     return (
       <AppShell title="Queue">
+        {mediaToggle}
         {moviesError && (
           <div className="mb-5 rounded-lg border border-[#B42318]/40 bg-[#FEF3F2]/5 px-4 py-3">
             <p className="text-sm text-[#FDA29B]">Couldn&apos;t refresh the queue: {moviesError}</p>
@@ -326,7 +373,9 @@ export default function QueuePage() {
             </svg>
           </div>
           <p className="text-base font-semibold text-[#F9FAFB]">All caught up!</p>
-          <p className="text-sm text-[#667085]">Every movie in your library has a theme.</p>
+          <p className="text-sm text-[#667085]">
+            Every {media === 'shows' ? 'show' : 'movie'} in your library has a theme.
+          </p>
         </div>
       </AppShell>
     )
@@ -369,6 +418,7 @@ export default function QueuePage() {
       }
     >
       <div className="max-w-2xl space-y-5">
+        {mediaToggle}
 
         {moviesError && (
           <div className="rounded-lg border border-[#B42318]/40 bg-[#FEF3F2]/5 px-4 py-3">
@@ -397,7 +447,7 @@ export default function QueuePage() {
               </p>
             </div>
             <div className="divide-y divide-[#1D2939] max-h-72 overflow-y-auto">
-              {pending.slice(currentIdx + 1, currentIdx + 11).map((movie: Movie, i: number) => (
+              {pending.slice(currentIdx + 1, currentIdx + 11).map((movie: MediaItem, i: number) => (
                 <button
                   key={movie.id}
                   onClick={() => setCurrentIdx(currentIdx + 1 + i)}
@@ -552,7 +602,7 @@ export default function QueuePage() {
   )
 }
 
-function MoviePoster({ movie }: { movie: Movie }) {
+function MoviePoster({ movie }: { movie: MediaItem }) {
   const [imgError, setImgError] = useState(false)
 
   if (movie.posterUrl && !imgError) {
