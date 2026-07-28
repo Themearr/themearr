@@ -74,13 +74,7 @@ public class MoviesController(
         if (roots.Count > 0 && !ThemeFiles.IsWithinRoots(folder, roots))
             return BadRequest(new { detail = "Refusing to delete outside the configured library roots." });
 
-        var deleted = false;
-        foreach (var f in Directory.EnumerateFiles(folder, "theme.*"))
-        {
-            if (Path.GetExtension(f) is ".part" or ".ytdl") continue;
-            System.IO.File.Delete(f);
-            deleted = true;
-        }
+        var deleted = ThemeFiles.DeleteThemes(folder);
 
         // Reset the stored status so the column stays honest (this movie no longer has a
         // theme) and the auto-download worker's cheap stored-status pre-filter re-adopts
@@ -117,20 +111,10 @@ public class MoviesController(
         var folder = movie["folderName"]?.ToString() ?? "";
         if (string.IsNullOrEmpty(folder)) return NotFound(new { detail = "No folder" });
 
-        var themeFile = Directory.EnumerateFiles(folder, "theme.*")
-            .FirstOrDefault(f => Path.GetExtension(f) is not (".part" or ".ytdl"));
+        var themeFile = ThemeFiles.FindThemeFile(folder);
         if (themeFile == null) return NotFound(new { detail = "No theme file" });
 
-        var contentType = Path.GetExtension(themeFile).ToLower() switch
-        {
-            ".mp3"  => "audio/mpeg",
-            ".m4a"  => "audio/mp4",
-            ".ogg"  => "audio/ogg",
-            ".opus" => "audio/opus",
-            ".webm" => "audio/webm",
-            ".flac" => "audio/flac",
-            _       => "audio/mpeg",
-        };
+        var contentType = ThemeFiles.ContentTypeFor(themeFile);
 
         // ETag + Last-Modified so repeated visits don't re-download the same theme file.
         // Framework honours If-None-Match / If-Modified-Since and returns 304 automatically.
