@@ -63,4 +63,57 @@ public class ShowsController(
             return StatusCode(502, new { detail = $"YouTube search error: {ex.Message}" });
         }
     }
+
+    // A show whose status is 'plexTheme' is NOT blocked here. That status is informational
+    // — it tells the UI why the show is being skipped by default — and the UI is expected
+    // to require an explicit "download anyway". The API accepting it is what makes the
+    // override possible at all.
+    [HttpPost("{showId}/download")]
+    [Consumes("application/json")]
+    public IActionResult Download(string showId, [FromBody] ShowDownloadRequest req)
+    {
+        if (db.GetShow(showId) == null) return NotFound(new { detail = "Show not found" });
+
+        if (download.DownloadBlockedReason(isProviderUrl: true) is { } notReady)
+        {
+            log.LogWarning("Show download for {ShowId} blocked: {Reason}", LogSanitizer.Clean(showId), notReady);
+            return UnprocessableEntity(new { detail = notReady });
+        }
+
+        download.Start(showId, $"https://www.youtube.com/watch?v={req.VideoId}", "show");
+        return Accepted(new { started = true, showId });
+    }
+
+    [HttpPost("{showId}/download-url")]
+    [Consumes("application/json")]
+    public IActionResult DownloadUrl(string showId, [FromBody] ShowDownloadUrlRequest req)
+    {
+        if (string.IsNullOrEmpty(req.Url) || !Uri.TryCreate(req.Url, UriKind.Absolute, out var uri))
+            return BadRequest(new { detail = "Invalid URL" });
+
+        if (uri.Scheme is not ("http" or "https"))
+            return BadRequest(new { detail = "Only http and https URLs are supported." });
+
+        if (HostGuard.IsPrivateOrLoopback(uri.Host))
+            return BadRequest(new { detail = "Refusing to download from a private or loopback address." });
+
+        if (db.GetShow(showId) == null) return NotFound(new { detail = "Show not found" });
+
+        // A pasted YouTube URL still goes through the provider, so pre-flight it
+        // (config + quota cooldown). Direct URLs are not gated.
+        if (download.DownloadBlockedReason(DownloadService.IsProviderUrl(req.Url)) is { } notReady)
+        {
+            log.LogWarning("Show download-url for {ShowId} blocked: {Reason}", LogSanitizer.Clean(showId), notReady);
+            return UnprocessableEntity(new { detail = notReady });
+        }
+
+        download.Start(showId, req.Url, "show");
+        return Accepted(new { started = true, showId });
+    }
+
+    [HttpGet("{showId}/download/status")]
+    public IActionResult DownloadStatus(string showId) => Ok(download.GetStatus(showId, "show"));
 }
+
+public record ShowDownloadRequest(string VideoId);
+public record ShowDownloadUrlRequest(string Url);
