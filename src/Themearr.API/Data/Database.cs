@@ -779,6 +779,26 @@ public class Database(string dbPath)
         return new StatsResult(total, downloaded, pending, ignored, coverage, addedThisWeek, recentActivity, recentlyAdded);
     }
 
+    /// <summary>
+    /// Aggregate show counts for the shows dashboard. Coverage counts a Plex-themed show
+    /// as covered — it has a theme, just not one Themearr wrote — so the number matches
+    /// what the user actually hears. The per-state counts are returned alongside it so
+    /// that number stays explainable rather than a black box.
+    /// </summary>
+    public ShowStatsResult GetShowStats()
+    {
+        var all        = GetAllShows();
+        var downloaded = all.Count(s => s["status"]?.ToString() == "downloaded");
+        var plexTheme  = all.Count(s => s["status"]?.ToString() == "plexTheme");
+        var pending    = all.Count(s => s["status"]?.ToString() == "pending");
+        var ignored    = all.Count(s => s["status"]?.ToString() == "ignored");
+
+        var total    = all.Count;
+        var coverage = total > 0 ? Math.Round((downloaded + plexTheme) * 100.0 / total, 1) : 0.0;
+
+        return new ShowStatsResult(total, downloaded, plexTheme, pending, ignored, coverage);
+    }
+
     // ── History ───────────────────────────────────────────────────────────────
 
     /// <summary>
@@ -931,6 +951,11 @@ file static class SqliteExtensions
 }
 
 // ── DTOs ──────────────────────────────────────────────────────────────────────
+
+/// <summary>Show equivalent of <see cref="StatsResult"/>. Separate because shows carry a
+/// state movies do not (plexTheme) and have no "recently added" poster feed of their own.</summary>
+public record ShowStatsResult(
+    int Total, int Downloaded, int PlexTheme, int Pending, int Ignored, double Coverage);
 
 public record StatsResult(
     int Total,
