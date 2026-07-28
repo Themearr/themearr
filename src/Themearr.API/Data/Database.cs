@@ -646,8 +646,8 @@ public class Database(string dbPath)
     {
         using var conn = Open();
         var result = new List<Dictionary<string, object?>>();
-        conn.Query("SELECT id, folderName, source, source_ref, title, year, sourcePath, status, ignored FROM shows ORDER BY status, title",
-            r => { while (r.Read()) { var row = ReadMediaRow(r); if (row != null) result.Add(row); } });
+        conn.Query("SELECT id, folderName, source, source_ref, title, year, sourcePath, status, ignored, plex_has_theme FROM shows ORDER BY status, title",
+            r => { while (r.Read()) { var row = ReadShowRow(r); if (row != null) result.Add(row); } });
         return result;
     }
 
@@ -655,8 +655,8 @@ public class Database(string dbPath)
     {
         using var conn = Open();
         Dictionary<string, object?>? result = null;
-        conn.Query("SELECT id, folderName, source, source_ref, title, year, sourcePath, status, ignored FROM shows WHERE id = @id",
-            r => { if (r.Read()) result = ReadMediaRow(r); }, ("@id", id));
+        conn.Query("SELECT id, folderName, source, source_ref, title, year, sourcePath, status, ignored, plex_has_theme FROM shows WHERE id = @id",
+            r => { if (r.Read()) result = ReadShowRow(r); }, ("@id", id));
         return result;
     }
 
@@ -823,6 +823,47 @@ public class Database(string dbPath)
                     });
             }, ("@lim", limit));
         return result;
+    }
+
+    /// <summary>
+    /// Show rows carry a fourth status, 'plexTheme', for a show Plex already themes but
+    /// which has no local theme file. Deliberately separate from <see cref="ReadMediaRow"/>:
+    /// movies have no equivalent state, and widening the shared reader would change movie
+    /// behaviour. Expects the SELECT to end with <c>..., ignored, plex_has_theme</c>.
+    /// </summary>
+    private static Dictionary<string, object?>? ReadShowRow(SqliteDataReader r)
+    {
+        var ignored      = !r.IsDBNull(8) && r.GetInt32(8) == 1;
+        var plexHasTheme = !r.IsDBNull(9) && r.GetInt32(9) == 1;
+        var folder       = r.IsDBNull(1) ? "" : r.GetString(1);
+
+        // Same contract as ReadMediaRow: keep ignored rows so they can be unignored from
+        // the UI, drop non-ignored rows whose folder has gone away.
+        if (!ignored && (string.IsNullOrEmpty(folder) || !Directory.Exists(folder)))
+            return null;
+
+        // Order matters. A local file is a fact on disk and always beats Plex having its
+        // own theme, so downloading one for a plexTheme show visibly moves it to
+        // 'downloaded' instead of appearing to do nothing.
+        string status;
+        if (ignored)                                               status = "ignored";
+        else if (ThemeFiles.HasUsableThemeInExistingFolder(folder)) status = "downloaded";
+        else if (plexHasTheme)                                     status = "plexTheme";
+        else                                                       status = "pending";
+
+        return new Dictionary<string, object?>
+        {
+            ["id"]           = r.GetString(0),
+            ["folderName"]   = folder,
+            ["source"]       = r.GetString(2),
+            ["sourceRef"]    = r.IsDBNull(3) ? null : r.GetString(3),
+            ["title"]        = r.GetString(4),
+            ["year"]         = r.IsDBNull(5) ? null : r.GetInt32(5),
+            ["sourcePath"]   = r.IsDBNull(6) ? null : r.GetString(6),
+            ["status"]       = status,
+            ["ignored"]      = ignored,
+            ["plexHasTheme"] = plexHasTheme,
+        };
     }
 
     private static Dictionary<string, object?>? ReadMediaRow(SqliteDataReader r)
