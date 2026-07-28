@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { moviesApi, radarrApi, syncApi } from '@/lib/api'
-import type { Movie, SyncStatus } from '@/lib/types'
+import type { MediaStatus, Movie, SyncStatus } from '@/lib/types'
 import { AppShell } from '@/components/layout/AppShell'
-import { MovieGrid } from '@/components/movies/MovieGrid'
+import { MediaGrid } from '@/components/media/MediaGrid'
+import { moviesAdapter } from '@/lib/media/adapter'
 import { Button, EmptyState, ErrorIcon, Spinner } from '@/components/ui'
 import { useResource } from '@/lib/useResource'
 
@@ -129,8 +130,11 @@ export default function MoviesPage() {
     }
   }
 
-  function handleMovieUpdated(id: string, status: Movie['status']) {
-    setMovies(prev => prev.map(m => m.id === id ? { ...m, status } : m))
+  // Takes the full MediaStatus because MediaGrid is shared with shows. A movie can never
+  // actually be 'plexTheme' — the API only ever reports that for shows — but the callback
+  // has to accept the wider type to be assignable to the grid's prop.
+  function handleMovieUpdated(id: string, status: MediaStatus) {
+    setMovies(prev => prev.map(m => m.id === id ? { ...m, status: status as Movie['status'] } : m))
   }
 
   const pending    = movies.filter(m => m.status === 'pending').length
@@ -219,7 +223,12 @@ export default function MoviesPage() {
               <Button variant="secondary" size="sm" onClick={retryLoadMovies} loading={retrying}>Retry</Button>
             </div>
           )}
-          <MovieGrid movies={movies} onMovieUpdated={handleMovieUpdated} sourceLabel={sourceLabel} />
+          <MediaGrid
+            items={movies}
+            adapter={moviesAdapter}
+            onUpdated={handleMovieUpdated}
+            emptyDescription={`Sync your ${sourceLabel} library to get started`}
+          />
         </>
       )}
     </AppShell>
