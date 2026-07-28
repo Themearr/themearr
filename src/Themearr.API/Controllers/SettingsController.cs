@@ -16,6 +16,7 @@ public class SettingsController(Database db, RadarrLibrarySource radarr, PlexLib
         // Plex token is write-only — never echo it back in a GET response.
         selectedServers   = db.GetPlexServersRedacted(),
         selectedLibraries = db.GetSelectedLibraries(),
+        selectedShowLibraries = db.GetSelectedShowLibraries(),
         pathMappings      = db.GetPathMappings(),
         libraryPaths      = db.GetLibraryPaths(),
         advanced = new
@@ -37,6 +38,10 @@ public class SettingsController(Database db, RadarrLibrarySource radarr, PlexLib
         // Merge so a save that omits the redacted token keeps the stored one.
         db.SetPlexServersMergingTokens(req.SelectedServers);
         db.SetSelectedLibraries(req.SelectedLibraries);
+        // Only when present — see SettingsPayload.SelectedShowLibraries for why absent
+        // must mean "leave unchanged" rather than "select nothing".
+        if (req.SelectedShowLibraries is not null)
+            db.SetSelectedShowLibraries(req.SelectedShowLibraries);
         db.SetPathMappings(req.PathMappings);
         db.SetLibraryPaths(req.LibraryPaths);
 
@@ -285,6 +290,16 @@ public class SettingsPayload
 {
     public List<Dictionary<string, object?>> SelectedServers    { get; set; } = [];
     public Dictionary<string, List<string>>  SelectedLibraries  { get; set; } = [];
+
+    /// <summary>
+    /// Nullable on purpose: <see cref="SettingsController.Save"/> writes the other
+    /// collections unconditionally, so an absent field must mean "leave unchanged" rather
+    /// than "select nothing". A frontend bundle cached from before this shipped omits it,
+    /// and would otherwise wipe the operator's show libraries on their next settings save.
+    /// An explicit empty dictionary still means "deselect everything".
+    /// </summary>
+    public Dictionary<string, List<string>>? SelectedShowLibraries { get; set; }
+
     public List<Dictionary<string, string>>  PathMappings       { get; set; } = [];
     public List<string>                      LibraryPaths       { get; set; } = [];
     public Dictionary<string, int>           Advanced           { get; set; } = [];
