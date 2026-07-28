@@ -8,7 +8,8 @@ namespace Themearr.API.Controllers;
 [ApiController]
 [Route("api")]
 public class PosterController(
-    Database db, PosterUrlSigner signer, LibrarySourceResolver sources, ILogger<PosterController> log)
+    Database db, PosterUrlSigner signer, LibrarySourceResolver sources,
+    PlexLibrarySource plexSource, ILogger<PosterController> log)
     : ControllerBase
 {
     // Streams a movie's poster through the server so the source's credentials are
@@ -50,6 +51,43 @@ public class PosterController(
         catch (Exception ex)
         {
             log.LogDebug(ex, "Poster fetch failed for {Id}", LogSanitizer.Clean(id));
+            return NotFound();
+        }
+    }
+
+    // Show posters. Under /api/poster (not /api/shows) so the existing auth exemption
+    // covers this without widening it — putting a public route inside the shows namespace
+    // would put an exemption line next to every real shows endpoint. Shows only ever come
+    // from Plex, so this resolves through PlexLibrarySource directly rather than
+    // LibrarySourceResolver.Active, which is Radarr for a Radarr user.
+    [HttpGet("poster/show")]
+    public async Task<IActionResult> GetShow(
+        [FromQuery] string id, [FromQuery] long exp, [FromQuery] string sig, [FromQuery] int? w = null)
+    {
+        if (string.IsNullOrEmpty(id) || !signer.VerifyShow(id, exp, sig, DateTimeOffset.UtcNow))
+            return Unauthorized();
+
+        var show = db.GetShow(id);
+        var sourceRef = show?.GetValueOrDefault("sourceRef")?.ToString() ?? "";
+        if (string.IsNullOrEmpty(sourceRef)) return NotFound();
+
+        var width = Math.Clamp(w ?? DefaultWidth, 40, MaxWidth);
+
+        try
+        {
+            await using var stream = await plexSource.FetchPosterAsync(sourceRef, width, HttpContext.RequestAborted);
+            if (stream is null) return NotFound();
+
+            using var buffer = new MemoryStream();
+            await StreamLimits.CopyWithLimitAsync(stream, buffer, StreamLimits.MaxPosterBytes);
+            buffer.Position = 0;
+
+            Response.Headers.CacheControl = "private, max-age=86400";
+            return File(buffer.ToArray(), "image/jpeg");
+        }
+        catch (Exception ex)
+        {
+            log.LogDebug(ex, "Show poster fetch failed for {Id}", LogSanitizer.Clean(id));
             return NotFound();
         }
     }
