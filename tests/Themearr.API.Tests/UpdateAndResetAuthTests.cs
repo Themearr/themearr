@@ -76,4 +76,22 @@ public class UpdateAndResetAuthTests
         Assert.IsType<OkObjectResult>(controller.Reset());
         Assert.False(db.IsSetupComplete());
     }
+
+    // ── Database.ResetAppState ──────────────────────────────────────────────
+
+    [Fact]
+    public void ResetAppState_clears_the_shows_table()
+    {
+        using var dir = new TempDir();
+        var db = new Database(Path.Combine(dir.Path, "test.db"));
+        db.Init();
+        var folder = Path.Combine(dir.Path, "Breaking Bad");
+        Directory.CreateDirectory(folder);
+        db.UpsertShows([new ShowRecord(folder, "plex", "srv1:1", "Breaking Bad", 2008, folder, false)]);
+
+        db.ResetAppState();
+
+        // A factory reset must not leave show rows (including ignored-show decisions) behind.
+        Assert.Empty(db.GetAllShows());
+    }
 }

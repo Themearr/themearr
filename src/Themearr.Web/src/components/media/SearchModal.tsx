@@ -1,15 +1,16 @@
 import { useEffect, useState } from 'react'
-import { moviesApi } from '@/lib/api'
-import type { Movie, YoutubeResult } from '@/lib/types'
+import type { MediaItem, YoutubeResult } from '@/lib/types'
+import type { MediaAdapter } from '@/lib/media/adapter'
 import { Button, Modal, Spinner, Input } from '@/components/ui'
 
 interface SearchModalProps {
-  movie: Movie
+  item: MediaItem
+  adapter: MediaAdapter
   onClose: () => void
-  onDownloaded: (movieId: string) => void
+  onDownloaded: (id: string) => void
 }
 
-export function SearchModal({ movie, onClose, onDownloaded }: SearchModalProps) {
+export function SearchModal({ item, adapter, onClose, onDownloaded }: SearchModalProps) {
   const [results, setResults] = useState<YoutubeResult[]>([])
   const [searching, setSearching] = useState(false)
   const [downloading, setDownloading] = useState<string | null>(null)
@@ -23,7 +24,7 @@ export function SearchModal({ movie, onClose, onDownloaded }: SearchModalProps) 
     if (!downloading) return
     const id = setInterval(async () => {
       try {
-        const st = await moviesApi.downloadStatus(movie.id)
+        const st = await adapter.downloadStatus(item.id)
         if (st.logs?.length) setDownloadLogs(st.logs)
         if (!st.finished) return
         clearInterval(id)
@@ -31,19 +32,21 @@ export function SearchModal({ movie, onClose, onDownloaded }: SearchModalProps) 
           setError(st.error)
           setDownloading(null)
         } else {
-          onDownloaded(movie.id)
+          onDownloaded(item.id)
           onClose()
         }
       } catch { /* ignore */ }
     }, 1000)
     return () => clearInterval(id)
-  }, [downloading, movie.id, onDownloaded, onClose])
+    // `adapter` is a module-level constant (moviesAdapter / showsAdapter), so listing it
+    // is referentially stable — it can't tear down and recreate the interval each render.
+  }, [downloading, item.id, adapter, onDownloaded, onClose])
 
   async function doSearch() {
     setSearching(true)
     setError('')
     try {
-      const data = await moviesApi.search(movie.id)
+      const data = await adapter.search(item.id)
       setResults(data.results)
       setSearched(true)
     } catch (e) {
@@ -57,7 +60,7 @@ export function SearchModal({ movie, onClose, onDownloaded }: SearchModalProps) 
     setDownloading(videoId)
     setError('')
     try {
-      await moviesApi.download(movie.id, videoId)
+      await adapter.download(item.id, videoId)
     } catch (e) {
       setError((e as Error).message)
       setDownloading(null)
@@ -69,7 +72,7 @@ export function SearchModal({ movie, onClose, onDownloaded }: SearchModalProps) 
     setDownloading('url')
     setError('')
     try {
-      await moviesApi.downloadUrl(movie.id, manualUrl.trim())
+      await adapter.downloadUrl(item.id, manualUrl.trim())
     } catch (e) {
       setError((e as Error).message)
       setDownloading(null)
@@ -77,7 +80,7 @@ export function SearchModal({ movie, onClose, onDownloaded }: SearchModalProps) 
   }
 
   return (
-    <Modal open onClose={onClose} title={`${movie.title} (${movie.year ?? '?'})`} size="lg">
+    <Modal open onClose={onClose} title={`${item.title} (${item.year ?? '?'})`} size="lg">
       <div className="space-y-5">
         {/* Search button */}
         {!searched && (

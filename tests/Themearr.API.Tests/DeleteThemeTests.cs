@@ -57,7 +57,7 @@ public class DeleteThemeTests
 
         var db = NewDb();
         db.UpsertMovies([new MovieRecord(folder.Path, "test", "1", "Movie", 2020, "")]);
-        var id = MovieFolderId.For(folder.Path);
+        var id = MediaFolderId.For(folder.Path);
         db.SetMovieStatus(id, "downloaded");
 
         // Precondition: a downloaded movie is not in the worker's cheap pending set.

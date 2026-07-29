@@ -4,7 +4,7 @@ using System.Text;
 namespace Themearr.API.Services;
 
 /// <summary>
-/// Derives a movie's stable id from the local folder its theme lives in.
+/// Derives a media item's stable id from the local folder its theme lives in.
 ///
 /// The folder is the real identity — it is what Themearr acts on, and every library
 /// source can name it — but folders are not usable as ids directly: they appear in
@@ -13,7 +13,7 @@ namespace Themearr.API.Services;
 /// short and URL-safe while staying derivable from the folder alone, so no mapping
 /// table is ever stored.
 /// </summary>
-public static class MovieFolderId
+public static class MediaFolderId
 {
     /// <summary>
     /// Case is significant: Themearr runs on Linux, where two folders differing only

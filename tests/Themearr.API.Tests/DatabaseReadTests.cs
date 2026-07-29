@@ -57,7 +57,7 @@ public class DatabaseReadTests
         var db = NewDb();
         db.UpsertMovies([new MovieRecord(dir.Path, "s", "7", "Heat", 1995, "/plex/heat/f.mkv")]);
 
-        Assert.Equal("Heat", db.GetMovie(MovieFolderId.For(dir.Path))!["title"]);
+        Assert.Equal("Heat", db.GetMovie(MediaFolderId.For(dir.Path))!["title"]);
         Assert.Null(db.GetMovie("does-not-exist"));
     }
 

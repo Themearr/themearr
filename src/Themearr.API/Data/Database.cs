@@ -32,6 +32,21 @@ public class Database(string dbPath)
             )
             """);
         conn.Execute("""
+            CREATE TABLE IF NOT EXISTS shows (
+                id             TEXT PRIMARY KEY,
+                folderName     TEXT NOT NULL UNIQUE,
+                source         TEXT NOT NULL DEFAULT 'plex',
+                source_ref     TEXT,
+                title          TEXT NOT NULL,
+                year           INTEGER,
+                sourcePath     TEXT,
+                status         TEXT NOT NULL DEFAULT 'pending',
+                ignored        INTEGER NOT NULL DEFAULT 0,
+                synced_at      TEXT,
+                plex_has_theme INTEGER NOT NULL DEFAULT 0
+            )
+            """);
+        conn.Execute("""
             CREATE TABLE IF NOT EXISTS settings (
                 key   TEXT PRIMARY KEY,
                 value TEXT NOT NULL
@@ -50,6 +65,7 @@ public class Database(string dbPath)
             """);
         MigrateMoviesTable(conn);
         MigrateHistoryTable(conn);
+        MigrateHistoryTableV2(conn);
         MigrateMoviesTableV2(conn);
         MigrateMoviesTableV3(conn);
         MigrateMoviesTableV4(conn);
@@ -76,6 +92,21 @@ public class Database(string dbPath)
             conn.Execute("ALTER TABLE theme_history ADD COLUMN theme_title TEXT");
         if (!columns.Contains("source_url"))
             conn.Execute("ALTER TABLE theme_history ADD COLUMN source_url TEXT");
+    }
+
+    // History predates TV shows, so every pre-existing row is a movie. The DEFAULT
+    // backfills them in place, which keeps GetThemeHistory's non-null read safe on
+    // upgraded installs without a separate UPDATE pass.
+    private static void MigrateHistoryTableV2(SqliteConnection conn)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "PRAGMA table_info(theme_history)";
+        var columns = new HashSet<string>();
+        using (var r = cmd.ExecuteReader())
+            while (r.Read()) columns.Add(r.GetString(1));
+
+        if (!columns.Contains("media_type"))
+            conn.Execute("ALTER TABLE theme_history ADD COLUMN media_type TEXT NOT NULL DEFAULT 'movie'");
     }
 
     private static void MigrateMoviesTableV2(SqliteConnection conn)
@@ -141,7 +172,7 @@ public class Database(string dbPath)
                     // Pre-resolution rows have no folder, so they cannot be acted on.
                     if (string.IsNullOrEmpty(folder)) continue;
 
-                    var newId = MovieFolderId.For(folder);
+                    var newId = MediaFolderId.For(folder);
                     remap[oldId] = newId;
 
                     raw.Add((newId, folder, "plex", $"{r.GetString(1)}:{r.GetString(2)}",
@@ -293,6 +324,7 @@ public class Database(string dbPath)
     {
         using var conn = Open();
         conn.Execute("DELETE FROM movies");
+        conn.Execute("DELETE FROM shows");
         conn.Execute("DELETE FROM settings");
     }
 
@@ -383,6 +415,12 @@ public class Database(string dbPath)
     public void SetSelectedLibraries(Dictionary<string, List<string>> libs) =>
         SetJsonSetting("plex_selected_libraries", libs);
 
+    public Dictionary<string, List<string>> GetSelectedShowLibraries() =>
+        GetJsonSetting("plex_selected_show_libraries", new Dictionary<string, List<string>>());
+
+    public void SetSelectedShowLibraries(Dictionary<string, List<string>> libs) =>
+        SetJsonSetting("plex_selected_show_libraries", libs);
+
     public List<Dictionary<string, string>> GetPathMappings() =>
         GetJsonSetting("path_mappings", new List<Dictionary<string, string>>());
 
@@ -427,7 +465,7 @@ public class Database(string dbPath)
         foreach (var m in movies)
         {
             if (string.IsNullOrEmpty(m.Folder)) continue;
-            var id = MovieFolderId.For(m.Folder);
+            var id = MediaFolderId.For(m.Folder);
             conn.Execute("""
                 INSERT INTO movies (id, folderName, source, source_ref, title, year, sourcePath, status, synced_at)
                 VALUES (@id, @f, @src, @ref, @t, @y, @sp, 'pending',
@@ -459,12 +497,12 @@ public class Database(string dbPath)
     public int PruneMoviesExcept(IEnumerable<string> keptFolders)
     {
         // Build the kept set using derived IDs, not raw folder strings. folderName is stored
-        // verbatim (with or without trailing separators), but identity is MovieFolderId.For(folder)
+        // verbatim (with or without trailing separators), but identity is MediaFolderId.For(folder)
         // which normalizes those separators away. Comparing raw strings would incorrectly
         // delete a kept folder if the caller passes it with a different trailing-separator state.
         var keep = keptFolders
             .Where(f => !string.IsNullOrEmpty(f))
-            .Select(f => MovieFolderId.For(f))
+            .Select(f => MediaFolderId.For(f))
             .ToHashSet(StringComparer.Ordinal);
         if (keep.Count == 0) return 0;
 
@@ -491,7 +529,7 @@ public class Database(string dbPath)
         {
             while (r.Read())
             {
-                var row = ReadMovieRow(r);
+                var row = ReadMediaRow(r);
                 if (row != null) result.Add(row);
             }
         });
@@ -504,7 +542,7 @@ public class Database(string dbPath)
         Dictionary<string, object?>? result = null;
         conn.Query(
             "SELECT id, folderName, source, source_ref, title, year, sourcePath, status, ignored FROM movies WHERE id = @id",
-            r => { if (r.Read()) result = ReadMovieRow(r); }, ("@id", id));
+            r => { if (r.Read()) result = ReadMediaRow(r); }, ("@id", id));
         return result;
     }
 
@@ -551,6 +589,111 @@ public class Database(string dbPath)
         conn.Execute("UPDATE movies SET ignored = @v WHERE id = @id", ("@v", ignored ? 1 : 0), ("@id", id));
     }
 
+    // ── Shows ───────────────────────────────────────────────────────────────────
+
+    public void UpsertShows(IEnumerable<ShowRecord> shows)
+    {
+        using var conn = Open();
+        using var tx = conn.BeginTransaction();
+        foreach (var s in shows)
+        {
+            if (string.IsNullOrEmpty(s.Folder)) continue;
+            var id = MediaFolderId.For(s.Folder);
+            conn.Execute("""
+                INSERT INTO shows (id, folderName, source, source_ref, title, year, sourcePath, status, synced_at, plex_has_theme)
+                VALUES (@id, @f, @src, @ref, @t, @y, @sp, 'pending',
+                        COALESCE((SELECT synced_at FROM shows WHERE id = @id), strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+                        @pht)
+                ON CONFLICT(id) DO UPDATE SET
+                    folderName     = excluded.folderName,
+                    source         = excluded.source,
+                    source_ref     = excluded.source_ref,
+                    title          = excluded.title,
+                    year           = excluded.year,
+                    sourcePath     = excluded.sourcePath,
+                    plex_has_theme = excluded.plex_has_theme,
+                    synced_at      = COALESCE(shows.synced_at, excluded.synced_at)
+                """,
+                ("@id", id), ("@f", s.Folder), ("@src", s.Source), ("@ref", s.SourceRef),
+                ("@t", s.Title), ("@y", (object?)s.Year ?? DBNull.Value), ("@sp", s.SourcePath),
+                ("@pht", s.HasPlexTheme ? 1 : 0));
+        }
+        tx.Commit();
+    }
+
+    /// <summary>Deletes shows whose folder was not in the most recent sync; never deletes
+    /// ignored ones. Same contract as <see cref="PruneMoviesExcept"/>. Returns the count removed.</summary>
+    public int PruneShowsExcept(IEnumerable<string> keptFolders)
+    {
+        var keep = keptFolders.Where(f => !string.IsNullOrEmpty(f)).Select(MediaFolderId.For)
+                              .ToHashSet(StringComparer.Ordinal);
+        if (keep.Count == 0) return 0;
+
+        using var conn = Open();
+        var doomed = new List<string>();
+        conn.Query("SELECT id, ignored FROM shows", r =>
+        {
+            while (r.Read())
+                if (!keep.Contains(r.GetString(0)) && r.GetInt64(1) == 0) doomed.Add(r.GetString(0));
+        });
+        using var tx = conn.BeginTransaction();
+        foreach (var id in doomed) conn.Execute("DELETE FROM shows WHERE id = @id", ("@id", id));
+        tx.Commit();
+        return doomed.Count;
+    }
+
+    public List<Dictionary<string, object?>> GetAllShows()
+    {
+        using var conn = Open();
+        var result = new List<Dictionary<string, object?>>();
+        conn.Query("SELECT id, folderName, source, source_ref, title, year, sourcePath, status, ignored, plex_has_theme FROM shows ORDER BY status, title",
+            r => { while (r.Read()) { var row = ReadShowRow(r); if (row != null) result.Add(row); } });
+        return result;
+    }
+
+    public Dictionary<string, object?>? GetShow(string id)
+    {
+        using var conn = Open();
+        Dictionary<string, object?>? result = null;
+        conn.Query("SELECT id, folderName, source, source_ref, title, year, sourcePath, status, ignored, plex_has_theme FROM shows WHERE id = @id",
+            r => { if (r.Read()) result = ReadShowRow(r); }, ("@id", id));
+        return result;
+    }
+
+    /// <summary>Shows whose stored status is 'pending', not ignored, and that Plex does not
+    /// already theme. Cheap pre-filter for the show auto-download worker (no filesystem stat).</summary>
+    public List<Dictionary<string, object?>> GetPendingShows()
+    {
+        using var conn = Open();
+        var result = new List<Dictionary<string, object?>>();
+        conn.Query(
+            "SELECT id, folderName, source, source_ref, title, year, sourcePath FROM shows WHERE status = 'pending' AND ignored = 0 AND plex_has_theme = 0 ORDER BY title",
+            r =>
+            {
+                while (r.Read())
+                    result.Add(new Dictionary<string, object?>
+                    {
+                        ["id"] = r.GetString(0), ["folderName"] = r.IsDBNull(1) ? "" : r.GetString(1),
+                        ["source"] = r.GetString(2), ["sourceRef"] = r.IsDBNull(3) ? null : r.GetString(3),
+                        ["title"] = r.GetString(4), ["year"] = r.IsDBNull(5) ? null : r.GetInt32(5),
+                        ["sourcePath"] = r.IsDBNull(6) ? null : r.GetString(6),
+                    });
+            });
+        return result;
+    }
+
+    public void SetShowStatus(string id, string status)
+    {
+        using var conn = Open();
+        conn.Execute("UPDATE shows SET status = @s WHERE id = @id", ("@s", status), ("@id", id));
+    }
+
+    public void SetShowIgnored(string id, bool ignored)
+    {
+        using var conn = Open();
+        conn.Execute("UPDATE shows SET ignored = @v WHERE id = @id", ("@v", ignored ? 1 : 0), ("@id", id));
+    }
+
     // ── Stats ─────────────────────────────────────────────────────────────────
 
     public StatsResult GetStats()
@@ -573,16 +716,19 @@ public class Database(string dbPath)
 
         var coverage = total > 0 ? Math.Round(downloaded * 100.0 / total, 1) : 0.0;
 
-        // Themes added in the last 7 days
+        // Themes added in the last 7 days. Scoped to movies: every other number on this
+        // dashboard (total, coverage, pending) comes from the movies table alone, so
+        // counting show themes here would inflate the week against a movies-only
+        // denominator. Shows get their own stats with the shows UI.
         int addedThisWeek = 0;
         var weekAgo = DateTime.UtcNow.AddDays(-7).ToString("o");
-        conn.Query("SELECT COUNT(*) FROM theme_history WHERE downloaded_at >= @w",
+        conn.Query("SELECT COUNT(*) FROM theme_history WHERE downloaded_at >= @w AND media_type = 'movie'",
             r => { if (r.Read()) addedThisWeek = (int)r.GetInt64(0); }, ("@w", weekAgo));
 
-        // Last 5 downloaded themes
+        // Last 5 downloaded movie themes (see above — this list feeds the movies dashboard).
         var recentActivity = new List<Dictionary<string, object?>>();
         conn.Query(
-            "SELECT id, movie_id, movie_title, movie_year, theme_title, source_url, downloaded_at FROM theme_history ORDER BY id DESC LIMIT 5",
+            "SELECT id, movie_id, movie_title, movie_year, theme_title, source_url, downloaded_at FROM theme_history WHERE media_type = 'movie' ORDER BY id DESC LIMIT 5",
             r =>
             {
                 while (r.Read())
@@ -633,18 +779,45 @@ public class Database(string dbPath)
         return new StatsResult(total, downloaded, pending, ignored, coverage, addedThisWeek, recentActivity, recentlyAdded);
     }
 
+    /// <summary>
+    /// Aggregate show counts for the shows dashboard. Coverage counts a Plex-themed show
+    /// as covered — it has a theme, just not one Themearr wrote — so the number matches
+    /// what the user actually hears. The per-state counts are returned alongside it so
+    /// that number stays explainable rather than a black box.
+    /// </summary>
+    public ShowStatsResult GetShowStats()
+    {
+        var all        = GetAllShows();
+        var downloaded = all.Count(s => s["status"]?.ToString() == "downloaded");
+        var plexTheme  = all.Count(s => s["status"]?.ToString() == "plexTheme");
+        var pending    = all.Count(s => s["status"]?.ToString() == "pending");
+        var ignored    = all.Count(s => s["status"]?.ToString() == "ignored");
+
+        var total    = all.Count;
+        var coverage = total > 0 ? Math.Round((downloaded + plexTheme) * 100.0 / total, 1) : 0.0;
+
+        return new ShowStatsResult(total, downloaded, plexTheme, pending, ignored, coverage);
+    }
+
     // ── History ───────────────────────────────────────────────────────────────
 
-    public void AddThemeHistory(string movieId, string movieTitle, int? movieYear, string? themeTitle, string? sourceUrl)
+    /// <summary>
+    /// Records a downloaded theme. The <c>movie_*</c> column names are historical — the
+    /// table now carries shows too, discriminated by <paramref name="mediaType"/>
+    /// ("movie" | "show"), which defaults to "movie" so every existing caller is unchanged.
+    /// </summary>
+    public void AddThemeHistory(string movieId, string movieTitle, int? movieYear,
+        string? themeTitle, string? sourceUrl, string mediaType = "movie")
     {
         using var conn = Open();
         conn.Execute(
-            "INSERT INTO theme_history (movie_id, movie_title, movie_year, theme_title, source_url, downloaded_at) VALUES (@mid, @t, @y, @tt, @url, @dt)",
+            "INSERT INTO theme_history (movie_id, movie_title, movie_year, theme_title, source_url, downloaded_at, media_type) VALUES (@mid, @t, @y, @tt, @url, @dt, @mt)",
             ("@mid", movieId), ("@t", movieTitle),
             ("@y",   (object?)movieYear  ?? DBNull.Value),
             ("@tt",  (object?)themeTitle ?? DBNull.Value),
             ("@url", (object?)sourceUrl  ?? DBNull.Value),
-            ("@dt",  DateTime.UtcNow.ToString("o")));
+            ("@dt",  DateTime.UtcNow.ToString("o")),
+            ("@mt",  mediaType));
     }
 
     public List<Dictionary<string, object?>> GetThemeHistory(int limit = 200)
@@ -652,7 +825,8 @@ public class Database(string dbPath)
         using var conn = Open();
         var result = new List<Dictionary<string, object?>>();
         conn.Query(
-            "SELECT id, movie_id, movie_title, movie_year, theme_title, source_url, downloaded_at FROM theme_history ORDER BY id DESC LIMIT @lim",
+            // media_type is appended last so the existing ordinal reads stay put.
+            "SELECT id, movie_id, movie_title, movie_year, theme_title, source_url, downloaded_at, media_type FROM theme_history ORDER BY id DESC LIMIT @lim",
             r =>
             {
                 while (r.Read())
@@ -665,18 +839,60 @@ public class Database(string dbPath)
                         ["themeTitle"]   = r.IsDBNull(4) ? null : r.GetString(4),
                         ["sourceUrl"]    = r.IsDBNull(5) ? null : r.GetString(5),
                         ["downloadedAt"] = r.GetString(6),
+                        ["mediaType"]    = r.GetString(7),
                     });
             }, ("@lim", limit));
         return result;
     }
 
-    private static Dictionary<string, object?>? ReadMovieRow(SqliteDataReader r)
+    /// <summary>
+    /// Show rows carry a fourth status, 'plexTheme', for a show Plex already themes but
+    /// which has no local theme file. Deliberately separate from <see cref="ReadMediaRow"/>:
+    /// movies have no equivalent state, and widening the shared reader would change movie
+    /// behaviour. Expects the SELECT to end with <c>..., ignored, plex_has_theme</c>.
+    /// </summary>
+    private static Dictionary<string, object?>? ReadShowRow(SqliteDataReader r)
+    {
+        var ignored      = !r.IsDBNull(8) && r.GetInt32(8) == 1;
+        var plexHasTheme = !r.IsDBNull(9) && r.GetInt32(9) == 1;
+        var folder       = r.IsDBNull(1) ? "" : r.GetString(1);
+
+        // Same contract as ReadMediaRow: keep ignored rows so they can be unignored from
+        // the UI, drop non-ignored rows whose folder has gone away.
+        if (!ignored && (string.IsNullOrEmpty(folder) || !Directory.Exists(folder)))
+            return null;
+
+        // Order matters. A local file is a fact on disk and always beats Plex having its
+        // own theme, so downloading one for a plexTheme show visibly moves it to
+        // 'downloaded' instead of appearing to do nothing.
+        string status;
+        if (ignored)                                               status = "ignored";
+        else if (ThemeFiles.HasUsableThemeInExistingFolder(folder)) status = "downloaded";
+        else if (plexHasTheme)                                     status = "plexTheme";
+        else                                                       status = "pending";
+
+        return new Dictionary<string, object?>
+        {
+            ["id"]           = r.GetString(0),
+            ["folderName"]   = folder,
+            ["source"]       = r.GetString(2),
+            ["sourceRef"]    = r.IsDBNull(3) ? null : r.GetString(3),
+            ["title"]        = r.GetString(4),
+            ["year"]         = r.IsDBNull(5) ? null : r.GetInt32(5),
+            ["sourcePath"]   = r.IsDBNull(6) ? null : r.GetString(6),
+            ["status"]       = status,
+            ["ignored"]      = ignored,
+            ["plexHasTheme"] = plexHasTheme,
+        };
+    }
+
+    private static Dictionary<string, object?>? ReadMediaRow(SqliteDataReader r)
     {
         var ignored = !r.IsDBNull(8) && r.GetInt32(8) == 1;
         var folder  = r.IsDBNull(1) ? "" : r.GetString(1);
 
-        // Always return ignored movies so they can be unignored from the UI;
-        // non-ignored movies with missing folders can't be used so filter them out.
+        // Always return ignored rows so they can be unignored from the UI;
+        // non-ignored rows with missing folders can't be used so filter them out.
         if (!ignored && (string.IsNullOrEmpty(folder) || !Directory.Exists(folder)))
             return null;
 
@@ -736,6 +952,11 @@ file static class SqliteExtensions
 
 // ── DTOs ──────────────────────────────────────────────────────────────────────
 
+/// <summary>Show equivalent of <see cref="StatsResult"/>. Separate because shows carry a
+/// state movies do not (plexTheme) and have no "recently added" poster feed of their own.</summary>
+public record ShowStatsResult(
+    int Total, int Downloaded, int PlexTheme, int Pending, int Ignored, double Coverage);
+
 public record StatsResult(
     int Total,
     int Downloaded,
@@ -748,7 +969,7 @@ public record StatsResult(
 
 /// <summary>
 /// A movie as reported by a library source. There is no id: identity is the resolved
-/// local folder, and the stored id is derived from it via <see cref="MovieFolderId"/>.
+/// local folder, and the stored id is derived from it via <see cref="MediaFolderId"/>.
 /// </summary>
 public record MovieRecord(
     string Folder,
@@ -757,3 +978,12 @@ public record MovieRecord(
     string Title,
     int? Year,
     string SourcePath);
+
+/// <summary>
+/// A TV show as reported by a library source. Identity is the resolved local (show
+/// root) folder; the stored id is derived from it via <see cref="Themearr.API.Services.MediaFolderId"/>.
+/// <paramref name="HasPlexTheme"/> is true when Plex already provides a theme for the
+/// show (its `theme` attribute is present) — such shows are not download candidates.
+/// </summary>
+public record ShowRecord(
+    string Folder, string Source, string SourceRef, string Title, int? Year, string SourcePath, bool HasPlexTheme);

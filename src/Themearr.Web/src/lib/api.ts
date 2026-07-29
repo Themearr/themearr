@@ -1,7 +1,7 @@
 import type {
   Movie, YoutubeResult, PlexServer, PlexLibrary,
   SetupStatus, Settings, SyncStatus, VersionInfo, HistoryEntry, DashboardStats,
-  HealthResponse, SystemTask, RadarrSettings, ApiKey,
+  HealthResponse, SystemTask, RadarrSettings, ApiKey, Show, ShowStats,
 } from './types'
 
 const BASE = (import.meta.env.VITE_API_URL ?? '').replace(/\/$/, '')
@@ -183,6 +183,63 @@ export const moviesApi = {
 }
 
 // ── Settings ──────────────────────────────────────────────────────────────────
+
+// ── Shows ─────────────────────────────────────────────────────────────────────
+// Namespaced under /api/shows, unlike the movie routes' legacy un-namespaced paths.
+
+export const showsApi = {
+  list: () => request<Show[]>('/api/shows'),
+
+  search: (showId: string, q?: string) =>
+    request<{ show: Show; results: YoutubeResult[] }>(
+      `/api/shows/${encodeURIComponent(showId)}/search${q ? `?q=${encodeURIComponent(q)}` : ''}`
+    ),
+
+  download: (showId: string, videoId: string) =>
+    request<{ started: boolean; showId: string }>(`/api/shows/${encodeURIComponent(showId)}/download`, {
+      method: 'POST',
+      body: JSON.stringify({ videoId }),
+    }),
+
+  downloadUrl: (showId: string, url: string) =>
+    request<{ started: boolean; showId: string }>(`/api/shows/${encodeURIComponent(showId)}/download-url`, {
+      method: 'POST',
+      body: JSON.stringify({ url }),
+    }),
+
+  downloadStatus: (showId: string, init?: RequestInit) =>
+    request<{ inProgress: boolean; finished: boolean; error: string | null; logs: string[] }>(
+      `/api/shows/${encodeURIComponent(showId)}/download/status`, init),
+
+  deleteTheme: (showId: string) =>
+    request<{ deleted: boolean }>(`/api/shows/${encodeURIComponent(showId)}/theme`, { method: 'DELETE' }),
+
+  ignoreShow: (showId: string) =>
+    request<{ ignored: boolean }>(`/api/shows/${encodeURIComponent(showId)}/ignore`, { method: 'POST' }),
+
+  unignoreShow: (showId: string) =>
+    request<{ ignored: boolean }>(`/api/shows/${encodeURIComponent(showId)}/unignore`, { method: 'POST' }),
+
+  stats: () => request<ShowStats>('/api/stats/shows'),
+
+  // Same bearer-fetch-to-object-URL dance as moviesApi.themeAudioObjectUrl: an <audio>
+  // element can't send an Authorization header. Caller revokes the URL.
+  themeAudioObjectUrl: async (showId: string) => {
+    const token = getAuthToken()
+    const res = await fetch(
+      `${BASE}/api/shows/${encodeURIComponent(showId)}/theme/audio`,
+      { headers: token ? { Authorization: `Bearer ${token}` } : undefined },
+    )
+    if (res.status === 401) {
+      clearAuthToken()
+      if (typeof window !== 'undefined') window.location.href = '/login'
+      throw new Error('Unauthorized')
+    }
+    if (!res.ok) throw new Error(`Audio fetch failed (${res.status})`)
+    const blob = await res.blob()
+    return URL.createObjectURL(blob)
+  },
+}
 
 export const settingsApi = {
   get: () => request<Settings>('/api/settings'),

@@ -32,7 +32,7 @@ public class PruneTests
         Assert.Equal(2, before.Count);
 
         // Prune, passing BOTH folders as kept, but with a trailing separator appended to one
-        // of them. The kept set is normalized via MovieFolderId, so the trailing separator
+        // of them. The kept set is normalized via MediaFolderId, so the trailing separator
         // must not defeat the match.
         var dir1WithTrailingSeparator = dir1.Path.EndsWith(Path.DirectorySeparatorChar)
             ? dir1.Path
@@ -104,7 +104,7 @@ public class PruneTests
 
         // The user has explicitly ignored dir2's movie. A sync that no longer sees it
         // (e.g. a down library mount) must not silently reverse that decision.
-        db.SetMovieIgnored(MovieFolderId.For(dir2.Path), true);
+        db.SetMovieIgnored(MediaFolderId.For(dir2.Path), true);
 
         var deleted = db.PruneMoviesExcept([dir1.Path]);
 

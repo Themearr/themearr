@@ -44,6 +44,7 @@ builder.Services.AddHttpClient(Themearr.API.Services.Sources.RadarrLibrarySource
     c => c.Timeout = TimeSpan.FromSeconds(10));
 builder.Services.AddSingleton<Themearr.API.Services.Sources.LibrarySourceResolver>();
 builder.Services.AddSingleton<SyncService>();
+builder.Services.AddScoped<ShowSyncService>();
 builder.Services.AddSingleton<UpdateService>();
 builder.Services.AddHttpClient<PlexService>();
 builder.Services.AddTransient<YoutubeService>();
@@ -59,10 +60,14 @@ builder.Services.AddSingleton<DownloadService>();
 builder.Services.AddSingleton<PosterUrlSigner>();
 builder.Services.AddSingleton<IApiKeyStore, ApiKeyStore>();
 builder.Services.AddHostedService<AutoSyncService>();
+builder.Services.AddHostedService<ShowAutoSyncService>();
 // Register AutoDownloadService as a singleton AND wire its hosted-service lifecycle
 // off the same instance so a controller can ask it for diagnostics.
 builder.Services.AddSingleton<AutoDownloadService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<AutoDownloadService>());
+// Same shape for the show-side worker, so the shows API can read its diagnostics.
+builder.Services.AddSingleton<ShowAutoDownloadService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<ShowAutoDownloadService>());
 
 // ── System page: health checks + scheduled tasks ──────────────────────────────
 builder.Services.AddSingleton<TaskRegistry>();
@@ -136,13 +141,10 @@ app.UseRateLimiter();
 
 if (app.Environment.IsDevelopment()) app.UseCors();
 
-// Bearer-token auth for every /api/* route except /api/auth/*
+// Bearer-token auth for every /api/* route except the public prefixes — the predicate
+// lives in ApiAuthMiddleware.RequiresAuth so the boundary is unit-testable (AuthBoundaryTests).
 app.UseWhen(
-    ctx => ctx.Request.Path.StartsWithSegments("/api")
-           && !ctx.Request.Path.StartsWithSegments("/api/auth")
-           // Poster URLs self-authenticate via a signed, expiring query string so an
-           // <img> tag (which can't send a bearer header) can still load them.
-           && !ctx.Request.Path.StartsWithSegments("/api/poster"),
+    ctx => Themearr.API.Services.ApiAuthMiddleware.RequiresAuth(ctx.Request.Path),
     branch => branch.UseMiddleware<Themearr.API.Services.ApiAuthMiddleware>());
 
 app.UseDefaultFiles();

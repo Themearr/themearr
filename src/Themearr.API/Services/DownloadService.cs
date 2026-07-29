@@ -48,17 +48,23 @@ public class DownloadService(
         return DateTimeOffset.UtcNow.ToUnixTimeSeconds() < until;
     }
 
-    public bool Start(string movieId, string youtubeUrl)
+    // Job state is namespaced by media type: movie and show ids come from the same
+    // MediaFolderId hash space, so a show and a movie pointing at the same folder would
+    // otherwise share (and clobber) one job entry.
+    private static string JobKey(string mediaType, string id) => $"{mediaType}:{id}";
+
+    public bool Start(string id, string youtubeUrl, string mediaType = "movie")
     {
-        if (_jobs.TryGetValue(movieId, out var existing) && existing.InProgress)
+        var key = JobKey(mediaType, id);
+        if (_jobs.TryGetValue(key, out var existing) && existing.InProgress)
             return false;
 
         var url  = NormaliseYoutubeUrl(youtubeUrl.Trim());
-        var logs = _jobLogs.GetOrAdd(movieId, _ => new ConcurrentQueue<string>());
+        var logs = _jobLogs.GetOrAdd(key, _ => new ConcurrentQueue<string>());
         while (logs.TryDequeue(out _)) { }   // clear previous run's logs
 
-        _jobs[movieId] = new JobState(true, false, null, DateTime.UtcNow);
-        _ = Task.Run(() => RunAsync(movieId, url));
+        _jobs[key] = new JobState(true, false, null, DateTime.UtcNow);
+        _ = Task.Run(() => RunAsync(id, url, mediaType));
         return true;
     }
 
@@ -100,35 +106,38 @@ public class DownloadService(
     // check applies before starting a download.
     public static bool IsProviderUrl(string url) => ExtractVideoId(url) != null;
 
-    public object GetStatus(string movieId)
+    public object GetStatus(string id, string mediaType = "movie")
     {
-        if (!_jobs.TryGetValue(movieId, out var state))
+        var key = JobKey(mediaType, id);
+        if (!_jobs.TryGetValue(key, out var state))
             return new { inProgress = false, finished = false, error = (string?)null, logs = Array.Empty<string>() };
 
-        _jobLogs.TryGetValue(movieId, out var logQueue);
+        _jobLogs.TryGetValue(key, out var logQueue);
         var lines = logQueue?.ToArray() ?? [];
         if (lines.Length > 50) lines = lines[^50..];
 
         return new { inProgress = state.InProgress, finished = state.Finished, error = state.Error, logs = lines };
     }
 
-    private void AddLog(string movieId, string message)
+    // Takes the namespaced job key (see JobKey), not a bare media id.
+    private void AddLog(string jobKey, string message)
     {
-        if (!_jobLogs.TryGetValue(movieId, out var logQueue)) return;
+        if (!_jobLogs.TryGetValue(jobKey, out var logQueue)) return;
         logQueue.Enqueue(message);
         while (logQueue.Count > MaxLogLines)
             logQueue.TryDequeue(out _);
     }
 
-    private async Task RunAsync(string movieId, string url)
+    private async Task RunAsync(string id, string url, string mediaType)
     {
+        var key = JobKey(mediaType, id);
         try
         {
-            var movie = db.GetMovie(movieId)
-                ?? throw new KeyNotFoundException($"Movie not found: {movieId}");
+            var item = (mediaType == "show" ? db.GetShow(id) : db.GetMovie(id))
+                ?? throw new KeyNotFoundException($"{mediaType} not found: {id}");
 
-            var folder = movie["folderName"]?.ToString()
-                ?? throw new InvalidOperationException("Movie has no folder path");
+            var folder = item["folderName"]?.ToString()
+                ?? throw new InvalidOperationException($"{mediaType} has no folder path");
 
             if (!url.StartsWith("http://") && !url.StartsWith("https://"))
                 throw new ArgumentException("Invalid URL");
@@ -155,7 +164,7 @@ public class DownloadService(
             if (!ThemeFiles.IsDirectoryWritable(folder))
                 throw new UnauthorizedAccessException(
                     $"Cannot write to \"{folder}\". The themearr service user needs write permission on " +
-                    "this movie folder — on Proxmox/LXC, add the themearr user to your media group.");
+                    $"this {mediaType} folder — on Proxmox/LXC, add the themearr user to your media group.");
 
             // Bound the whole download (incl. the response-stream read, which
             // HttpClient.Timeout does NOT cover once streaming) so a stalled
@@ -166,12 +175,12 @@ public class DownloadService(
             if (videoId != null)
             {
                 // YouTube URL — delegate to the configured theme-audio provider.
-                themeTitle = await provider.DownloadAsync(videoId, outputPath, msg => AddLog(movieId, msg), token);
+                themeTitle = await provider.DownloadAsync(videoId, outputPath, msg => AddLog(key, msg), token);
             }
             else
             {
                 // Non-YouTube URL — download directly
-                AddLog(movieId, "[themearr] Downloading from URL…");
+                AddLog(key, "[themearr] Downloading from URL…");
 
                 using var dlResp = await FetchFollowingSafeRedirectsAsync(url, token);
 
@@ -195,13 +204,14 @@ public class DownloadService(
                     && Path.GetExtension(f) is not (".part" or ".ytdl"))
                     try { File.Delete(f); } catch { /* best effort */ }
 
-            AddLog(movieId, "[themearr] Download complete.");
+            AddLog(key, "[themearr] Download complete.");
 
-            var title = movie["title"]?.ToString() ?? "";
-            var year  = movie["year"] is int y ? y : (int?)null;
-            db.SetMovieStatus(movieId, "downloaded");
-            db.AddThemeHistory(movieId, title, year, themeTitle, url);
-            _jobs[movieId] = new JobState(false, true, null);
+            var title = item["title"]?.ToString() ?? "";
+            var year  = item["year"] is int y ? y : (int?)null;
+            if (mediaType == "show") db.SetShowStatus(id, "downloaded");
+            else                     db.SetMovieStatus(id, "downloaded");
+            db.AddThemeHistory(id, title, year, themeTitle, url, mediaType);
+            _jobs[key] = new JobState(false, true, null);
         }
         catch (QuotaExceededException ex)
         {
@@ -209,20 +219,20 @@ public class DownloadService(
             _quotaCooldownUntilUnix = (int)until.ToUnixTimeSeconds();
             log.LogWarning("RapidAPI quota exhausted — pausing downloads until {Until:o}. {Detail}",
                 until.UtcDateTime, ex.Message);
-            AddLog(movieId, $"[themearr] RapidAPI quota exhausted — pausing downloads until {until.UtcDateTime:HH:mm} UTC.");
-            _jobs[movieId] = new JobState(false, true, ex.Message);
+            AddLog(key, $"[themearr] RapidAPI quota exhausted — pausing downloads until {until.UtcDateTime:HH:mm} UTC.");
+            _jobs[key] = new JobState(false, true, ex.Message);
         }
         catch (OperationCanceledException)
         {
             var msg = $"Download timed out after {DownloadTimeout.TotalSeconds:0}s and was aborted.";
-            log.LogWarning("Download for {MovieId} timed out after {Timeout}", LogSanitizer.Clean(movieId), DownloadTimeout);
-            AddLog(movieId, $"[themearr] {msg}");
-            _jobs[movieId] = new JobState(false, true, msg);
+            log.LogWarning("Download for {JobKey} timed out after {Timeout}", LogSanitizer.Clean(key), DownloadTimeout);
+            AddLog(key, $"[themearr] {msg}");
+            _jobs[key] = new JobState(false, true, msg);
         }
         catch (Exception ex)
         {
-            log.LogError(ex, "Download failed for {MovieId}", LogSanitizer.Clean(movieId));
-            _jobs[movieId] = new JobState(false, true, ex.Message);
+            log.LogError(ex, "Download failed for {JobKey}", LogSanitizer.Clean(key));
+            _jobs[key] = new JobState(false, true, ex.Message);
         }
     }
 

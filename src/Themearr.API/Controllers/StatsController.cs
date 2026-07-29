@@ -44,4 +44,22 @@ public class StatsController(Database db, PosterUrlSigner posterSigner, LibraryS
             recentlyAdded  = stats.RecentlyAdded,
         });
     }
+
+    // Shows are counted separately from movies: the two libraries have different
+    // denominators, and shows carry a state movies do not (plexTheme). Returns no poster
+    // URLs, so it never touches the source resolver.
+    [HttpGet("shows")]
+    public IActionResult GetShowStats()
+    {
+        var s = db.GetShowStats();
+        return Ok(new
+        {
+            total      = s.Total,
+            downloaded = s.Downloaded,
+            plexTheme  = s.PlexTheme,
+            pending    = s.Pending,
+            ignored    = s.Ignored,
+            coverage   = s.Coverage,
+        });
+    }
 }

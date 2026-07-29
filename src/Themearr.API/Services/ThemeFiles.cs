@@ -1,9 +1,10 @@
 namespace Themearr.API.Services;
 
 /// <summary>
-/// Filesystem helpers for the per-movie <c>theme.*</c> file: detecting a usable
-/// theme, checking the target folder is writable, and writing the download
-/// atomically so a failed/killed download can never leave a corrupt theme behind.
+/// Filesystem helpers for the per-media <c>theme.*</c> file (movies and shows alike):
+/// detecting a usable theme, locating and typing it for playback, deleting it, checking
+/// the target folder is writable, and writing the download atomically so a failed/killed
+/// download can never leave a corrupt theme behind.
 /// </summary>
 public static class ThemeFiles
 {
@@ -116,5 +117,46 @@ public static class ThemeFiles
             try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { /* best effort */ }
             throw;
         }
+    }
+
+    /// <summary>
+    /// The playable theme file in <paramref name="folder"/>, or null when there isn't one.
+    /// Shared by the movie and show theme-audio endpoints so the two can never disagree
+    /// about which file is "the theme".
+    /// </summary>
+    public static string? FindThemeFile(string folder) =>
+        Directory.Exists(folder)
+            ? Directory.EnumerateFiles(folder, "theme.*").FirstOrDefault(f => !IsNonTheme(f))
+            : null;
+
+    /// <summary>Content type for a theme file, by extension. Falls back to audio/mpeg.</summary>
+    public static string ContentTypeFor(string path) => Path.GetExtension(path).ToLowerInvariant() switch
+    {
+        ".mp3"  => "audio/mpeg",
+        ".m4a"  => "audio/mp4",
+        ".ogg"  => "audio/ogg",
+        ".opus" => "audio/opus",
+        ".webm" => "audio/webm",
+        ".flac" => "audio/flac",
+        _       => "audio/mpeg",
+    };
+
+    /// <summary>
+    /// Deletes every theme file in <paramref name="folder"/>, leaving in-flight downloads
+    /// (<c>.part</c>/<c>.ytdl</c>) alone. Returns true if anything was deleted. Callers MUST
+    /// have already confirmed the folder is inside the configured library roots — see
+    /// <see cref="IsWithinRoots"/>. This is a delete path shared by movies and shows;
+    /// keeping it in one place is what stops the two containment checks from drifting.
+    /// </summary>
+    public static bool DeleteThemes(string folder)
+    {
+        var deleted = false;
+        foreach (var f in Directory.EnumerateFiles(folder, "theme.*"))
+        {
+            if (IsNonTheme(f)) continue;
+            File.Delete(f);
+            deleted = true;
+        }
+        return deleted;
     }
 }

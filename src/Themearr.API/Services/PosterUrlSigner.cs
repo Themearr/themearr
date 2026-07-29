@@ -48,4 +48,24 @@ public sealed class PosterUrlSigner
         var exp = expiry.ToUnixTimeSeconds();
         return $"/api/poster?id={Uri.EscapeDataString(id)}&exp={exp}&sig={Sign(id, exp)}";
     }
+
+    // Domain separation. Movie and show ids come from the same MediaFolderId hash space —
+    // a show and a movie on one folder produce the SAME id — so without a scope prefix one
+    // media type's signed poster URL would validate against the other's route.
+    private const string ShowScope = "show:";
+
+    /// <summary>
+    /// Signed URL for a show poster. Deliberately under <c>/api/poster</c> rather than
+    /// <c>/api/shows</c>: that prefix is already exempt from bearer auth (an
+    /// <c>&lt;img&gt;</c> cannot send an Authorization header), so this needs no change to
+    /// the auth boundary — see <c>ApiAuthMiddleware.RequiresAuth</c>.
+    /// </summary>
+    public string ShowPosterPath(string id, DateTimeOffset expiry)
+    {
+        var exp = expiry.ToUnixTimeSeconds();
+        return $"/api/poster/show?id={Uri.EscapeDataString(id)}&exp={exp}&sig={Sign(ShowScope + id, exp)}";
+    }
+
+    public bool VerifyShow(string id, long expUnix, string? sig, DateTimeOffset now) =>
+        Verify(ShowScope + id, expUnix, sig, now);
 }

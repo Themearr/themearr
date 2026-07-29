@@ -16,6 +16,23 @@ public class ApiAuthMiddleware(
 
     private readonly byte[] _expected = LoadToken(config, log);
 
+    /// <summary>
+    /// Which paths this middleware guards: everything under <c>/api</c> except the two
+    /// public prefixes. <c>/api/auth</c> is public because you have no credential yet;
+    /// <c>/api/poster</c> is public because an <c>&lt;img&gt;</c> tag cannot send an
+    /// Authorization header, so poster URLs self-authenticate via a signed, expiring query
+    /// string instead.
+    ///
+    /// Extracted from Program.cs so the boundary is testable — a widened prefix here would
+    /// silently expose an entire namespace, which no other test would catch.
+    /// <c>StartsWithSegments</c> matches on segment boundaries, so <c>/api/posterize</c> is
+    /// NOT covered by the <c>/api/poster</c> exemption, while <c>/api/poster/show</c> is.
+    /// </summary>
+    public static bool RequiresAuth(PathString path) =>
+        path.StartsWithSegments("/api")
+        && !path.StartsWithSegments("/api/auth")
+        && !path.StartsWithSegments("/api/poster");
+
     public async Task Invoke(HttpContext ctx)
     {
         var header = ctx.Request.Headers.Authorization.ToString();
