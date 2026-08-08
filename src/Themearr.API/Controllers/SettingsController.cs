@@ -8,8 +8,55 @@ namespace Themearr.API.Controllers;
 
 [ApiController]
 [Route("api/settings")]
-public class SettingsController(Database db, RadarrLibrarySource radarr, PlexLibrarySource plex, IApiKeyStore keys) : ControllerBase
+public class SettingsController(
+    Database db, RadarrLibrarySource radarr, PlexLibrarySource plex, PlexService plexService, IApiKeyStore keys)
+    : ControllerBase
 {
+    /// <summary>
+    /// Lists every Plex library (all types) for the stored servers, so Settings can offer
+    /// movie- and show-library pickers.
+    ///
+    /// Deliberately takes no request body. Settings only ever holds servers from
+    /// <see cref="Database.GetPlexServersRedacted"/>, whose token is blanked — posting those
+    /// to the setup endpoint made it skip every server, which is why both pickers rendered
+    /// "No libraries found" on every install. Reading the stored servers and tokens here
+    /// also means no caller-supplied host can ever be handed the Plex token.
+    /// </summary>
+    [HttpGet("plex/libraries")]
+    public async Task<IActionResult> PlexLibraries()
+    {
+        var payload = new Dictionary<string, object>();
+
+        foreach (var server in db.GetPlexServers())
+        {
+            var serverId  = server.GetValueOrDefault("id", "")?.ToString()?.Trim() ?? "";
+            var serverUrl = server.GetValueOrDefault("url", "")?.ToString()?.Trim() ?? "";
+            var token     = server.GetValueOrDefault("token", "")?.ToString()?.Trim() ?? "";
+            var urls      = server.GetValueOrDefault("urls") is System.Text.Json.JsonElement je
+                                && je.ValueKind == System.Text.Json.JsonValueKind.Array
+                ? je.EnumerateArray().Select(u => u.GetString() ?? "").Where(u => !string.IsNullOrEmpty(u)).ToList()
+                : server.GetValueOrDefault("urls") as List<string> ?? [];
+
+            if (string.IsNullOrEmpty(serverId) || string.IsNullOrEmpty(serverUrl) || string.IsNullOrEmpty(token))
+                continue;
+
+            try
+            {
+                // null type = every library type; the pickers filter client-side.
+                payload[serverId] = await plexService.ListLibrariesAsync(
+                    urls.Prepend(serverUrl).Distinct().ToList(), token, null);
+            }
+            catch (Exception ex)
+            {
+                // Surfaced rather than swallowed: an unreachable Plex rendering as "no
+                // libraries found" is exactly what made the original bug invisible.
+                return StatusCode(502, new { detail = $"Failed to list libraries for {serverId}: {ex.Message}" });
+            }
+        }
+
+        return Ok(new { libraries = payload });
+    }
+
     [HttpGet]
     public IActionResult Get() => Ok(new
     {

@@ -26,7 +26,7 @@ beforeEach(() => {
     advanced: { maxSearchDirs: 20000, searchDepth: 4 },
     autoDownload: false, autoSync: false, lastAutoSyncAt: '',
   } as never)
-  vi.mocked(api.setupApi.plexLibraries).mockResolvedValue({
+  vi.mocked(api.settingsApi.plexLibraries).mockResolvedValue({
     libraries: { srv1: [
       { key: '1', title: 'Films', type: 'movie' },
       { key: '2', title: 'Kids Films', type: 'movie' },
@@ -84,7 +84,7 @@ describe('Settings movie-library selector', () => {
   })
 
   it('explains itself when the server reports no movie libraries', async () => {
-    vi.mocked(api.setupApi.plexLibraries).mockResolvedValue({
+    vi.mocked(api.settingsApi.plexLibraries).mockResolvedValue({
       libraries: { srv1: [{ key: '3', title: 'TV Shows', type: 'show' }] },
     } as never)
 

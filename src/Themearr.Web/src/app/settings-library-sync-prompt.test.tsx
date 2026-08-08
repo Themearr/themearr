@@ -26,7 +26,7 @@ beforeEach(() => {
     advanced: { maxSearchDirs: 20000, searchDepth: 4 },
     autoDownload: false, autoSync: false, lastAutoSyncAt: '',
   } as never)
-  vi.mocked(api.setupApi.plexLibraries).mockResolvedValue({
+  vi.mocked(api.settingsApi.plexLibraries).mockResolvedValue({
     libraries: { srv1: [
       { key: '1', title: 'Films', type: 'movie' },
       { key: '3', title: 'TV Shows', type: 'show' },

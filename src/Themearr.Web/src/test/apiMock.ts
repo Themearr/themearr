@@ -30,7 +30,7 @@ export function makeApiMock() {
       'list', 'search', 'download', 'downloadUrl', 'downloadStatus',
       'deleteTheme', 'ignoreShow', 'unignoreShow', 'stats', 'themeAudioObjectUrl',
     ),
-    settingsApi: group('get', 'save'),
+    settingsApi: group('get', 'save', 'plexLibraries'),
     syncApi: group('start', 'status'),
     historyApi: group('get'),
     rapidApiApi: group('status', 'save', 'remove'),

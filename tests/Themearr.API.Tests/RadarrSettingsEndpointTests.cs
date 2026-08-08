@@ -44,8 +44,9 @@ public class RadarrSettingsEndpointTests
         var radarr = new RadarrLibrarySource(db, new LocalFolderResolver(db), new StubFactory(handler));
         // These tests exercise Radarr endpoints only — Plex is never probed here, so the
         // same handler (unused for Plex) is fine to wire through.
-        var plex = new PlexLibrarySource(new PlexService(new HttpClient(), db, new LocalFolderResolver(db)), db, new StubFactory(handler));
-        return (new SettingsController(db, radarr, plex, new ApiKeyStore(db)), db);
+        var plexService = new PlexService(new HttpClient(), db, new LocalFolderResolver(db));
+        var plex = new PlexLibrarySource(plexService, db, new StubFactory(handler));
+        return (new SettingsController(db, radarr, plex, plexService, new ApiKeyStore(db)), db);
     }
 
     [Fact]
