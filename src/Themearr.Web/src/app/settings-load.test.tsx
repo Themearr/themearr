@@ -53,6 +53,12 @@ beforeEach(() => {
     total: 0, downloaded: 0, pending: 0, ignored: 0, coverage: 0, addedThisWeek: 0,
     recentActivity: [], recentlyAdded: [],
   } as never)
+  // The dashboard also fetches show stats. Unmocked, the bare vi.fn() returns undefined
+  // and useResource throws on `.then` — a mock artifact, not something that can happen in
+  // production, where this is always a Promise.
+  vi.mocked(api.showsApi.stats).mockResolvedValue({
+    total: 0, downloaded: 0, plexTheme: 0, pending: 0, ignored: 0, coverage: 0,
+  } as never)
 })
 
 describe('Settings load failures', () => {
