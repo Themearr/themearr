@@ -28,7 +28,8 @@ beforeEach(() => {
   } as never)
   vi.mocked(api.setupApi.plexLibraries).mockResolvedValue({
     libraries: { srv1: [
-      { key: '1', title: 'Movies', type: 'movie' },
+      { key: '1', title: 'Films', type: 'movie' },
+      { key: '2', title: 'Kids Films', type: 'movie' },
       { key: '3', title: 'TV Shows', type: 'show' },
     ] },
   } as never)
@@ -40,63 +41,55 @@ function renderPage() {
 }
 
 /**
- * Scopes queries to one settings Section. Settings now renders two library pickers, so a
- * page-wide "this label is absent" assertion no longer proves a given section filters
- * correctly — it only proved it while a single list existed.
+ * Scopes queries to one settings Section. Settings renders two library pickers, so a
+ * page-wide assertion can't show that a given section filtered correctly.
  * Section renders <div><div><h2>{title}</h2>…</div>{children}</div>.
  */
 function section(title: string) {
   return within(screen.getByRole('heading', { name: title }).parentElement!.parentElement!)
 }
 
-describe('Settings show-library selector', () => {
-  it('lists only show-type libraries', async () => {
+describe('Settings movie-library selector', () => {
+  it('lists only movie-type libraries, pre-ticked from the stored selection', async () => {
     renderPage()
-    await waitFor(() => expect(screen.getByLabelText(/TV Shows/i)).toBeTruthy())
+    await waitFor(() => expect(screen.getByLabelText('Films')).toBeTruthy())
 
-    // Scoped to this section: 'Movies' is movie-type and belongs to the Movie Libraries
-    // section, which now also exists on this page.
-    expect(section('Show Libraries').getByLabelText('TV Shows')).toBeTruthy()
-    expect(section('Show Libraries').queryByLabelText('Movies')).toBeNull()
+    const movies = section('Movie Libraries')
+    // selectedLibraries was { srv1: ['1'] }, so only Films starts ticked.
+    expect((movies.getByLabelText('Films') as HTMLInputElement).checked).toBe(true)
+    expect((movies.getByLabelText('Kids Films') as HTMLInputElement).checked).toBe(false)
+    // The show library must not leak into the movie picker.
+    expect(movies.queryByLabelText('TV Shows')).toBeNull()
   })
 
-  it('saves the selection as selectedShowLibraries', async () => {
+  it('saves the selection as selectedLibraries', async () => {
     const user = userEvent.setup()
     renderPage()
-    await waitFor(() => expect(screen.getByLabelText(/TV Shows/i)).toBeTruthy())
+    await waitFor(() => expect(screen.getByLabelText('Kids Films')).toBeTruthy())
 
-    await user.click(screen.getByLabelText(/TV Shows/i))
-    await user.click(screen.getByRole('button', { name: /Save show libraries/i }))
+    await user.click(screen.getByLabelText('Kids Films'))
+    await user.click(screen.getByRole('button', { name: /Save movie libraries/i }))
 
     await waitFor(() => expect(api.settingsApi.save).toHaveBeenCalled())
     const payload = vi.mocked(api.settingsApi.save).mock.calls[0][0]
-    expect(payload.selectedShowLibraries).toEqual({ srv1: ['3'] })
+    expect(payload.selectedLibraries).toEqual({ srv1: ['1', '2'] })
   })
 
-  /**
-   * The endpoint treats an absent field as "leave unchanged", so the frontend must always
-   * send the key once it knows about it — otherwise unticking the last library would look
-   * like it saved but leave the old selection stored.
-   */
-  it('sends an explicit empty map when everything is unticked', async () => {
-    const user = userEvent.setup()
-    vi.mocked(api.settingsApi.get).mockResolvedValue({
-      selectedServers: [{ id: 'srv1', name: 'Tower', url: 'http://p', urls: ['http://p'] }],
-      selectedLibraries: { srv1: ['1'] },
-      selectedShowLibraries: { srv1: ['3'] },
-      pathMappings: [], libraryPaths: [],
-      advanced: { maxSearchDirs: 20000, searchDepth: 4 },
-      autoDownload: false, autoSync: false, lastAutoSyncAt: '',
+  /** The hint is the only thing telling an operator that unticking is safe. */
+  it('explains that unticking never deletes theme files', async () => {
+    renderPage()
+    await waitFor(() => expect(screen.getByLabelText('Films')).toBeTruthy())
+
+    expect(screen.getByText(/never deleted from disk/i)).toBeTruthy()
+  })
+
+  it('explains itself when the server reports no movie libraries', async () => {
+    vi.mocked(api.setupApi.plexLibraries).mockResolvedValue({
+      libraries: { srv1: [{ key: '3', title: 'TV Shows', type: 'show' }] },
     } as never)
 
     renderPage()
-    await waitFor(() => expect(screen.getByLabelText(/TV Shows/i)).toBeTruthy())
 
-    await user.click(screen.getByLabelText(/TV Shows/i))   // untick
-    await user.click(screen.getByRole('button', { name: /Save show libraries/i }))
-
-    await waitFor(() => expect(api.settingsApi.save).toHaveBeenCalled())
-    const payload = vi.mocked(api.settingsApi.save).mock.calls[0][0]
-    expect(payload.selectedShowLibraries).toEqual({ srv1: [] })
+    await waitFor(() => expect(screen.getByText(/No movie libraries found/i)).toBeTruthy())
   })
 })
