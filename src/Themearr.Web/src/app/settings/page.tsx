@@ -108,11 +108,15 @@ export default function SettingsPage() {
     setMovieLibs(s.selectedLibraries ?? {})
     setShowLibs(s.selectedShowLibraries ?? {})
 
-    // The show-library picker needs the server's library list, which only the setup
-    // endpoint returns. Supplementary: a failure here leaves the picker empty with a
-    // notice rather than gating the whole settings page.
+    // The library pickers need the server's library list. This must NOT go through
+    // setupApi.plexLibraries: `s.selectedServers` comes back with the Plex token blanked
+    // (it is write-only), and that endpoint skips any server without one — which is why
+    // both pickers used to render "No libraries found" on every install. The settings
+    // endpoint uses the stored tokens server-side instead.
+    // Supplementary: a failure leaves the pickers empty with a notice rather than gating
+    // the whole settings page.
     if (s.selectedServers.length > 0) {
-      setupApi.plexLibraries(s.selectedServers)
+      settingsApi.plexLibraries()
         .then(r => setPlexLibraries(r.libraries))
         .catch((e: Error) => setShowLibsError(e.message || 'Could not list your Plex libraries.'))
     }

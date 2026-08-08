@@ -173,8 +173,13 @@ public class PlexService(HttpClient http, Database db, LocalFolderResolver folde
 
     // ── Libraries ────────────────────────────────────────────────────────────
 
+    /// <summary>
+    /// Libraries on the server. <paramref name="libraryType"/> filters to one Plex type;
+    /// pass <c>null</c> for every type, which the Settings pickers need — they render one
+    /// list per media type from a single response and filter client-side.
+    /// </summary>
     public async Task<List<Dictionary<string, object>>> ListLibrariesAsync(
-        List<string> serverUrls, string serverToken, string libraryType = "movie")
+        List<string> serverUrls, string serverToken, string? libraryType = "movie")
     {
         var clientId = GetClientIdentifier();
         Exception? last = null;
@@ -192,12 +197,15 @@ public class PlexService(HttpClient http, Database db, LocalFolderResolver folde
 
                 var xml = XDocument.Parse(await resp.Content.ReadAsStringAsync());
                 return xml.Descendants("Directory")
-                    .Where(d => d.Attribute("type")?.Value?.ToLower() == libraryType)
-                    .Select(d => new Dictionary<string, object>
+                    .Where(d => libraryType == null || d.Attribute("type")?.Value?.ToLower() == libraryType)
+                    // Report the type Plex actually gave, not the one that was asked for —
+                    // with no filter they differ, and the pickers key off this value.
+                    .Select(d => (dir: d, type: d.Attribute("type")?.Value?.ToLower() ?? ""))
+                    .Select(x => new Dictionary<string, object>
                     {
-                        ["key"]   = d.Attribute("key")?.Value ?? "",
-                        ["title"] = d.Attribute("title")?.Value ?? (libraryType == "movie" ? "Movies" : "TV Shows"),
-                        ["type"]  = libraryType,
+                        ["key"]   = x.dir.Attribute("key")?.Value ?? "",
+                        ["title"] = x.dir.Attribute("title")?.Value ?? (x.type == "movie" ? "Movies" : "TV Shows"),
+                        ["type"]  = x.type,
                     })
                     .Where(lib => !string.IsNullOrEmpty(lib["key"]?.ToString()))
                     .ToList();

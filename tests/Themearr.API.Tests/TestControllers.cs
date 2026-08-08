@@ -32,9 +32,15 @@ internal static class TestControllers
 
     // plexFactory supplies the HttpClient PlexLibrarySource.ProbeAsync uses — pass a stub
     // returning canned responses for the /plex/test path; the default throws (probe unused).
-    public static SettingsController NewSettingsController(Database db, IApiKeyStore keys, IHttpClientFactory plexFactory) =>
-        new(db,
+    public static SettingsController NewSettingsController(Database db, IApiKeyStore keys, IHttpClientFactory plexFactory)
+    {
+        // One PlexService instance for both the source adapter and the controller's own
+        // library listing, so a test that stubs Plex stubs it for both.
+        var plexService = new PlexService(new HttpClient(), db, new LocalFolderResolver(db));
+        return new SettingsController(db,
             new RadarrLibrarySource(db, new LocalFolderResolver(db), new UnusedHttpClientFactory()),
-            new PlexLibrarySource(new PlexService(new HttpClient(), db, new LocalFolderResolver(db)), db, plexFactory),
+            new PlexLibrarySource(plexService, db, plexFactory),
+            plexService,
             keys);
+    }
 }

@@ -242,6 +242,13 @@ export const showsApi = {
 }
 
 export const settingsApi = {
+  // Every Plex library (all types) for the stored servers. Takes no arguments on purpose:
+  // Settings only ever holds servers with the token blanked, so it cannot authenticate to
+  // Plex itself — the server uses its stored tokens. Posting redacted servers to
+  // setupApi.plexLibraries is what left both library pickers permanently empty.
+  plexLibraries: () =>
+    request<{ libraries: Record<string, PlexLibrary[]> }>('/api/settings/plex/libraries'),
+
   get: () => request<Settings>('/api/settings'),
   save: (body: Settings) =>
     request<Settings>('/api/settings', {
