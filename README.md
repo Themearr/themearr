@@ -12,7 +12,8 @@
 
 <p align="center">
   <a href="https://github.com/Themearr/themearr/releases">Releases</a> ·
-  <a href="https://github.com/Themearr/ProxmoxVE">Proxmox Scripts</a>
+  <a href="https://github.com/Themearr/ProxmoxVE">Proxmox Scripts</a> ·
+  <a href="https://www.reddit.com/r/Themearr/">Reddit</a>
 </p>
 
 ---
