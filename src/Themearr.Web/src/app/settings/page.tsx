@@ -13,6 +13,12 @@ const LIBRARY_SOURCE_OPTIONS: { value: 'plex' | 'radarr'; label: string }[] = [
 export default function SettingsPage() {
   const [settings, setSettings] = useState<Settings | null>(null)
 
+  // ── Movie libraries (#32: previously only selectable in the setup wizard) ────
+  const [movieLibs,       setMovieLibs]       = useState<Record<string, string[]>>({})
+  const [savingMovieLibs, setSavingMovieLibs] = useState(false)
+  const [movieLibsSaved,  setMovieLibsSaved]  = useState(false)
+  const [movieLibsError,  setMovieLibsError]  = useState('')
+
   // ── Show libraries (opt-in: nothing selected means shows stay off) ──────────
   const [plexLibraries, setPlexLibraries] = useState<Record<string, PlexLibrary[]>>({})
   const [showLibs,      setShowLibs]      = useState<Record<string, string[]>>({})
@@ -90,6 +96,7 @@ export default function SettingsPage() {
     const s = await settingsApi.get()
     setSettings(s)
     setPlexUrls(Object.fromEntries(s.selectedServers.map(srv => [srv.id, srv.url])))
+    setMovieLibs(s.selectedLibraries ?? {})
     setShowLibs(s.selectedShowLibraries ?? {})
 
     // The show-library picker needs the server's library list, which only the setup
@@ -175,6 +182,34 @@ export default function SettingsPage() {
       setError((e as Error).message)
     } finally {
       setSaving(false)
+    }
+  }
+
+  function toggleMovieLib(serverId: string, key: string) {
+    setMovieLibsSaved(false)
+    setMovieLibs(prev => {
+      const cur = prev[serverId] ?? []
+      return { ...prev, [serverId]: cur.includes(key) ? cur.filter(k => k !== key) : [...cur, key] }
+    })
+  }
+
+  // Same whole-object save as the show libraries: the endpoint takes one payload and
+  // writes the other collections unconditionally, so a partial object would clear them.
+  // Unlike selectedShowLibraries this field is not nullable server-side — it has always
+  // been written unconditionally — so no absent-means-unchanged handling applies.
+  async function saveMovieLibraries() {
+    if (!settings) return
+    setSavingMovieLibs(true)
+    setMovieLibsError('')
+    try {
+      const next = { ...settings, selectedLibraries: movieLibs }
+      await settingsApi.save(next)
+      setSettings(next)
+      setMovieLibsSaved(true)
+    } catch (e) {
+      setMovieLibsError((e as Error)?.message || 'Could not save the movie libraries.')
+    } finally {
+      setSavingMovieLibs(false)
     }
   }
 
@@ -575,6 +610,41 @@ export default function SettingsPage() {
             {settings.selectedServers.length === 0 && (
               <p className="text-sm text-[#667085]">No server connected.</p>
             )}
+          </div>
+        </Section>
+
+        {/* Movie libraries — #32: previously only selectable during first-run setup */}
+        <Section title="Movie Libraries" hint="Which Plex libraries Themearr scans for movies. You can change this at any time — you don't need to re-run setup.">
+          <div className="space-y-3">
+            {Object.entries(plexLibraries).flatMap(([serverId, libs]) =>
+              libs.filter(l => l.type === 'movie').map(l => (
+                <label key={`${serverId}:${l.key}`} className="flex items-center gap-2 text-sm text-[#D0D5DD]">
+                  <input
+                    type="checkbox"
+                    checked={(movieLibs[serverId] ?? []).includes(l.key)}
+                    onChange={() => toggleMovieLib(serverId, l.key)}
+                  />
+                  {l.title}
+                </label>
+              )))}
+
+            {Object.values(plexLibraries).every(libs => !libs.some(l => l.type === 'movie')) && (
+              <p className="text-sm text-[#667085]">No movie libraries found on your Plex server.</p>
+            )}
+
+            <p className="text-xs text-[#667085]">
+              Unticking a library removes its movies from Themearr on the next sync. Their
+              theme files are <strong className="text-[#98A2B3]">never deleted from disk</strong>,
+              and re-ticking the library restores them.
+            </p>
+
+            <div className="flex items-center gap-3">
+              <Button size="sm" onClick={saveMovieLibraries} loading={savingMovieLibs}>
+                Save movie libraries
+              </Button>
+              {movieLibsSaved && <p className="text-xs text-[#12B76A]">Saved ✓</p>}
+            </div>
+            {movieLibsError && <p className="text-xs text-[#FDA29B]">{movieLibsError}</p>}
           </div>
         </Section>
 
