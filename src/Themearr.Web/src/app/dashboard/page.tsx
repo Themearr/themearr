@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { statsApi } from '@/lib/api'
+import { showsApi, statsApi } from '@/lib/api'
 import { AppShell } from '@/components/layout/AppShell'
 import { Button, EmptyState, ErrorIcon, Spinner } from '@/components/ui'
 import { useResource } from '@/lib/useResource'
@@ -12,6 +12,11 @@ export default function DashboardPage() {
   // gate: an error screen with retry rather than the blank page it rendered
   // before (stats stuck at null with the failure silently swallowed).
   const { data: stats, error, retry } = useResource(useCallback(() => statsApi.get(), []))
+
+  // Supplementary: the dashboard must render without it. Its own useResource keeps
+  // "failed" distinct from "empty", so a failure can never render as 0% coverage.
+  // This endpoint has existed since 1c and had no caller until now.
+  const { data: showStats } = useResource(useCallback(() => showsApi.stats(), []))
 
   if (stats === null && error) {
     return (
@@ -36,7 +41,10 @@ export default function DashboardPage() {
     )
   }
 
-  const coverageColor = stats.coverage >= 80 ? '#12B76A' : stats.coverage >= 40 ? '#F79009' : '#BB0000'
+  // Two coverage bars now, so the thresholds live in one place.
+  const coverageColorFor = (pct: number) =>
+    pct >= 80 ? '#12B76A' : pct >= 40 ? '#F79009' : '#BB0000'
+  const coverageColor = coverageColorFor(stats.coverage)
 
   return (
     <AppShell title="Dashboard">
@@ -46,7 +54,9 @@ export default function DashboardPage() {
         <div className="rounded-xl border border-[#1D2939] bg-[#101828] p-5">
           <div className="flex items-end justify-between mb-3">
             <div>
-              <p className="text-xs font-semibold text-[#667085] uppercase tracking-wider mb-1">Library coverage</p>
+              {/* "Movie coverage", not "Library": every number on this hero and its tiles
+                  is movie-scoped, and there is a show coverage figure further down. */}
+              <p className="text-xs font-semibold text-[#667085] uppercase tracking-wider mb-1">Movie coverage</p>
               <p className="text-4xl font-bold" style={{ color: coverageColor }}>{stats.coverage}%</p>
             </div>
             <p className="text-sm text-[#667085] pb-1">
@@ -165,6 +175,63 @@ export default function DashboardPage() {
             )}
           </div>
         </div>
+
+        {/* ── Shows ───────────────────────────────────────────────────────
+            Last, below the recent panels: those panels are movie-only, so putting this
+            above them would leave two unlabelled movie panels under a Shows heading.
+            Only when shows actually exist — a movie-only dashboard is unchanged, rather
+            than carrying an empty block that implies something is broken. */}
+        {showStats && showStats.total > 0 && (
+          // A labelled landmark, not a bare div: three of the four tile labels also exist
+          // in the movie row above, so this is what lets tests (and a screen reader) tell
+          // the two apart.
+          <section aria-label="Shows" className="space-y-3">
+            <div className="rounded-xl border border-[#1D2939] bg-[#101828] p-5">
+              <div className="flex items-end justify-between mb-3">
+                <div>
+                  <p className="text-xs font-semibold text-[#667085] uppercase tracking-wider mb-1">Show coverage</p>
+                  <p className="text-4xl font-bold" style={{ color: coverageColorFor(showStats.coverage) }}>
+                    {showStats.coverage}%
+                  </p>
+                </div>
+                {/* "covered", not "downloaded": a show Plex already themes counts toward
+                    the bar, and the Plex theme tile below breaks that out. */}
+                <p className="text-sm text-[#667085] pb-1">
+                  {showStats.downloaded + showStats.plexTheme} of {showStats.total} shows covered
+                </p>
+              </div>
+              <div className="h-2 w-full rounded-full bg-[#1D2939] overflow-hidden">
+                <div
+                  className="h-full rounded-full transition-all duration-700"
+                  style={{
+                    width: `${Math.min(showStats.coverage, 100)}%`,
+                    backgroundColor: coverageColorFor(showStats.coverage),
+                  }}
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              {[
+                { label: 'Pending',    value: showStats.pending,    color: '#F79009' },
+                { label: 'Downloaded', value: showStats.downloaded, color: '#12B76A' },
+                { label: 'Plex theme', value: showStats.plexTheme,  color: '#98A2B3' },
+                { label: 'Ignored',    value: showStats.ignored,    color: '#475467' },
+              ].map(({ label, value, color }) => (
+                // All four go to /shows, including Pending: the queue's Movies|Shows
+                // toggle is component state, so /queue would land on movies.
+                <Link
+                  key={label}
+                  to="/shows"
+                  className="rounded-xl border border-[#1D2939] bg-[#101828] px-4 py-4 hover:border-[#344054] transition-colors"
+                >
+                  <p className="text-xs text-[#667085] mb-1">{label}</p>
+                  <p className="text-2xl font-bold" style={{ color }}>{value}</p>
+                </Link>
+              ))}
+            </div>
+          </section>
+        )}
 
       </div>
     </AppShell>
