@@ -28,7 +28,13 @@ export interface MediaAdapter {
 
   /** Which filter chips the grid renders, in order. */
   statuses: MediaStatus[]
-  labels: { plural: string; searchPlaceholder: string; emptyTitle: string }
+  /**
+   * User-facing nouns. `singular` exists because the shared queue and grid write
+   * sentences about one item ("3 shows left in queue", "this show is ignored"), and
+   * deriving it from `plural` with a ternary is how the queue ended up telling someone
+   * triaging shows that they had "91 movies left".
+   */
+  labels: { singular: string; plural: string; searchPlaceholder: string; emptyTitle: string }
 }
 
 export const moviesAdapter: MediaAdapter = {
@@ -44,7 +50,7 @@ export const moviesAdapter: MediaAdapter = {
   themeAudioObjectUrl: id => moviesApi.themeAudioObjectUrl(id),
 
   statuses: ['pending', 'downloaded', 'ignored'],
-  labels: { plural: 'movies', searchPlaceholder: 'Search movies…', emptyTitle: 'No movies yet' },
+  labels: { singular: 'movie', plural: 'movies', searchPlaceholder: 'Search movies…', emptyTitle: 'No movies yet' },
 }
 
 export const showsAdapter: MediaAdapter = {
@@ -72,5 +78,5 @@ export const showsAdapter: MediaAdapter = {
 
   // 'plexTheme' sits between downloaded and ignored: it is covered, but not by us.
   statuses: ['pending', 'downloaded', 'plexTheme', 'ignored'],
-  labels: { plural: 'shows', searchPlaceholder: 'Search shows…', emptyTitle: 'No shows yet' },
+  labels: { singular: 'show', plural: 'shows', searchPlaceholder: 'Search shows…', emptyTitle: 'No shows yet' },
 }

@@ -374,7 +374,7 @@ export default function QueuePage() {
           </div>
           <p className="text-base font-semibold text-[#F9FAFB]">All caught up!</p>
           <p className="text-sm text-[#667085]">
-            Every {media === 'shows' ? 'show' : 'movie'} in your library has a theme.
+            Every {adapter.labels.singular} in your library has a theme.
           </p>
         </div>
       </AppShell>
@@ -403,7 +403,7 @@ export default function QueuePage() {
             )}
             Auto
           </button>
-          <Button variant="ghost" size="sm" onClick={skipForever} disabled={downloading} title="Never show this movie in the queue again">
+          <Button variant="ghost" size="sm" onClick={skipForever} disabled={downloading} title={`Never show this ${adapter.labels.singular} in the queue again`}>
             Ignore
           </Button>
           {/* Wrapped, not passed directly: advanceQueue's first parameter is a
@@ -433,7 +433,7 @@ export default function QueuePage() {
             <p className="text-base font-semibold text-[#F9FAFB] leading-snug">{current.title}</p>
             {current.year && <p className="text-sm text-[#667085] mt-0.5">{current.year}</p>}
             <p className="mt-2 text-xs text-[#475467]">
-              {remaining} movie{remaining !== 1 ? 's' : ''} left in queue
+              {remaining} {adapter.labels.singular}{remaining !== 1 ? 's' : ''} left in queue
             </p>
           </div>
         </div>
@@ -443,7 +443,7 @@ export default function QueuePage() {
           <div className="rounded-xl border border-[#1D2939] bg-[#101828] overflow-hidden">
             <div className="px-4 py-3 border-b border-[#1D2939]">
               <p className="text-xs font-semibold text-[#667085] uppercase tracking-wider">
-                Up next · {pending.length - currentIdx - 1} movie{pending.length - currentIdx - 1 !== 1 ? 's' : ''}
+                Up next · {pending.length - currentIdx - 1} {adapter.labels.singular}{pending.length - currentIdx - 1 !== 1 ? 's' : ''}
               </p>
             </div>
             <div className="divide-y divide-[#1D2939] max-h-72 overflow-y-auto">

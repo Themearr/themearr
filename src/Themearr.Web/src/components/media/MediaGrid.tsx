@@ -255,7 +255,7 @@ function MediaActionModal({ item, adapter, onClose, onUpdated }: {
           {item.status === 'ignored' && (
             <div className="space-y-3">
               <p className="text-sm text-[#667085]">
-                This {adapter.labels.plural === 'shows' ? 'show' : 'movie'} is ignored and won&apos;t appear in the queue.
+                This {adapter.labels.singular} is ignored and won&apos;t appear in the queue.
               </p>
               <Button className="w-full" size="sm" onClick={unignore} loading={ignoring}>
                 Remove from ignore list

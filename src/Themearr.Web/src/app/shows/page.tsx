@@ -5,13 +5,15 @@ import type { Show } from '@/lib/types'
 import { AppShell } from '@/components/layout/AppShell'
 import { MediaGrid } from '@/components/media/MediaGrid'
 import { showsAdapter } from '@/lib/media/adapter'
-import { Button, EmptyState, ErrorIcon } from '@/components/ui'
+import { Button, EmptyState, ErrorIcon, Spinner } from '@/components/ui'
 import { useResource } from '@/lib/useResource'
 
 export default function ShowsPage() {
   const [shows, setShows] = useState<Show[]>([])
   const [syncing, setSyncing] = useState(false)
   const [syncError, setSyncError] = useState<string | null>(null)
+  /** What the last sync reported — the task registry's own string, e.g. "synced 253 shows". */
+  const [syncResult, setSyncResult] = useState<string | null>(null)
   const [refreshError, setRefreshError] = useState<string | null>(null)
 
   // Same monotonic-stamp guard the movies page uses: the sync flow and the initial load
@@ -56,23 +58,30 @@ export default function ShowsPage() {
   // Reads the shared task snapshot rather than a shows-specific status endpoint. Silent
   // on failure: this poll doesn't drive the page's content, so a dropped request must not
   // disturb what's already shown.
-  async function pollUntilSyncFinishes() {
+  //
+  // Returns the task's own last result once it stops running, or null if we gave up
+  // waiting. The caller must distinguish those: reporting a timeout as a completed sync
+  // is the same silent-success problem that hid the show-sync bug for two releases.
+  async function pollUntilSyncFinishes(): Promise<string | null> {
     for (let i = 0; i < 150; i++) {                 // ~5 minutes at 2s
       await new Promise(r => setTimeout(r, 2000))
       try {
-        const tasks = await systemApi.tasks()
-        if (!tasks.find(t => t.id === 'syncShows')?.isRunning) return
+        const row = (await systemApi.tasks()).find(t => t.id === 'syncShows')
+        if (row && !row.isRunning) return row.lastResult ?? 'Sync finished'
       } catch { /* keep waiting */ }
     }
+    return null
   }
 
   async function runSync() {
     setSyncing(true)
     setSyncError(null)
+    setSyncResult(null)
     try {
       await systemApi.runTask('syncShows')
-      await pollUntilSyncFinishes()
+      const result = await pollUntilSyncFinishes()
       await loadShows()
+      setSyncResult(result ?? 'Still syncing — it is taking longer than expected. Check System → Tasks.')
     } catch (e) {
       // A sync the operator explicitly asked for, so its failure must be visible.
       setSyncError(e instanceof Error && e.message ? e.message : 'Could not start the sync')
@@ -97,7 +106,20 @@ export default function ShowsPage() {
         </div>
       )}
 
-      {shows.length === 0 && showsError ? (
+      {syncResult && !syncing && (
+        <p className="mb-4 text-sm text-[#12B76A]">{syncResult}</p>
+      )}
+
+      {/* Checked before the empty states below. A show sync makes one Plex request per
+          show, so it is slow enough that rendering "No shows yet" underneath a spinning
+          button reads as a broken button rather than as work in progress. */}
+      {syncing ? (
+        <EmptyState
+          icon={<Spinner size={28} className="text-[#BB0000]" />}
+          title="Syncing shows from Plex…"
+          description="Themearr asks Plex where each show lives, so a large library can take a minute."
+        />
+      ) : shows.length === 0 && showsError ? (
         // Nothing loaded AND the request failed — an outage must not render as a
         // reassuring "no shows yet". See useResource.
         <EmptyState
