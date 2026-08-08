@@ -390,22 +390,35 @@ public class PlexService(HttpClient http, Database db, LocalFolderResolver folde
                     if (string.IsNullOrEmpty(show.RatingKey)) continue;
                     var showId = $"{serverId}:{show.RatingKey}";
                     if (!seen.Add(showId)) continue;
-                    if (string.IsNullOrEmpty(show.RootFolder))
+                    // Plex does NOT return <Location> in the section listing — verified against a
+                    // real server — so the show's folder has to come from its own metadata. Kept
+                    // as a fallback rather than the only path: if a build does include it, that
+                    // saves a round trip, and this fetch costs one request per show.
+                    var rootFolder = show.RootFolder;
+                    if (string.IsNullOrEmpty(rootFolder))
+                        rootFolder = await FetchShowRootFolderAsync(urlList, show.RatingKey, serverToken, clientId, logFn);
+
+                    if (string.IsNullOrEmpty(rootFolder))
                     {
-                        logFn?.Invoke($"Skipping {show.Title} — no folder reported by Plex");
+                        // Counted, not merely logged. An uncounted skip is what made "Plex returned
+                        // 253 shows, Themearr stored 0" indistinguishable from an empty library.
+                        unresolvedCount++;
+                        if (unresolvedSample.Length == 0) unresolvedSample = $"{show.Title} (Plex reported no folder)";
+                        logFn?.Invoke($"Skipping {show.Title} — Plex reported no folder for it");
                         continue;
                     }
+
                     // Reuse the file-path resolver by appending a dummy filename, so the show's
                     // ROOT folder is resolved through path-mappings (same trick as RadarrLibrarySource).
-                    var (folder, _) = folders.Resolve(show.RootFolder.TrimEnd('/', '\\') + "/placeholder.mkv");
+                    var (folder, _) = folders.Resolve(rootFolder.TrimEnd('/', '\\') + "/placeholder.mkv");
                     if (string.IsNullOrEmpty(folder))
                     {
                         unresolvedCount++;
-                        if (unresolvedSample.Length == 0) unresolvedSample = show.RootFolder;
-                        logFn?.Invoke($"Skipping {show.Title} — unresolved path: {show.RootFolder}  (add a Path Mapping)");
+                        if (unresolvedSample.Length == 0) unresolvedSample = rootFolder;
+                        logFn?.Invoke($"Skipping {show.Title} — unresolved path: {rootFolder}  (add a Path Mapping)");
                         continue;
                     }
-                    result.Add(new ShowRecord(folder, "plex", showId, show.Title, show.Year, show.RootFolder, show.HasTheme));
+                    result.Add(new ShowRecord(folder, "plex", showId, show.Title, show.Year, rootFolder, show.HasTheme));
                 }
             }
         }
@@ -413,6 +426,42 @@ public class PlexService(HttpClient http, Database db, LocalFolderResolver folde
         db.SetSetting("last_show_sync_unresolved_count", unresolvedCount.ToString());
         db.SetSetting("last_show_sync_unresolved_sample", unresolvedSample);
         return result;
+    }
+
+    /// <summary>
+    /// A show's root folder, read from <c>/library/metadata/{ratingKey}</c>.
+    ///
+    /// This exists because Plex omits <c>&lt;Location&gt;</c> from the section listing
+    /// (<c>/library/sections/{key}/all?type=2</c>) and ignores <c>includeLocations=1</c> there —
+    /// both verified against a real server. The per-show metadata endpoint is the only place
+    /// the folder is available, which is why this costs one request per show.
+    ///
+    /// Returns "" when the lookup fails or reports no location. The caller counts and logs
+    /// that show rather than aborting the whole sync, so one bad show can't cost the library.
+    /// </summary>
+    private async Task<string> FetchShowRootFolderAsync(
+        List<string> serverUrls, string ratingKey, string serverToken, string clientId, Action<string>? logFn)
+    {
+        try
+        {
+            var url = $"{serverUrls[0].TrimEnd('/')}/library/metadata/{Uri.EscapeDataString(ratingKey)}?" +
+                BuildQuery(ClientParams(clientId), ("X-Plex-Token", serverToken));
+            var req = new HttpRequestMessage(HttpMethod.Get, url);
+            foreach (var (k, v) in ClientHeaders(clientId, serverToken)) req.Headers.TryAddWithoutValidation(k, v);
+
+            var resp = await http.SendAsync(req);
+            resp.EnsureSuccessStatusCode();
+
+            // Descendants, not Elements: the Location sits inside the <Directory>, and a real
+            // response also carries Genre/Role/Image siblings around it.
+            return XDocument.Parse(await resp.Content.ReadAsStringAsync())
+                .Descendants("Location").FirstOrDefault()?.Attribute("path")?.Value?.Trim() ?? "";
+        }
+        catch (Exception ex)
+        {
+            logFn?.Invoke($"Could not read the folder for show {ratingKey}: {ex.Message}");
+            return "";
+        }
     }
 
     private async Task<List<PlexShow>> FetchShowsForSectionAsync(
