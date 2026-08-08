@@ -89,4 +89,26 @@ describe('Dashboard show stats', () => {
     expect(screen.getByText(/1264 of 1451 movies/i)).toBeTruthy()
     expect(screen.getByText('This week')).toBeTruthy()   // movie-only tile, still there
   })
+
+  it('says so when show stats fail but the rest of the dashboard loaded', async () => {
+    vi.mocked(api.showsApi.stats).mockRejectedValue(new Error('Service Unavailable'))
+
+    renderPage()
+    await waitFor(() => expect(screen.getByText(/Movie coverage/i)).toBeTruthy())
+
+    // Hiding the block here is indistinguishable from "no shows" — say what happened.
+    await waitFor(() => expect(screen.getByText(/Couldn't load show stats/i)).toBeTruthy())
+    expect(screen.getByText(/Service Unavailable/i)).toBeTruthy()
+  })
+
+  it('does not add a show-stats notice when the whole dashboard failed', async () => {
+    vi.mocked(api.statsApi.get).mockRejectedValue(new Error('down'))
+    vi.mocked(api.showsApi.stats).mockRejectedValue(new Error('down'))
+
+    renderPage()
+
+    // The existing whole-page error screen already covers this.
+    await waitFor(() => expect(screen.getByText(/Couldn't load the dashboard/i)).toBeTruthy())
+    expect(screen.queryByText(/Couldn't load show stats/i)).toBeNull()
+  })
 })

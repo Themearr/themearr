@@ -16,7 +16,7 @@ export default function DashboardPage() {
   // Supplementary: the dashboard must render without it. Its own useResource keeps
   // "failed" distinct from "empty", so a failure can never render as 0% coverage.
   // This endpoint has existed since 1c and had no caller until now.
-  const { data: showStats } = useResource(useCallback(() => showsApi.stats(), []))
+  const { data: showStats, error: showStatsError } = useResource(useCallback(() => showsApi.stats(), []))
 
   if (stats === null && error) {
     return (
@@ -181,6 +181,16 @@ export default function DashboardPage() {
             above them would leave two unlabelled movie panels under a Shows heading.
             Only when shows actually exist — a movie-only dashboard is unchanged, rather
             than carrying an empty block that implies something is broken. */}
+        {/* Only reachable when the movie stats loaded — a total outage returns the error
+            screen above, so this never double-reports. Shown rather than swallowed: a
+            missing block is indistinguishable from "no shows", and that ambiguity is
+            exactly what hid two earlier bugs. */}
+        {showStatsError && (
+          <div className="rounded-lg border border-[#B42318]/40 bg-[#FEF3F2]/5 px-4 py-3">
+            <p className="text-sm text-[#FDA29B]">Couldn&apos;t load show stats: {showStatsError}</p>
+          </div>
+        )}
+
         {showStats && showStats.total > 0 && (
           // A labelled landmark, not a bare div: three of the four tile labels also exist
           // in the movie row above, so this is what lets tests (and a screen reader) tell
