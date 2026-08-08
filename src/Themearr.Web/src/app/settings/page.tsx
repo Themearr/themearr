@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { apiKeyApi, plexApi, radarrApi, rapidApiApi, settingsApi, setupApi, versionApi } from '@/lib/api'
+import { apiKeyApi, plexApi, radarrApi, rapidApiApi, settingsApi, setupApi, syncApi, systemApi, versionApi } from '@/lib/api'
 import type { PlexLibrary, Settings, VersionInfo } from '@/lib/types'
 import { AppShell } from '@/components/layout/AppShell'
 import { Button, EmptyState, ErrorIcon, Input, Spinner } from '@/components/ui'
@@ -10,6 +10,9 @@ const LIBRARY_SOURCE_OPTIONS: { value: 'plex' | 'radarr'; label: string }[] = [
   { value: 'radarr', label: 'Radarr' },
 ]
 
+/** Which library picker a post-save sync belongs to. */
+type LibKind = 'movies' | 'shows'
+
 export default function SettingsPage() {
   const [settings, setSettings] = useState<Settings | null>(null)
 
@@ -18,6 +21,12 @@ export default function SettingsPage() {
   const [savingMovieLibs, setSavingMovieLibs] = useState(false)
   const [movieLibsSaved,  setMovieLibsSaved]  = useState(false)
   const [movieLibsError,  setMovieLibsError]  = useState('')
+
+  // Which kind of sync is currently starting, and which kind has been started. Keyed by
+  // kind rather than boolean because both library sections can show a prompt at the same
+  // time — a shared flag would let one section's click report success in the other.
+  const [syncingLibs,    setSyncingLibs]    = useState<LibKind | null>(null)
+  const [libSyncStarted, setLibSyncStarted] = useState<LibKind | null>(null)
 
   // ── Show libraries (opt-in: nothing selected means shows stay off) ──────────
   const [plexLibraries, setPlexLibraries] = useState<Record<string, PlexLibrary[]>>({})
@@ -185,6 +194,21 @@ export default function SettingsPage() {
     }
   }
 
+  async function startLibrarySync(kind: LibKind) {
+    setSyncingLibs(kind)
+    try {
+      if (kind === 'movies') await syncApi.start()
+      else                   await systemApi.runTask('syncShows')
+      setLibSyncStarted(kind)
+    } catch (e) {
+      const msg = (e as Error)?.message || 'Could not start the sync.'
+      if (kind === 'movies') setMovieLibsError(msg)
+      else                   setShowLibsError(msg)
+    } finally {
+      setSyncingLibs(null)
+    }
+  }
+
   function toggleMovieLib(serverId: string, key: string) {
     setMovieLibsSaved(false)
     setMovieLibs(prev => {
@@ -200,6 +224,7 @@ export default function SettingsPage() {
   async function saveMovieLibraries() {
     if (!settings) return
     setSavingMovieLibs(true)
+    setLibSyncStarted(s => (s === 'movies' ? null : s))
     setMovieLibsError('')
     try {
       const next = { ...settings, selectedLibraries: movieLibs }
@@ -229,6 +254,7 @@ export default function SettingsPage() {
   async function saveShowLibraries() {
     if (!settings) return
     setSavingShowLibs(true)
+    setLibSyncStarted(s => (s === 'shows' ? null : s))
     setShowLibsError('')
     try {
       const next = { ...settings, selectedShowLibraries: showLibs }
@@ -642,7 +668,13 @@ export default function SettingsPage() {
               <Button size="sm" onClick={saveMovieLibraries} loading={savingMovieLibs}>
                 Save movie libraries
               </Button>
-              {movieLibsSaved && <p className="text-xs text-[#12B76A]">Saved ✓</p>}
+              {movieLibsSaved && (
+                <LibrarySyncPrompt
+                  onSync={() => startLibrarySync('movies')}
+                  syncing={syncingLibs === 'movies'}
+                  started={libSyncStarted === 'movies'}
+                />
+              )}
             </div>
             {movieLibsError && <p className="text-xs text-[#FDA29B]">{movieLibsError}</p>}
           </div>
@@ -671,7 +703,13 @@ export default function SettingsPage() {
               <Button size="sm" onClick={saveShowLibraries} loading={savingShowLibs}>
                 Save show libraries
               </Button>
-              {showLibsSaved && <p className="text-xs text-[#12B76A]">Saved ✓</p>}
+              {showLibsSaved && (
+                <LibrarySyncPrompt
+                  onSync={() => startLibrarySync('shows')}
+                  syncing={syncingLibs === 'shows'}
+                  started={libSyncStarted === 'shows'}
+                />
+              )}
             </div>
             {showLibsError && <p className="text-xs text-[#FDA29B]">{showLibsError}</p>}
           </div>
@@ -1090,6 +1128,28 @@ function formatUnix(unix: string): string {
     const d = new Date(parseInt(unix, 10) * 1000)
     return d.toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
   } catch { return '' }
+}
+
+/**
+ * Shown after a library selection is saved. Saving only records which libraries Themearr
+ * watches — nothing is imported or removed until a sync runs — so without this the save
+ * appears to do nothing, which is how #32 came about.
+ *
+ * Deliberately not auto-dismissed: it is a "you still need to do this" reminder, and a
+ * timed disappearance would defeat that.
+ */
+function LibrarySyncPrompt({ onSync, syncing, started }: {
+  onSync: () => void
+  syncing: boolean
+  started: boolean
+}) {
+  if (started) return <p className="text-xs text-[#12B76A]">Sync started ✓</p>
+  return (
+    <div className="flex flex-wrap items-center gap-3 rounded-lg border border-[#1D2939] bg-[#0C111D] px-3 py-2">
+      <p className="text-xs text-[#D0D5DD]">Saved — run a sync to apply the change.</p>
+      <Button size="sm" variant="secondary" onClick={onSync} loading={syncing}>Sync now</Button>
+    </div>
+  )
 }
 
 function Section({ title, hint, children }: { title: string; hint?: string; children: React.ReactNode }) {
