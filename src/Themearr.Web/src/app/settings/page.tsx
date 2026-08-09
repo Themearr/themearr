@@ -469,7 +469,10 @@ export default function SettingsPage() {
     const input = fieldRef.current?.querySelector('input')
     input?.focus()
     input?.select()
-    let copiedViaExecCommand = false
+    // No initialiser: both branches below assign it, so a starting value would
+    // be dead. TypeScript's definite-assignment analysis confirms the read below
+    // is safe.
+    let copiedViaExecCommand: boolean
     try {
       copiedViaExecCommand = document.execCommand('copy')
     } catch {
