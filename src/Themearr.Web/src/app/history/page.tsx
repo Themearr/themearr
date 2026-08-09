@@ -1,7 +1,7 @@
 import { useCallback, useState } from 'react'
 import { historyApi } from '@/lib/api'
 import { AppShell } from '@/components/layout/AppShell'
-import { Button, EmptyState, ErrorIcon, Spinner } from '@/components/ui'
+import { Button, EmptyState, ErrorIcon, ShowBadge, Spinner } from '@/components/ui'
 import { useResource } from '@/lib/useResource'
 
 type DateFilter = 'all' | 'today' | 'week' | 'month'
@@ -128,6 +128,7 @@ export default function HistoryPage() {
                     {entry.movieYear && (
                       <span className="ml-1.5 font-normal text-[#667085]">({entry.movieYear})</span>
                     )}
+                    <ShowBadge mediaType={entry.mediaType} />
                   </p>
 
                   {/* Theme song */}

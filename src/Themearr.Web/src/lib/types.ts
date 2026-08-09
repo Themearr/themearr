@@ -116,6 +116,11 @@ export interface HistoryEntry {
   themeTitle: string | null
   sourceUrl: string | null
   downloadedAt: string
+  /**
+   * "movie" | "show". Typed as string rather than a union: it crosses the wire, so a
+   * union would be a compile-time claim the runtime cannot honour.
+   */
+  mediaType: string
 }
 
 export interface DashboardStats {

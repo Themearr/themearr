@@ -187,3 +187,20 @@ export function EmptyState({ icon, title, description, action }: {
     </div>
   )
 }
+
+// ── Show badge ────────────────────────────────────────────────────────────────
+
+/**
+ * Marks a history entry as a show. Renders nothing for movies: at roughly 1437 movies to
+ * 100 shows, badging every row would add a pill to ~94% of a long list that never needed
+ * one. Shared by the dashboard and History because two copies of a media-type label is
+ * exactly how the queue came to tell someone triaging shows they had "91 movies left".
+ */
+export function ShowBadge({ mediaType }: { mediaType: string }) {
+  if (mediaType !== 'show') return null
+  return (
+    <span className="ml-1.5 rounded bg-[#344054] px-1.5 py-0.5 align-middle text-[10px] font-semibold uppercase tracking-wide text-[#D0D5DD]">
+      Show
+    </span>
+  )
+}
