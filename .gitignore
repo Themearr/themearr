@@ -36,3 +36,10 @@ Thumbs.db
 
 # Playwright MCP session artifacts (snapshots, screenshots, console logs)
 .playwright-mcp/
+
+# E2E suite (tests/e2e) — deps and run artifacts. The lockfile IS committed so CI
+# can `npm ci`.
+tests/e2e/node_modules/
+tests/e2e/test-results/
+tests/e2e/playwright-report/
+tests/e2e/blob-report/

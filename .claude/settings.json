@@ -4,8 +4,42 @@
       "Read(//Users/devlin/.dotnet/tools/**)",
       "Bash(dotnet tool *)",
       "Bash(dotnet build *)",
+      "Bash(dotnet test *)",
       "Bash(npx --no-install tsc --noEmit)",
-      "mcp__plugin_semgrep_semgrep__semgrep_scan"
+      "Bash(npx --no-install eslint *)",
+      "Bash(npx --no-install vitest *)",
+      "mcp__plugin_semgrep_guardian__get_semgrep_sast_findings",
+      "mcp__plugin_semgrep_guardian__get_semgrep_secrets_findings",
+      "mcp__plugin_semgrep_guardian__get_semgrep_supply_chain_findings",
+      "mcp__plugin_semgrep_guardian__list_semgrep_projects",
+      "mcp__plugin_semgrep_guardian__whoami"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/.claude/hooks/web-check.sh\"",
+            "timeout": 120,
+            "statusMessage": "Typechecking and linting web…"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/.claude/hooks/test-gate.sh\"",
+            "timeout": 300,
+            "statusMessage": "Running the release gate…"
+          }
+        ]
+      }
     ]
   }
 }
