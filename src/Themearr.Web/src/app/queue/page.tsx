@@ -195,7 +195,13 @@ export default function QueuePage() {
         setError(e.message)
         setDownloading(false)
         downloadingMovieId.current = null
-        autoTriggeredFor.current = null // allow manual retry
+        // Deliberately NOT resetting autoTriggeredFor here. `downloading` flipping back
+        // to false re-runs this effect, and a cleared guard reads as "never tried this
+        // one" -- so a movie that fails once would retry at round-trip rate forever, each
+        // attempt wiping the previous error via the setError('') above. Leaving the guard
+        // set makes "already tried this one" durable across the re-check: the failure
+        // stays visible, and Skip/Ignore plus the per-result Download button remain the
+        // way out.
       })
   }, [autoMode, current, downloading, adapter])
 
