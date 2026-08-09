@@ -88,8 +88,10 @@ In `YoutubeService`, where `bestMatch` is set — one threshold in one place.
 
 Tightening the hint is intended, not collateral. Painting a green "Best match" badge on
 "Applecart Trailer #1" is the same false claim the auto-downloader makes, addressed to a
-human instead of a worker. All eight results still render and stay selectable; only the
-badge goes.
+human instead of a worker. All eight results still render, stay selectable, and keep their
+own Download button; what goes is both the badge and `queue/page.tsx`'s toolbar "Best
+match" one-click action, which is gated on the same flag and disappears along with it on a
+weak search.
 
 The rejected alternatives, and why:
 
@@ -105,10 +107,11 @@ The rejected alternatives, and why:
 Nothing new is required — every path already exists:
 
 - `AutoDownloadService` / `ShowAutoDownloadService` → log and back off for `NoMatchCooldown`
-  (24h).
+  (6h).
 - `MoviesController.AutoDownload` → `422` with *"No suitable match found — please select
   manually."*
-- Manual search → all eight results still listed, just no badge.
+- Manual search → all eight results still listed, each keeping its own Download button;
+  just no badge and no one-click Best-match button (see "Where it applies" above).
 
 ## Testing
 

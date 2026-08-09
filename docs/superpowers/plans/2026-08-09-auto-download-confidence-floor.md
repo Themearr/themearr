@@ -552,7 +552,7 @@ Append to `tests/Themearr.API.Tests/ThemeMatchTests.cs`, inside the class:
         // Row 0 or nothing. A lower-ranked result that would pass the floor is NOT
         // promoted: the ranking already said it was the weaker candidate, and the
         // measurement that validated this rule was taken under these semantics.
-        // The caller's answer to -1 is a 24h backoff, which is the correct outcome.
+        // The caller's answer to -1 is a 6h backoff, which is the correct outcome.
         var ranked = new[]
         {
             ("Applecart Trailer #1 (2017) - Movie Trailer", 20),
@@ -593,7 +593,7 @@ Add to `src/Themearr.API/Services/ThemeMatch.cs`, inside the class, after `HasMu
     /// Index of the result to mark as the best match, or -1 for none. Row 0 or nothing:
     /// a lower-ranked result is never promoted just because it clears the floor, because
     /// the ranking already judged it the weaker candidate. Declining is a supported
-    /// outcome everywhere — both auto-download workers back off 24h and the movie
+    /// outcome everywhere — both auto-download workers back off 6h and the movie
     /// endpoint returns 422.
     /// </summary>
     public static int BestMatchIndex(IReadOnlyList<(string VideoTitle, int Score)> ranked)
