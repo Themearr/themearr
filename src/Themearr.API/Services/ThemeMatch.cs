@@ -63,6 +63,25 @@ public static class ThemeMatch
         return false;
     }
 
+    /// <summary>
+    /// Whether a ranked result may be acted on with no human looking at it: it must both
+    /// out-rank the field and say it is music. The score alone was never a quality bar —
+    /// it exists to order candidates against each other, so "best of a bad pool" and
+    /// "good" were the same answer, and low-profile films got trailers.
+    /// </summary>
+    public static bool IsConfident(int score, string videoTitle)
+        => score > 0 && HasMusicEvidence(videoTitle);
+
+    /// <summary>
+    /// Index of the result to mark as the best match, or -1 for none. Row 0 or nothing:
+    /// a lower-ranked result is never promoted just because it clears the floor, because
+    /// the ranking already judged it the weaker candidate. Declining is a supported
+    /// outcome everywhere — both auto-download workers back off 24h and the movie
+    /// endpoint returns 422.
+    /// </summary>
+    public static int BestMatchIndex(IReadOnlyList<(string VideoTitle, int Score)> ranked)
+        => ranked.Count > 0 && IsConfident(ranked[0].Score, ranked[0].VideoTitle) ? 0 : -1;
+
     /// <param name="year">Accepted for caller symmetry; the weights do not use it today.</param>
     public static int Score(string videoTitle, string channel, TimeSpan? duration,
         string? title, int? year)

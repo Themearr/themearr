@@ -137,4 +137,65 @@ public class ThemeMatchTests
 
         Assert.Equal(73, score);
     }
+
+    [Theory]
+    // The six measured false positives from issue #39. Each still scores above zero —
+    // that is the point: the score ranks candidates, it does not judge them.
+    [InlineData(20, "Applecart Trailer #1 (2017) - Movie Trailer", false)]
+    [InlineData(45, "Hell Baby - Blazed Cable Guy", false)]
+    [InlineData(45, "Some Kind of Hate | RLJ Entertainment", false)]
+    [InlineData(30, "Bad Milo Official Red Band Trailer", false)]
+    [InlineData(30, "Sun Choke - Official Trailer (HD)", false)]
+    // ...and the results that must keep working.
+    [InlineData(82, "The Nice Guys Theme | The Nice Guys (Official Soundtrack)", true)]
+    [InlineData(77, "Prisoners (2013) OST - Main Theme", true)]
+    [InlineData(55, "Severance - Official Intro Title Sequence", true)]
+    public void IsConfident_requiresMusicEvidenceOnTopOfAPositiveScore(
+        int score, string videoTitle, bool expected)
+    {
+        Assert.Equal(expected, ThemeMatch.IsConfident(score, videoTitle));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-5)]
+    public void IsConfident_keepsTheExistingScoreGate(int score)
+    {
+        // Music evidence is added to the old bar, not substituted for it.
+        Assert.False(ThemeMatch.IsConfident(score, "Some Film - Main Theme"));
+    }
+
+    [Fact]
+    public void BestMatchIndex_topResultIsMusic_marksIt()
+    {
+        var ranked = new[]
+        {
+            ("The Nice Guys Theme (Official Soundtrack)", 82),
+            ("The Nice Guys - Official Trailer", 30),
+        };
+
+        Assert.Equal(0, ThemeMatch.BestMatchIndex(ranked));
+    }
+
+    [Fact]
+    public void BestMatchIndex_topResultIsATrailer_declinesRatherThanScanningDown()
+    {
+        // Row 0 or nothing. A lower-ranked result that would pass the floor is NOT
+        // promoted: the ranking already said it was the weaker candidate, and the
+        // measurement that validated this rule was taken under these semantics.
+        // The caller's answer to -1 is a 24h backoff, which is the correct outcome.
+        var ranked = new[]
+        {
+            ("Applecart Trailer #1 (2017) - Movie Trailer", 20),
+            ("Applecart - Main Theme", 18),
+        };
+
+        Assert.Equal(-1, ThemeMatch.BestMatchIndex(ranked));
+    }
+
+    [Fact]
+    public void BestMatchIndex_noResults_declines()
+    {
+        Assert.Equal(-1, ThemeMatch.BestMatchIndex(Array.Empty<(string, int)>()));
+    }
 }
