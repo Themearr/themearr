@@ -38,6 +38,21 @@ public class YoutubeService
             if (raw.Count >= maxResults) break;
         }
 
+        return RankAndMark(raw);
+    }
+
+    /// <summary>
+    /// The pure tail of <see cref="SearchAsync"/>: sort by score, decide and mark the best
+    /// match, write scores back. Split out because <c>GetVideosAsync</c> above is the only
+    /// part of <see cref="SearchAsync"/> that needs the network — everything here is a
+    /// function of data already in hand, which is what makes it testable. Nothing bound
+    /// SearchAsync's actual use of the confidence floor before this existed: a regression
+    /// that moved the <see cref="ThemeMatch.BestMatchIndex"/> call above the sort — judging
+    /// the floor on YouTube's raw order instead of the ranked one — passed the full suite.
+    /// </summary>
+    public static List<Dictionary<string, object?>> RankAndMark(
+        List<(Dictionary<string, object?> result, int score, string videoTitle)> raw)
+    {
         // Sort by score descending
         raw.Sort((a, b) => b.score.CompareTo(a.score));
 
@@ -49,12 +64,9 @@ public class YoutubeService
         if (best >= 0)
             raw[best].result["bestMatch"] = true;
 
-        var results = raw.Select(r => {
+        return raw.Select(r => {
             r.result["score"] = r.score;
             return r.result;
         }).ToList();
-
-        return results;
     }
-
 }

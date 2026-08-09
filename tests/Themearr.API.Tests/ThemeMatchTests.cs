@@ -139,8 +139,11 @@ public class ThemeMatchTests
     }
 
     [Theory]
-    // The six measured false positives from issue #39. Each still scores above zero —
-    // that is the point: the score ranks candidates, it does not judge them.
+    // Five of the six measured false positives from issue #39. Each still scores above
+    // zero — that is the point: the score ranks candidates, it does not judge them. The
+    // sixth, The Endless ("Endless Space 2 Original Soundtrack"), is deliberately not
+    // here: it is genuinely music, just for the wrong work, which the design doc calls out
+    // as a different bug (weak title matching on short, common-word titles), not this one.
     [InlineData(20, "Applecart Trailer #1 (2017) - Movie Trailer", false)]
     [InlineData(45, "Hell Baby - Blazed Cable Guy", false)]
     [InlineData(45, "Some Kind of Hate | RLJ Entertainment", false)]
@@ -183,7 +186,7 @@ public class ThemeMatchTests
         // Row 0 or nothing. A lower-ranked result that would pass the floor is NOT
         // promoted: the ranking already said it was the weaker candidate, and the
         // measurement that validated this rule was taken under these semantics.
-        // The caller's answer to -1 is a 24h backoff, which is the correct outcome.
+        // The caller's answer to -1 is a 6h backoff, which is the correct outcome.
         var ranked = new[]
         {
             ("Applecart Trailer #1 (2017) - Movie Trailer", 20),
@@ -197,5 +200,35 @@ public class ThemeMatchTests
     public void BestMatchIndex_noResults_declines()
     {
         Assert.Equal(-1, ThemeMatch.BestMatchIndex(Array.Empty<(string, int)>()));
+    }
+
+    [Fact]
+    public void IsConfident_filmTitleIsItselfAMusicWord_theScore_trailerStillVetoed()
+    {
+        // "The Score" is the film's own title. Its trailer's title match (+30) plus the
+        // literal word "score" inside that title (+8, a MusicPhrase) reaches a positive
+        // score with music evidence — issue #39's exact failure, a trailer written to
+        // theme.mp3 for the *right* film, because the film's own name happens to be a
+        // music word. The "trailer" promo marker must veto this regardless.
+        var score = ThemeMatch.Score(
+            "The Score (2001) Official Trailer", "Movieclips Trailers",
+            TimeSpan.FromMinutes(2), "The Score", 2001);
+
+        Assert.Equal(38, score);
+        Assert.False(ThemeMatch.IsConfident(score, "The Score (2001) Official Trailer"));
+    }
+
+    [Fact]
+    public void IsConfident_filmTitleIsItselfAMusicWord_suiteFrancaise_trailerStillVetoed()
+    {
+        // Same failure mode as "The Score", via a different MusicPhrase: "Suite" is both
+        // the film's own title and, everywhere else, evidence the video is a musical
+        // suite. HasMusicEvidence alone would certify this trailer as music.
+        var score = ThemeMatch.Score(
+            "Suite Francaise Official Trailer #1 (2015)", "Movieclips Trailers",
+            TimeSpan.FromMinutes(2), "Suite Francaise", 2015);
+
+        Assert.Equal(30, score);
+        Assert.False(ThemeMatch.IsConfident(score, "Suite Francaise Official Trailer #1 (2015)"));
     }
 }

@@ -33,6 +33,31 @@ public static class ThemeMatch
     private static readonly string[] MusicWords = { "ost", "intro" };
 
     /// <summary>
+    /// Markers that identify a trailer, promo or clip rather than the work's own music.
+    /// Shared verbatim between the penalty block in <see cref="Score"/> and
+    /// <see cref="IsConfident"/> so the two can never drift apart. A title carrying one of
+    /// these is disqualified from the confidence floor no matter what music word sits
+    /// beside it — a music word can land in a promo's title for a reason that has nothing
+    /// to do with the video being music, when the work itself is called "The Score" or
+    /// "Suite Francaise". Measured directly: "The Score (2001) Official Trailer" scores 38
+    /// with "score" as its own MusicPhrase, and "Suite Francaise Official Trailer #1
+    /// (2015)" certifies itself via "suite" the same way — issue #39's exact failure, a
+    /// trailer written to theme.mp3 for the right film.
+    /// </summary>
+    private static readonly string[] PromoMarkers =
+    {
+        "trailer", "featurette", "behind the scenes", "interview",
+        // Leading space matches "clip"/"clips"/"scenes" without firing on "eclipse" (a
+        // real film title) or "obscene". That is a plain Contains, weaker than
+        // ContainsWord's word-boundary match (used above for "ost" and "intro") — a
+        // hyphen or bracket right before "clip"/"scene" would still slip past this guard,
+        // where ContainsWord would catch it. Good enough here because a title containing
+        // "eclipse"/"obscene" in the first place is rare, so the common case is what
+        // matters, not an airtight one.
+        " clip", " scene",
+    };
+
+    /// <summary>
     /// True when the video title positively claims to be the work's music. This is the
     /// question the ranking score was never built to answer, and answering it with the
     /// score is what wrote trailers into theme.mp3 (issue #39).
@@ -64,19 +89,28 @@ public static class ThemeMatch
     }
 
     /// <summary>
-    /// Whether a ranked result may be acted on with no human looking at it: it must both
-    /// out-rank the field and say it is music. The score alone was never a quality bar —
-    /// it exists to order candidates against each other, so "best of a bad pool" and
-    /// "good" were the same answer, and low-profile films got trailers.
+    /// Whether a ranked result may be acted on with no human looking at it: it must
+    /// out-rank the field, say it is music, and not itself be a trailer/promo/clip. The
+    /// score alone was never a quality bar — it exists to order candidates against each
+    /// other, so "best of a bad pool" and "good" were the same answer, and low-profile
+    /// films got trailers. The promo check is not redundant with the music-evidence check:
+    /// a promo's title can legitimately contain a music word (the film IS called "The
+    /// Score") without the video itself being the film's music, so evidence alone is not
+    /// enough — a marker in <see cref="PromoMarkers"/> vetoes the result outright.
     /// </summary>
     public static bool IsConfident(int score, string videoTitle)
-        => score > 0 && HasMusicEvidence(videoTitle);
+    {
+        var vt = videoTitle.ToLowerInvariant();
+        return score > 0
+            && !PromoMarkers.Any(m => vt.Contains(m, StringComparison.Ordinal))
+            && HasMusicEvidence(videoTitle);
+    }
 
     /// <summary>
     /// Index of the result to mark as the best match, or -1 for none. Row 0 or nothing:
     /// a lower-ranked result is never promoted just because it clears the floor, because
     /// the ranking already judged it the weaker candidate. Declining is a supported
-    /// outcome everywhere — both auto-download workers back off 24h and the movie
+    /// outcome everywhere — both auto-download workers back off 6h and the movie
     /// endpoint returns 422.
     /// </summary>
     public static int BestMatchIndex(IReadOnlyList<(string VideoTitle, int Score)> ranked)
@@ -147,15 +181,15 @@ public static class ThemeMatch
         // ── Trailers, promos and clips ────────────────────────────────────────
         // There was no penalty for a plain "trailer" at all: an exact title match (+30)
         // plus a 1-6 min runtime (+15) reached 45, and 45 cleared the old `> 0` gate, so
-        // "<Film> Trailer #1" was downloaded as the theme (issue #39).
-        if (vt.Contains("trailer"))           score -= 25;
-        if (vt.Contains("featurette"))        score -= 25;
-        if (vt.Contains("behind the scenes")) score -= 25;
-        if (vt.Contains("interview"))         score -= 25;
-        // Leading space matches "clip"/"clips"/"scenes" without firing on "eclipse" (a
-        // real film title) or "obscene" — the same guard the " ost" bonus above uses.
-        if (vt.Contains(" clip"))             score -= 20;
-        if (vt.Contains(" scene"))            score -= 20;
+        // "<Film> Trailer #1" was downloaded as the theme (issue #39). The marker strings
+        // live in PromoMarkers, shared with IsConfident's veto — only the penalty size is
+        // local to this method, since a scaled deduction and a hard veto are different
+        // uses of the same vocabulary.
+        foreach (var marker in PromoMarkers)
+        {
+            if (!vt.Contains(marker, StringComparison.Ordinal)) continue;
+            score -= marker is "trailer" or "featurette" or "behind the scenes" or "interview" ? 25 : 20;
+        }
 
         return score;
     }
