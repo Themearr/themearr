@@ -1,0 +1,137 @@
+name: CI
+
+# The test steps in release.yml only run on push to main — and a merge to main cuts a
+# release. Without this, a regression is caught after the merge that ships it, not
+# before. Same commands, same versions, run on the PR instead.
+on:
+  pull_request:
+    branches:
+      - main
+    paths-ignore:
+      - '**.md'
+      - '.gitignore'
+      - 'LICENSE'
+      - '**/obj/**'
+      - '**/bin/**'
+      - '**/*.tsbuildinfo'
+  workflow_dispatch:
+
+# A new push to the same PR supersedes the previous run.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src/Themearr.Web
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: src/Themearr.Web/package-lock.json
+
+      - run: npm ci
+
+      # Baseline is 0 errors and 3 warnings — three pre-existing warnings live in
+      # login/page.tsx and lib/auth.tsx. --max-warnings 3 makes a fourth fail the build
+      # instead of scrolling past in the log.
+      - name: Lint
+        run: npx eslint . --max-warnings 3
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Test
+        run: npm test
+
+      # Catches a build-only break (asset resolution, Vite config) that tsc misses.
+      - name: Build
+        run: npm run build
+
+  api:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '10.0.x'
+
+      # Release config, matching how release.yml runs it — a Release-only failure
+      # must not first surface during a release.
+      - name: Test
+        run: dotnet test tests/Themearr.API.Tests/Themearr.API.Tests.csproj -c Release --nologo
+
+  # The unit suites both run against substitutes: the frontend in jsdom with `@/lib/api`
+  # mocked, the API with handlers in isolation. Neither proves the built bundle is
+  # actually served, that a deep link survives the SPA fallback, or that the auth
+  # middleware is wired into a real pipeline. This job runs the shipped shape.
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            src/Themearr.Web/package-lock.json
+            tests/e2e/package-lock.json
+
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '10.0.x'
+
+      # Playwright points ASPNETCORE_WEBROOT at out/, so the bundle must exist first.
+      - name: Build frontend
+        working-directory: src/Themearr.Web
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install E2E deps
+        working-directory: tests/e2e
+        run: npm ci
+
+      # setup-node caches the npm store, not the browser. A Chromium build is ~95MB and
+      # is pinned to the Playwright version, so the lockfile hash is the right key:
+      # bumping @playwright/test changes the required build and correctly misses.
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('tests/e2e/package-lock.json') }}
+
+      - name: Install browser
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        working-directory: tests/e2e
+        run: npx playwright install --with-deps chromium
+
+      # A cache hit restores the browser but not the OS libraries it links against —
+      # those are apt packages, installed outside ~/.cache/ms-playwright.
+      - name: Install browser OS dependencies
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        working-directory: tests/e2e
+        run: npx playwright install-deps chromium
+
+      - name: Run E2E
+        working-directory: tests/e2e
+        run: npm test
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: failure()
+        with:
+          name: playwright-report
+          path: tests/e2e/playwright-report/
+          retention-days: 7

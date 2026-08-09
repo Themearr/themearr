@@ -12,8 +12,11 @@ on:
       - 'LICENSE'
       - '**/obj/**'
       - '**/bin/**'
-      - '.serena/**'
       - '**/*.tsbuildinfo'
+      # Agent tooling and the E2E suite are never part of the published artifact,
+      # so changing them must not cut a release.
+      - '.claude/**'
+      - 'tests/e2e/**'
   workflow_dispatch:
 
 permissions:
