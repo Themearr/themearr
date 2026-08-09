@@ -11,6 +11,58 @@ namespace Themearr.API.Services;
 /// </summary>
 public static class ThemeMatch
 {
+    /// <summary>
+    /// Words that mean "this is the work's music". Long enough that a plain substring
+    /// match is safe. "official" is deliberately absent — trailers are titled "Official
+    /// Trailer", and accepting it as evidence is exactly what let Sun Choke and Bad Milo
+    /// through as themes.
+    /// </summary>
+    private static readonly string[] MusicPhrases =
+    {
+        "theme", "soundtrack", "score", "main title", "suite", "overture",
+        // Show vocabulary. A series labels its theme as its titles or intro far more
+        // often than as a soundtrack, and ShowAutoDownloadService shares this path.
+        "title sequence", "opening credits", "end credits",
+    };
+
+    /// <summary>
+    /// Evidence words short enough to hide inside an unrelated word: "ost" in ghost,
+    /// lost, most and post; "intro" in introduction and introducing. Matched on word
+    /// boundaries so "Ghostbusters (1984)" cannot certify itself as its own score.
+    /// </summary>
+    private static readonly string[] MusicWords = { "ost", "intro" };
+
+    /// <summary>
+    /// True when the video title positively claims to be the work's music. This is the
+    /// question the ranking score was never built to answer, and answering it with the
+    /// score is what wrote trailers into theme.mp3 (issue #39).
+    /// </summary>
+    public static bool HasMusicEvidence(string videoTitle)
+    {
+        var vt = videoTitle.ToLowerInvariant();
+        return MusicPhrases.Any(p => vt.Contains(p, StringComparison.Ordinal))
+            || MusicWords.Any(w => ContainsWord(vt, w));
+    }
+
+    /// <summary>
+    /// True when <paramref name="word"/> appears delimited by a non-letter, or a string
+    /// edge, on both sides. Both arguments must already be lowercase. Digits and
+    /// punctuation count as delimiters, so "(2013) OST", "[OST]" and a title-final "OST"
+    /// all match while "ghost" does not.
+    /// </summary>
+    private static bool ContainsWord(string haystack, string word)
+    {
+        for (var i = haystack.IndexOf(word, StringComparison.Ordinal); i >= 0;
+             i = haystack.IndexOf(word, i + 1, StringComparison.Ordinal))
+        {
+            var startsWord = i == 0 || !char.IsLetter(haystack[i - 1]);
+            var end = i + word.Length;
+            var endsWord = end == haystack.Length || !char.IsLetter(haystack[end]);
+            if (startsWord && endsWord) return true;
+        }
+        return false;
+    }
+
     /// <param name="year">Accepted for caller symmetry; the weights do not use it today.</param>
     public static int Score(string videoTitle, string channel, TimeSpan? duration,
         string? title, int? year)

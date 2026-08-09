@@ -46,4 +46,49 @@ public class ThemeMatchTests
 
         Assert.Equal(5, score);
     }
+
+    [Theory]
+    [InlineData("The Nice Guys Theme | The Nice Guys (Official Soundtrack)")]
+    [InlineData("Prisoners (2013) OST - Main Theme")]
+    [InlineData("Interstellar - Main Title")]
+    [InlineData("Star Wars Suite")]
+    [InlineData("The Phantom of the Opera - Overture")]
+    // Show vocabulary: a series' theme is routinely labelled as its titles or intro
+    // rather than as a soundtrack. Severance's correct result is this exact shape, and
+    // ShowAutoDownloadService shares this code path — a movie-only list breaks shows.
+    [InlineData("Severance - Official Intro Title Sequence")]
+    [InlineData("Succession - Opening Credits")]
+    [InlineData("Fleabag - End Credits Music")]
+    public void HasMusicEvidence_musicTitles_areEvidence(string videoTitle)
+    {
+        Assert.True(ThemeMatch.HasMusicEvidence(videoTitle));
+    }
+
+    [Theory]
+    [InlineData("Applecart Trailer #1 (2017) - Movie Trailer")]
+    [InlineData("Hell Baby - Blazed Cable Guy")]
+    [InlineData("Some Kind of Hate | RLJ Entertainment")]
+    // "official" is a trailer's own vocabulary — it must not certify one as music.
+    [InlineData("Bad Milo Official Red Band Trailer")]
+    [InlineData("Sun Choke - Official Trailer (HD)")]
+    public void HasMusicEvidence_trailersAndClips_areNotEvidence(string videoTitle)
+    {
+        Assert.False(ThemeMatch.HasMusicEvidence(videoTitle));
+    }
+
+    [Theory]
+    // "ost" inside ghost/lost, "intro" inside introducing — a bare Contains would let
+    // each of these certify itself as music on the strength of its own film title.
+    [InlineData("Ghostbusters (1984)", false)]
+    [InlineData("Ghost Rider", false)]
+    [InlineData("Lost in Translation", false)]
+    [InlineData("Severance - Introducing the Cast", false)]
+    // ...while the real thing still counts, delimited by punctuation or a string edge.
+    [InlineData("Prisoners (2013) OST", true)]
+    [InlineData("Drive (2011) [OST]", true)]
+    [InlineData("Severance Intro", true)]
+    public void HasMusicEvidence_matchesShortKeywordsOnWordBoundaries(string videoTitle, bool expected)
+    {
+        Assert.Equal(expected, ThemeMatch.HasMusicEvidence(videoTitle));
+    }
 }
