@@ -725,10 +725,12 @@ public class Database(string dbPath)
         conn.Query("SELECT COUNT(*) FROM theme_history WHERE downloaded_at >= @w AND media_type = 'movie'",
             r => { if (r.Read()) addedThisWeek = (int)r.GetInt64(0); }, ("@w", weekAgo));
 
-        // Last 5 downloaded movie themes (see above — this list feeds the movies dashboard).
+        // Last 5 downloaded themes, movies and shows alike. Unlike the numbers above this is
+        // a chronological activity feed rather than a movie statistic, so it is not scoped by
+        // media type — each row carries its own so the UI can label it.
         var recentActivity = new List<Dictionary<string, object?>>();
         conn.Query(
-            "SELECT id, movie_id, movie_title, movie_year, theme_title, source_url, downloaded_at FROM theme_history WHERE media_type = 'movie' ORDER BY id DESC LIMIT 5",
+            "SELECT id, movie_id, movie_title, movie_year, theme_title, source_url, downloaded_at, media_type FROM theme_history ORDER BY id DESC LIMIT 5",
             r =>
             {
                 while (r.Read())
@@ -741,6 +743,7 @@ public class Database(string dbPath)
                         ["themeTitle"]   = r.IsDBNull(4) ? null : r.GetString(4),
                         ["sourceUrl"]    = r.IsDBNull(5) ? null : r.GetString(5),
                         ["downloadedAt"] = r.GetString(6),
+                        ["mediaType"]    = r.GetString(7),
                     });
             });
 
