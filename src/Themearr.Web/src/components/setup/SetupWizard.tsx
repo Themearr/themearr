@@ -158,10 +158,13 @@ export function SetupWizard() {
         await settingsApi.save({ ...current, libraryPaths: paths })
         await setupApi.complete()
       } else {
+        // pathMappings is deliberately not sent. /setup is reachable at any time by an
+        // already-configured user, and this wizard has no path-mapping editor -- they
+        // live in Settings. Sending [] told the API to delete them, which silently broke
+        // folder resolution for anyone whose Plex paths differ from Themearr's.
         await setupApi.saveSelection({
           servers: selectedServers,
           selectedLibraries: selectedLibs,
-          pathMappings: [],  // auto-mapped: local paths used as remote paths too
           libraryPaths: paths,
         })
       }

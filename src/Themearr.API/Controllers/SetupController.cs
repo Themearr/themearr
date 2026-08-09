@@ -122,8 +122,15 @@ public class SetupController(Database db, PlexService plex) : ControllerBase
         // Merge so a re-save that omits the redacted token keeps the stored one.
         db.SetPlexServersMergingTokens(req.Servers);
         db.SetSelectedLibraries(req.SelectedLibraries ?? []);
-        db.SetPathMappings(req.PathMappings ?? []);
         db.SetLibraryPaths(req.LibraryPaths ?? []);
+
+        // Only when the caller actually sent them. /setup is reachable at any time by an
+        // already-configured user, and the wizard does not collect path mappings, so
+        // writing an unconditional [] here deleted mappings the user had set in Settings
+        // -- breaking folder resolution for any install whose Plex paths differ from
+        // Themearr's, silently and only at the next download.
+        if (req.PathMappings is not null)
+            db.SetPathMappings(req.PathMappings);
 
         db.MarkSetupComplete();
 
@@ -215,6 +222,13 @@ public class PlexSelectionRequest
 {
     public List<Dictionary<string, object?>> Servers         { get; set; } = [];
     public Dictionary<string, List<string>>  SelectedLibraries { get; set; } = [];
-    public List<Dictionary<string, string>>  PathMappings     { get; set; } = [];
     public List<string>                      LibraryPaths     { get; set; } = [];
+
+    /// <summary>
+    /// Nullable on purpose, so an absent field is distinguishable from an empty one.
+    /// The wizard has no path-mapping editor — they are configured in Settings — so a
+    /// request that omits this is saying "not mine to change", and defaulting it to an
+    /// empty list would silently delete them. An explicitly sent [] still clears.
+    /// </summary>
+    public List<Dictionary<string, string>>? PathMappings { get; set; }
 }
