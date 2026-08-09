@@ -2,7 +2,7 @@ import { useCallback, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { showsApi, statsApi } from '@/lib/api'
 import { AppShell } from '@/components/layout/AppShell'
-import { Button, EmptyState, ErrorIcon, Spinner } from '@/components/ui'
+import { Button, EmptyState, ErrorIcon, ShowBadge, Spinner } from '@/components/ui'
 import { useResource } from '@/lib/useResource'
 
 export default function DashboardPage() {
@@ -115,6 +115,7 @@ export default function DashboardPage() {
                       <p className="text-sm font-medium text-[#F9FAFB] truncate">
                         {entry.movieTitle}
                         {entry.movieYear && <span className="ml-1.5 font-normal text-[#667085]">({entry.movieYear})</span>}
+                        <ShowBadge mediaType={entry.mediaType} />
                       </p>
                       {entry.themeTitle && (
                         <p className="text-xs text-[#667085] truncate flex items-center gap-1">
