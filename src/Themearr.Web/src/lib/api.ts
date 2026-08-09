@@ -107,8 +107,11 @@ export const setupApi = {
   saveSelection: (body: {
     servers: PlexServer[]
     selectedLibraries: Record<string, string[]>
-    pathMappings: { source: string; target: string }[]
     libraryPaths: string[]
+    // Optional, and omitted by the wizard: path mappings are configured in Settings,
+    // and the API treats an absent field as "leave them alone". Sending [] here is a
+    // delete, which is what used to wipe an already-configured user's mappings.
+    pathMappings?: { source: string; target: string }[]
   }) =>
     request<SetupStatus>('/api/setup/plex/selection', {
       method: 'POST',
