@@ -99,8 +99,9 @@ tests exist because of real regressions.
 **Merging to `main` publishes a release.** `.github/workflows/release.yml` derives the
 next semver tag from commit messages (`feat:`/`minor:` → minor, `!:`/`BREAKING CHANGE` →
 major, otherwise patch), builds both halves, and pushes tarballs plus a multi-arch image
-to GHCR. Only `paths-ignore` (docs, `.github/**`, `LICENSE`) avoids cutting a release —
-a commit prefix does not.
+to GHCR. Only that workflow's `paths-ignore` avoids cutting a release — `**.md`,
+`.gitignore`, `.github/**`, `.claude/**`, `tests/e2e/**`, `LICENSE` and build output. A
+commit prefix never does; it only picks major/minor/patch.
 
 `.github/workflows/ci.yml` gates PRs on `frontend`, `api` and `e2e`, so a broken PR is
 caught before it can ship. It is not a substitute for running the gate locally — the full
