@@ -91,4 +91,50 @@ public class ThemeMatchTests
     {
         Assert.Equal(expected, ThemeMatch.HasMusicEvidence(videoTitle));
     }
+
+    [Fact]
+    public void Score_plainTrailer_isPenalised()
+    {
+        // 30 title + 15 duration - 25 trailer. Scored 45 before this task, which cleared
+        // the old `> 0` gate and got downloaded as Applecart's theme.
+        var score = ThemeMatch.Score(
+            "Applecart Trailer #1 (2017) - Movie Trailer", "Indie Rights",
+            TimeSpan.FromMinutes(2), "Applecart", 2015);
+
+        Assert.Equal(20, score);
+    }
+
+    [Fact]
+    public void Score_featurette_isPenalised()
+    {
+        // 30 title + 15 duration - 25 featurette.
+        var score = ThemeMatch.Score(
+            "Sun Choke Featurette", "Some Channel",
+            TimeSpan.FromMinutes(2), "Sun Choke", 2015);
+
+        Assert.Equal(20, score);
+    }
+
+    [Fact]
+    public void Score_clip_isPenalised()
+    {
+        // 30 title + 15 duration - 20 clip.
+        var score = ThemeMatch.Score(
+            "Hell Baby - Blazed Cable Guy Clip", "Some Channel",
+            TimeSpan.FromMinutes(2), "Hell Baby", 2013);
+
+        Assert.Equal(25, score);
+    }
+
+    [Fact]
+    public void Score_filmWithClipInsideItsTitle_isNotPenalised()
+    {
+        // "eclipse" contains "clip". The leading-space guard is why this keeps its score:
+        // 30 title + 20 main theme + 15 duration + 8 music channel, no penalty.
+        var score = ThemeMatch.Score(
+            "The Twilight Saga: Eclipse - Main Theme", "Summit Music",
+            TimeSpan.FromMinutes(3), "Eclipse", 2010);
+
+        Assert.Equal(73, score);
+    }
 }

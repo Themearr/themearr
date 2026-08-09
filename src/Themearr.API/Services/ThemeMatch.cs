@@ -125,6 +125,18 @@ public static class ThemeMatch
         if (vt.Contains("piano version") || vt.Contains("piano cover")) score -= 15;
         if (vt.Contains("guitar"))                          score -= 10;
         if (vt.Contains("trailer music") || vt.Contains("trailer theme")) score -= 10;
+        // ── Trailers, promos and clips ────────────────────────────────────────
+        // There was no penalty for a plain "trailer" at all: an exact title match (+30)
+        // plus a 1-6 min runtime (+15) reached 45, and 45 cleared the old `> 0` gate, so
+        // "<Film> Trailer #1" was downloaded as the theme (issue #39).
+        if (vt.Contains("trailer"))           score -= 25;
+        if (vt.Contains("featurette"))        score -= 25;
+        if (vt.Contains("behind the scenes")) score -= 25;
+        if (vt.Contains("interview"))         score -= 25;
+        // Leading space matches "clip"/"clips"/"scenes" without firing on "eclipse" (a
+        // real film title) or "obscene" — the same guard the " ost" bonus above uses.
+        if (vt.Contains(" clip"))             score -= 20;
+        if (vt.Contains(" scene"))            score -= 20;
 
         return score;
     }
