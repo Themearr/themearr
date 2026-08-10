@@ -16,6 +16,19 @@
     ]
   },
   "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|MultiEdit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/.claude/hooks/test-edit-guard.sh\"",
+            "timeout": 10,
+            "statusMessage": "Checking the test-edit rule…"
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "matcher": "Edit|Write|MultiEdit",
@@ -37,6 +50,12 @@
             "command": "bash \"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/.claude/hooks/test-gate.sh\"",
             "timeout": 300,
             "statusMessage": "Running the release gate…"
+          },
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/.claude/hooks/change-review.sh\"",
+            "timeout": 60,
+            "statusMessage": "Reviewing the change set…"
           }
         ]
       }
