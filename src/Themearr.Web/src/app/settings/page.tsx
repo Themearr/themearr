@@ -86,6 +86,11 @@ export default function SettingsPage() {
   const [radarrError,      setRadarrError]      = useState('')
   const [radarrLoaded,     setRadarrLoaded]     = useState(false)
   const [radarrLoadError,  setRadarrLoadError]  = useState('')
+  // Latest-action stamp for the Radarr form's round-trips -- the
+  // single-instance analogue of plexUrlSeq above. Edits, tests and saves each
+  // claim a new number; a response, the save's config re-read, or the 2s
+  // hide-timeout only writes if it is still the newest action when it settles.
+  const radarrSeq = useRef(0)
   const [apiKey,             setApiKey]             = useState('')
   const [apiKeyLoaded,       setApiKeyLoaded]       = useState(false)
   const [apiKeyLoadError,    setApiKeyLoadError]    = useState('')
@@ -426,14 +431,20 @@ export default function SettingsPage() {
   // load, and re-run after a successful save so the URL reflects any
   // server-side normalisation (e.g. a trimmed trailing slash).
   async function loadLibrarySource() {
+    // Observes the stamp rather than claiming one: a load invalidates nothing,
+    // but its writes -- setRadarrUrl in particular -- must not clobber text the
+    // user typed while the GET was in flight.
+    const seq = radarrSeq.current
     try {
       const s = await radarrApi.get()
+      if (seq !== radarrSeq.current) return
       setLibrarySource(s.source)
       setRadarrUrl(s.url)
       setRadarrConfigured(s.configured)
       setRadarrLoaded(true)
       setRadarrLoadError('')
     } catch (e) {
+      if (seq !== radarrSeq.current) return
       setRadarrLoaded(false)
       setRadarrLoadError((e as Error)?.message || 'Failed to load the current library source.')
     }
@@ -543,41 +554,64 @@ export default function SettingsPage() {
   // An edit invalidates every stale Radarr verdict, not just the test result --
   // a lingering error or "Saved ✓" would describe a URL/key no longer in the
   // boxes. Same rule as the per-server Plex onChange (#26), minus the keying:
-  // this form is single-instance.
+  // this form is single-instance. Claiming a new stamp extends that to
+  // responses still in flight.
   function clearRadarrFeedback() {
+    radarrSeq.current++
     setRadarrTestResult(null)
     setRadarrError('')
     setRadarrSaved(false)
   }
 
   async function testRadarrConnection() {
+    const seq = ++radarrSeq.current
     setRadarrTesting(true)
     setRadarrTestResult(null)
     setRadarrError('')
+    // The Saved flag too: claiming the stamp supersedes a pending save's
+    // hide-timeout, so a flag left up here would never be cleared by anything.
+    setRadarrSaved(false)
     try {
       const res = await radarrApi.test(radarrUrl.trim(), radarrApiKey.trim())
+      if (seq !== radarrSeq.current) return // superseded by a later edit/test/save
       setRadarrTestResult(res)
     } catch (e) {
+      if (seq !== radarrSeq.current) return
       setRadarrError((e as Error).message)
     } finally {
+      // Deliberately unguarded, as on the Plex side: the request is over either way.
       setRadarrTesting(false)
     }
   }
 
   async function saveLibrarySource() {
+    const seq = ++radarrSeq.current
     setRadarrSaving(true)
     setRadarrError('')
     try {
       await radarrApi.save(librarySource, radarrUrl.trim(), radarrApiKey.trim())
+      // Superseded by an edit while the POST was in flight: the save persisted
+      // server-side, but clearing the key box or re-reading the config would
+      // eat the newer typing. (Unlike savePlexUrl there is no echo that must
+      // land regardless -- the Radarr config is not part of the `settings`
+      // object, so no whole-object save can revert what was just persisted.)
+      if (seq !== radarrSeq.current) return
       setRadarrApiKey('')
       setRadarrTestResult(null)
       // Re-read from the server rather than trusting the save response, since
       // the backend normalises the URL (e.g. trims a trailing slash) and that
       // isn't reflected in what save() returns.
       await loadLibrarySource()
+      if (seq !== radarrSeq.current) return
       setRadarrSaved(true)
-      setTimeout(() => setRadarrSaved(false), 2000)
+      setTimeout(() => {
+        // Only the newest action's timeout may hide the flag -- same rule as
+        // savePlexUrl's.
+        if (seq !== radarrSeq.current) return
+        setRadarrSaved(false)
+      }, 2000)
     } catch (e) {
+      if (seq !== radarrSeq.current) return
       setRadarrError((e as Error).message)
     } finally {
       setRadarrSaving(false)

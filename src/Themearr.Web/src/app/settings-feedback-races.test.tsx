@@ -146,6 +146,125 @@ describe('an in-flight Plex test/save cannot outlive a re-edit of that URL', () 
   })
 })
 
+// The Radarr form has the same in-flight races the Plex cards were just guarded
+// against: responses and the save's reload wrote unconditionally, so they could
+// land after the user's next action. Single-instance form, single stamp.
+describe('an in-flight Radarr test/save cannot outlive a re-edit', () => {
+  beforeEach(() => {
+    vi.mocked(api.radarrApi.get).mockResolvedValue({ source: 'radarr', url: 'http://localhost:7878', configured: false } as never)
+  })
+
+  it('a test verdict landing after a field was re-edited does not resurrect', async () => {
+    const dl = deferred<{ ok: boolean; detail: string }>()
+    vi.mocked(api.radarrApi.test).mockReturnValue(dl.promise as never)
+
+    const { default: SettingsPage } = await import('@/app/settings/page')
+    renderPage(<SettingsPage />)
+
+    const urlInput = await screen.findByDisplayValue('http://localhost:7878')
+    const section = sectionOf('Library Source')
+
+    await userEvent.click(within(section).getByRole('button', { name: /test connection/i }))
+    await waitFor(() => expect(api.radarrApi.test).toHaveBeenCalledTimes(1))
+
+    // Re-edit while the test is in flight: its verdict is about the old URL.
+    await userEvent.type(urlInput, 'x')
+    await act(async () => { dl.resolve({ ok: false, detail: 'Radarr is unreachable.' }) })
+
+    expect(within(section).queryByText(/unreachable/i)).toBeNull()
+    // Suppressing the verdict must not wedge the button: the request IS over.
+    await waitFor(() => expect(within(section).getByRole('button', { name: /test connection/i })).not.toBeDisabled())
+  })
+
+  it("a save's reload landing after a re-edit does not clobber the newer text", async () => {
+    const dl = deferred<object>()
+    vi.mocked(api.radarrApi.save).mockReturnValue(dl.promise as never)
+
+    const { default: SettingsPage } = await import('@/app/settings/page')
+    renderPage(<SettingsPage />)
+
+    const urlInput = await screen.findByDisplayValue('http://localhost:7878')
+    const section = sectionOf('Library Source')
+
+    await userEvent.click(within(section).getByRole('button', { name: /^save/i }))
+    await waitFor(() => expect(api.radarrApi.save).toHaveBeenCalledTimes(1))
+
+    // Keep typing while the POST is in flight; when it lands, the success
+    // path's re-read of the stored config must not overwrite the box (nor may
+    // a "Saved ✓" claim this superseded save for the text now in it).
+    await userEvent.type(urlInput, 'x')
+    await act(async () => { dl.resolve({}) })
+
+    expect(urlInput).toHaveValue('http://localhost:7878x')
+    expect(within(section).queryByRole('button', { name: /saved/i })).toBeNull()
+  })
+
+  it('a slow config re-read after a save does not clobber text typed meanwhile', async () => {
+    const dl = deferred<{ source: string; url: string; configured: boolean }>()
+    // First get() is the mount load; the deferred one is the post-save re-read.
+    vi.mocked(api.radarrApi.get)
+      .mockResolvedValueOnce({ source: 'radarr', url: 'http://localhost:7878', configured: false } as never)
+      .mockReturnValue(dl.promise as never)
+    vi.mocked(api.radarrApi.save).mockResolvedValue({} as never)
+
+    const { default: SettingsPage } = await import('@/app/settings/page')
+    renderPage(<SettingsPage />)
+
+    const urlInput = await screen.findByDisplayValue('http://localhost:7878')
+    const section = sectionOf('Library Source')
+
+    await userEvent.click(within(section).getByRole('button', { name: /^save/i }))
+    await waitFor(() => expect(api.radarrApi.get).toHaveBeenCalledTimes(2))
+
+    // The POST is done; the re-read is still in flight when the user types.
+    await userEvent.type(urlInput, 'x')
+    await act(async () => { dl.resolve({ source: 'radarr', url: 'http://localhost:7878', configured: true }) })
+
+    expect(urlInput).toHaveValue('http://localhost:7878x')
+    expect(within(section).queryByRole('button', { name: /saved/i })).toBeNull()
+  })
+})
+
+// The Radarr save's 2s hide-timeout has the same truncation as the Plex one:
+// nothing tied it to the save it belonged to.
+describe("a prior Radarr save's hide-timeout cannot truncate a newer save's Saved ✓", () => {
+  beforeEach(() => {
+    vi.mocked(api.radarrApi.get).mockResolvedValue({ source: 'radarr', url: 'http://localhost:7878', configured: false } as never)
+    vi.mocked(api.radarrApi.save).mockResolvedValue({} as never)
+    vi.useFakeTimers()
+  })
+  afterEach(() => { vi.useRealTimers() })
+
+  function flush(ms: number) {
+    return act(async () => { await vi.advanceTimersByTimeAsync(ms) })
+  }
+
+  it("keeps the second save's Saved ✓ up for its own full window", async () => {
+    const { default: SettingsPage } = await import('@/app/settings/page')
+    renderPage(<SettingsPage />)
+    await flush(50)
+
+    const section = sectionOf('Library Source')
+
+    // Save #1: its hide-timeout is due at t+2000.
+    await act(async () => { fireEvent.click(within(section).getByRole('button', { name: /^save/i })) })
+    expect(within(section).getByRole('button', { name: /saved/i })).toBeInTheDocument()
+
+    // Save #2 at t+1500 restarts the confirmation window.
+    await flush(1500)
+    await act(async () => { fireEvent.click(within(section).getByRole('button', { name: /^save/i })) })
+    expect(within(section).getByRole('button', { name: /saved/i })).toBeInTheDocument()
+
+    // t+2100: save #1's timeout fires -- save #2's confirmation must survive.
+    await flush(600)
+    expect(within(section).queryByRole('button', { name: /saved/i })).not.toBeNull()
+
+    // t+3600: save #2's own window is over -- the flag still clears.
+    await flush(1500)
+    expect(within(section).queryByRole('button', { name: /saved/i })).toBeNull()
+  })
+})
+
 // Concurrency-review finding on the stamp guard: a save superseded by an edit
 // still persisted server-side. If its echo never reaches `settings`, any later
 // whole-object save (the header's "Save changes", the library sections) posts
