@@ -55,6 +55,16 @@ export default function SettingsPage() {
   const [plexSaving,  setPlexSaving]  = useState<Record<string, boolean>>({})
   const [plexSaved,   setPlexSaved]   = useState<Record<string, boolean>>({})
   const [plexError,   setPlexError]   = useState<Record<string, string>>({})
+  // Latest-action stamp per server for the test/save round-trips -- the same
+  // idiom as the movies page's loadSeq and the queue's downloadAttempt. Every
+  // edit, test or save of a server's URL claims a new number, and a response
+  // (or the save's 2s hide-timeout) only writes if it is still the newest
+  // action when it settles. Without this a slow response resurrects a verdict
+  // for a URL no longer in the box, and an earlier save's timeout truncates a
+  // later save's "Saved ✓" window.
+  const plexUrlSeq = useRef<Record<string, number>>({})
+  const claimPlexSeq = (serverId: string) =>
+    (plexUrlSeq.current[serverId] = (plexUrlSeq.current[serverId] ?? 0) + 1)
   const [rapidApiOk,       setRapidApiOk]       = useState<boolean | null>(null)
   // Set when checking whether a RapidAPI key is stored fails. Supplementary
   // like versionLoadError: it leaves rapidApiOk at null (unknown) rather
@@ -276,25 +286,36 @@ export default function SettingsPage() {
   }
 
   async function testPlexUrl(serverId: string) {
+    const seq = claimPlexSeq(serverId)
     setPlexTesting(p => ({ ...p, [serverId]: true }))
     setPlexTest(p => ({ ...p, [serverId]: null }))
     setPlexError(p => ({ ...p, [serverId]: '' }))
     try {
       const res = await plexApi.test(serverId, plexUrls[serverId] ?? '')
+      if (seq !== plexUrlSeq.current[serverId]) return // superseded by a later edit/test/save
       setPlexTest(p => ({ ...p, [serverId]: res }))
     } catch (e) {
+      if (seq !== plexUrlSeq.current[serverId]) return
       setPlexError(p => ({ ...p, [serverId]: (e as Error).message })) // surface, never swallow
     } finally {
+      // Deliberately unguarded: the request being over is true whether or not
+      // its verdict still applies, and skipping it would wedge the button.
       setPlexTesting(p => ({ ...p, [serverId]: false }))
     }
   }
 
   async function savePlexUrl(serverId: string) {
+    const seq = claimPlexSeq(serverId)
     setPlexSaving(p => ({ ...p, [serverId]: true }))
     setPlexSaved(p => ({ ...p, [serverId]: false }))
     setPlexError(p => ({ ...p, [serverId]: '' }))
     try {
       const res = await plexApi.saveUrl(serverId, plexUrls[serverId] ?? '')
+      // Superseded by a later edit/test/save: the save persisted server-side,
+      // but none of its echo may land here -- setPlexUrls in particular would
+      // clobber the newer text in the box with the older URL's normalised
+      // form. The next successful save re-syncs selectedServers wholesale.
+      if (seq !== plexUrlSeq.current[serverId]) return
       // Sync to the response rather than trusting what was typed: the backend
       // normalises the URL (adds a scheme, trims a trailing slash), and
       // saveUrl() -- unlike radarrApi.save() -- already echoes the
@@ -305,10 +326,18 @@ export default function SettingsPage() {
       setSettings(s => s ? { ...s, selectedServers: res.selectedServers } : s)
       setPlexUrls(p => ({ ...p, [serverId]: res.selectedServers.find(srv => srv.id === serverId)?.url ?? p[serverId] }))
       setPlexSaved(p => ({ ...p, [serverId]: true }))
-      setTimeout(() => setPlexSaved(p => ({ ...p, [serverId]: false })), 2000)
+      setTimeout(() => {
+        // Only the newest action's timeout may hide the flag: an earlier
+        // save's 2s window ending must not truncate a later save's "Saved ✓"
+        // (and after an edit there is nothing left for it to hide).
+        if (seq !== plexUrlSeq.current[serverId]) return
+        setPlexSaved(p => ({ ...p, [serverId]: false }))
+      }, 2000)
     } catch (e) {
+      if (seq !== plexUrlSeq.current[serverId]) return
       setPlexError(p => ({ ...p, [serverId]: (e as Error).message }))
     } finally {
+      // Deliberately unguarded, as in testPlexUrl: the request is over either way.
       setPlexSaving(p => ({ ...p, [serverId]: false }))
     }
   }
@@ -498,6 +527,16 @@ export default function SettingsPage() {
     await copyToClipboard(webhookUrl, webhookFieldRef, setWebhookCopied)
   }
 
+  // An edit invalidates every stale Radarr verdict, not just the test result --
+  // a lingering error or "Saved ✓" would describe a URL/key no longer in the
+  // boxes. Same rule as the per-server Plex onChange (#26), minus the keying:
+  // this form is single-instance.
+  function clearRadarrFeedback() {
+    setRadarrTestResult(null)
+    setRadarrError('')
+    setRadarrSaved(false)
+  }
+
   async function testRadarrConnection() {
     setRadarrTesting(true)
     setRadarrTestResult(null)
@@ -619,6 +658,10 @@ export default function SettingsPage() {
                     // An edit invalidates every stale verdict for this server,
                     // not just the test result -- a lingering error or
                     // "Saved ✓" would describe a URL no longer in the box.
+                    // Claiming a new stamp extends that to responses still in
+                    // flight: a test/save that started before this keystroke
+                    // must not write its verdict after it.
+                    claimPlexSeq(srv.id)
                     setPlexTest(p => ({ ...p, [srv.id]: null }))
                     setPlexError(p => ({ ...p, [srv.id]: '' }))
                     setPlexSaved(p => ({ ...p, [srv.id]: false }))
@@ -770,14 +813,14 @@ export default function SettingsPage() {
                 label="Radarr URL"
                 placeholder="http://localhost:7878"
                 value={radarrUrl}
-                onChange={e => { setRadarrUrl(e.target.value); setRadarrTestResult(null) }}
+                onChange={e => { setRadarrUrl(e.target.value); clearRadarrFeedback() }}
               />
               <Input
                 label="API key"
                 type="password"
                 placeholder={radarrConfigured ? 'Leave blank to keep the current key' : 'Radarr API key…'}
                 value={radarrApiKey}
-                onChange={e => { setRadarrApiKey(e.target.value); setRadarrTestResult(null) }}
+                onChange={e => { setRadarrApiKey(e.target.value); clearRadarrFeedback() }}
                 className="font-mono text-xs"
               />
               {radarrTestResult && (
