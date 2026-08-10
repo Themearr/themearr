@@ -5,7 +5,11 @@ namespace Themearr.API.Services;
 
 public class DownloadService(
     IThemeAudioProvider provider, Database db, IHttpClientFactory httpClientFactory,
-    IConfiguration config, ILogger<DownloadService> log) : Health.IQuotaStatus
+    IConfiguration config, ILogger<DownloadService> log,
+    // Optional so the existing five-argument test constructions keep compiling, and
+    // null-safe because the refresh is best-effort anyway. DI supplies the real
+    // PlexService (registered in Program.cs) without a registration change.
+    PlexService? plex = null) : Health.IQuotaStatus
 {
     private sealed record JobState(bool InProgress, bool Finished, string? Error, DateTime StartedAtUtc = default);
     private readonly ConcurrentDictionary<string, JobState>          _jobs    = new();
@@ -211,6 +215,13 @@ public class DownloadService(
             if (mediaType == "show") db.SetShowStatus(id, "downloaded");
             else                     db.SetMovieStatus(id, "downloaded");
             db.AddThemeHistory(id, title, year, themeTitle, url, mediaType);
+
+            // Ask Plex to refresh this item so the theme starts playing without a manual
+            // "Refresh Metadata" (issue #45) — partial scan catches movie folders on most
+            // installs, but a show's theme stays invisible until the show is refreshed.
+            // Runs before the job flips to finished so the outcome lands in this job's log.
+            await TryPlexRefreshAsync(item, key);
+
             _jobs[key] = new JobState(false, true, null);
         }
         catch (QuotaExceededException ex)
@@ -233,6 +244,28 @@ public class DownloadService(
         {
             log.LogError(ex, "Download failed for {JobKey}", LogSanitizer.Clean(key));
             _jobs[key] = new JobState(false, true, ex.Message);
+        }
+    }
+
+    // Never throws. The theme is already on disk when this runs, so a refresh failure
+    // must stay a logged warning — if it escaped, RunAsync's outer catch would report a
+    // successfully landed theme as a failed download.
+    private async Task TryPlexRefreshAsync(Dictionary<string, object?> item, string jobKey)
+    {
+        if (plex == null) return;
+        try
+        {
+            var refreshed = await plex.RefreshItemMetadataAsync(
+                item.GetValueOrDefault("source")?.ToString(),
+                item.GetValueOrDefault("sourceRef")?.ToString(),
+                msg => AddLog(jobKey, msg));
+            if (refreshed)
+                AddLog(jobKey, "[themearr] Asked Plex to refresh the item's metadata.");
+        }
+        catch (Exception ex)
+        {
+            log.LogWarning(ex, "Plex metadata refresh failed for {JobKey}", LogSanitizer.Clean(jobKey));
+            AddLog(jobKey, "[themearr] Plex metadata refresh failed — refresh the item in Plex manually if the theme doesn't play.");
         }
     }
 

@@ -47,11 +47,14 @@ export default function SettingsPage() {
   // a server's stored URL be edited, test-connected, and saved independently
   // of the rest of Settings, mirroring the Radarr connect state below.
   const [plexUrls,    setPlexUrls]    = useState<Record<string, string>>({})
-  const [plexTest,    setPlexTest]    = useState<{ ok: boolean; detail: string } | null>(null)
-  const [plexTesting, setPlexTesting] = useState(false)
-  const [plexSaving,  setPlexSaving]  = useState(false)
-  const [plexSaved,   setPlexSaved]   = useState(false)
-  const [plexError,   setPlexError]   = useState('')
+  // The transient feedback is keyed by server id like plexUrls -- a single
+  // shared value rendered one server's result box / spinner / "Saved ✓"
+  // under every card once a second server was connected (#26).
+  const [plexTest,    setPlexTest]    = useState<Record<string, { ok: boolean; detail: string } | null>>({})
+  const [plexTesting, setPlexTesting] = useState<Record<string, boolean>>({})
+  const [plexSaving,  setPlexSaving]  = useState<Record<string, boolean>>({})
+  const [plexSaved,   setPlexSaved]   = useState<Record<string, boolean>>({})
+  const [plexError,   setPlexError]   = useState<Record<string, string>>({})
   const [rapidApiOk,       setRapidApiOk]       = useState<boolean | null>(null)
   // Set when checking whether a RapidAPI key is stored fails. Supplementary
   // like versionLoadError: it leaves rapidApiOk at null (unknown) rather
@@ -273,22 +276,23 @@ export default function SettingsPage() {
   }
 
   async function testPlexUrl(serverId: string) {
-    setPlexTesting(true)
-    setPlexTest(null)
-    setPlexError('')
+    setPlexTesting(p => ({ ...p, [serverId]: true }))
+    setPlexTest(p => ({ ...p, [serverId]: null }))
+    setPlexError(p => ({ ...p, [serverId]: '' }))
     try {
-      setPlexTest(await plexApi.test(serverId, plexUrls[serverId] ?? ''))
+      const res = await plexApi.test(serverId, plexUrls[serverId] ?? '')
+      setPlexTest(p => ({ ...p, [serverId]: res }))
     } catch (e) {
-      setPlexError((e as Error).message) // surface, never swallow
+      setPlexError(p => ({ ...p, [serverId]: (e as Error).message })) // surface, never swallow
     } finally {
-      setPlexTesting(false)
+      setPlexTesting(p => ({ ...p, [serverId]: false }))
     }
   }
 
   async function savePlexUrl(serverId: string) {
-    setPlexSaving(true)
-    setPlexSaved(false)
-    setPlexError('')
+    setPlexSaving(p => ({ ...p, [serverId]: true }))
+    setPlexSaved(p => ({ ...p, [serverId]: false }))
+    setPlexError(p => ({ ...p, [serverId]: '' }))
     try {
       const res = await plexApi.saveUrl(serverId, plexUrls[serverId] ?? '')
       // Sync to the response rather than trusting what was typed: the backend
@@ -300,12 +304,12 @@ export default function SettingsPage() {
       // any unsaved edit the user has typed into another server's field.
       setSettings(s => s ? { ...s, selectedServers: res.selectedServers } : s)
       setPlexUrls(p => ({ ...p, [serverId]: res.selectedServers.find(srv => srv.id === serverId)?.url ?? p[serverId] }))
-      setPlexSaved(true)
-      setTimeout(() => setPlexSaved(false), 2000)
+      setPlexSaved(p => ({ ...p, [serverId]: true }))
+      setTimeout(() => setPlexSaved(p => ({ ...p, [serverId]: false })), 2000)
     } catch (e) {
-      setPlexError((e as Error).message)
+      setPlexError(p => ({ ...p, [serverId]: (e as Error).message }))
     } finally {
-      setPlexSaving(false)
+      setPlexSaving(p => ({ ...p, [serverId]: false }))
     }
   }
 
@@ -599,23 +603,35 @@ export default function SettingsPage() {
         {/* Plex connection */}
         <Section title="Plex Connection" hint="Override a server's URL if Plex's own address for it doesn't work (e.g. behind a reverse proxy or on a different LAN path).">
           <div className="space-y-3">
-            {settings.selectedServers.map(srv => (
+            {settings.selectedServers.map(srv => {
+              // Local binding, not inline plexTest[srv.id]: TS doesn't narrow
+              // an element access with a non-literal key across expressions.
+              const test = plexTest[srv.id]
+              return (
               <div key={srv.id} className="space-y-3 rounded-lg border border-[#1D2939] px-4 py-3">
                 <p className="text-sm font-medium text-[#F9FAFB]">{srv.name}</p>
                 <Input
                   label="Server URL"
                   placeholder="http://192.168.1.50:32400"
                   value={plexUrls[srv.id] ?? srv.url}
-                  onChange={e => { setPlexUrls(p => ({ ...p, [srv.id]: e.target.value })); setPlexTest(null) }}
+                  onChange={e => {
+                    setPlexUrls(p => ({ ...p, [srv.id]: e.target.value }))
+                    // An edit invalidates every stale verdict for this server,
+                    // not just the test result -- a lingering error or
+                    // "Saved ✓" would describe a URL no longer in the box.
+                    setPlexTest(p => ({ ...p, [srv.id]: null }))
+                    setPlexError(p => ({ ...p, [srv.id]: '' }))
+                    setPlexSaved(p => ({ ...p, [srv.id]: false }))
+                  }}
                   className="font-mono text-xs"
                 />
-                {plexTest && (
+                {test && (
                   <div className={`rounded-lg border px-3.5 py-2.5 text-sm ${
-                    plexTest.ok
+                    test.ok
                       ? 'border-[#12B76A]/30 bg-[#12B76A]/5 text-[#D0D5DD]'
                       : 'border-[#B42318]/30 bg-[#FEF3F2]/5 text-[#FDA29B]'
                   }`}>
-                    {plexTest.detail}
+                    {test.detail}
                   </div>
                 )}
                 <div className="flex gap-2">
@@ -623,7 +639,7 @@ export default function SettingsPage() {
                     variant="secondary"
                     size="sm"
                     onClick={() => testPlexUrl(srv.id)}
-                    loading={plexTesting}
+                    loading={plexTesting[srv.id]}
                     disabled={!(plexUrls[srv.id] ?? srv.url).trim()}
                   >
                     Test connection
@@ -631,15 +647,16 @@ export default function SettingsPage() {
                   <Button
                     size="sm"
                     onClick={() => savePlexUrl(srv.id)}
-                    loading={plexSaving}
+                    loading={plexSaving[srv.id]}
                     disabled={!(plexUrls[srv.id] ?? srv.url).trim()}
                   >
-                    {plexSaved ? 'Saved ✓' : 'Save'}
+                    {plexSaved[srv.id] ? 'Saved ✓' : 'Save'}
                   </Button>
                 </div>
-                {plexError && <p className="text-xs text-[#FDA29B]">{plexError}</p>}
+                {plexError[srv.id] && <p className="text-xs text-[#FDA29B]">{plexError[srv.id]}</p>}
               </div>
-            ))}
+              )
+            })}
             {settings.selectedServers.length === 0 && (
               <p className="text-sm text-[#667085]">No server connected.</p>
             )}

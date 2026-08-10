@@ -231,4 +231,96 @@ public class ThemeMatchTests
         Assert.Equal(30, score);
         Assert.False(ThemeMatch.IsConfident(score, "Suite Francaise Official Trailer #1 (2015)"));
     }
+
+    [Fact]
+    public void Score_wrongWorkMusic_singleWordPartialMatch_stillRanksPositive()
+    {
+        // Issue #42's two measured failures, at the ranking layer. The ranking is not the
+        // broken part and does not change: a genuine music upload SHOULD outrank the
+        // trailers and reactions in its own pool. Identity is the floor's question, and
+        // the floor is what declines these — see the IsConfident theory below.
+
+        // 8 partial ("endless") + 12 soundtrack + 5 original + 15 duration.
+        var endless = ThemeMatch.Score(
+            "Endless Space 2 Original Soundtrack", "Amplitude Studios",
+            TimeSpan.FromMinutes(4), "The Endless", 2017);
+        Assert.Equal(40, endless);
+
+        // 8 partial ("menu") + 15 theme + 15 duration.
+        var menu = ThemeMatch.Score(
+            "Stray - Main Menu Theme", "Annapurna Interactive",
+            TimeSpan.FromMinutes(2.5), "The Menu", 2022);
+        Assert.Equal(38, menu);
+    }
+
+    [Theory]
+    // 30 full title + 10 official + 12 soundtrack + 15 duration + 8 records channel.
+    [InlineData("Up - Married Life (Official Soundtrack)", "Walt Disney Records", 4.0,
+        "Up", 2009, 75)]
+    // 30 full title + 10 official + 12 soundtrack + 15 duration + 8 music channel.
+    [InlineData("Her - Official Soundtrack (Arcade Fire)", "WaterTower Music", 3.0,
+        "Her", 2013, 75)]
+    // 30 full title + 20 main theme + 10 official + 12 soundtrack + 15 duration + 8 music channel.
+    [InlineData("Dune Official Soundtrack | Main Theme - Hans Zimmer", "WaterTower Music", 3.75,
+        "Dune", 2021, 95)]
+    // 16 partial (blade, runner) + 20 main theme + 15 duration — no full match, no channel bonus.
+    [InlineData("Blade Runner - Main Theme", "Some Channel", 3.0,
+        "Blade Runner 2049", null, 51)]
+    public void Score_shortAndPartialTitledFilms_pinsTheNumbersTheFloorTheoryUses(
+        string videoTitle, string channel, double minutes, string title, int? year, int expected)
+    {
+        // These are the issue's too-strict canaries (Up, Her, Dune) plus a multi-word
+        // partial match. Pinned so the IsConfident theory below asserts against measured
+        // scores, not hand-waved ones.
+        var score = ThemeMatch.Score(videoTitle, channel, TimeSpan.FromMinutes(minutes), title, year);
+
+        Assert.Equal(expected, score);
+    }
+
+    [Theory]
+    // Issue #42's two measured failures. Both are genuinely music — #39's evidence floor
+    // passes them by design — and both matched exactly one significant title word
+    // partially ("endless", "menu"; "the" is under the length bar). One generic word is
+    // not identity, so neither may be acted on without a human looking.
+    [InlineData(40, "Endless Space 2 Original Soundtrack", "The Endless", false)]
+    [InlineData(38, "Stray - Main Menu Theme", "The Menu", false)]
+    // The too-strict canaries: legitimate short titles whose correct uploads contain the
+    // FULL title, which is the door the rule keys on. "Up" and "Her" have zero
+    // significant words, so the rule must cover "at most one", not "exactly one".
+    [InlineData(75, "Up - Married Life (Official Soundtrack)", "Up", true)]
+    [InlineData(75, "Her - Official Soundtrack (Arcade Fire)", "Her", true)]
+    [InlineData(95, "Dune Official Soundtrack | Main Theme - Hans Zimmer", "Dune", true)]
+    // Multi-word titles are deliberately untouched: "blade" and "runner" matching
+    // partially remains sufficient identity, because the #39 accept baseline (mainstream
+    // 11/12, shows 9/12) was measured under that behavior and cannot be re-measured.
+    [InlineData(51, "Blade Runner - Main Theme", "Blade Runner 2049", true)]
+    public void IsConfident_singleSignificantWordTitle_requiresTheFullTitleToAppear(
+        int score, string videoTitle, string mediaTitle, bool expected)
+    {
+        Assert.Equal(expected, ThemeMatch.IsConfident(score, videoTitle, mediaTitle));
+    }
+
+    [Fact]
+    public void IsConfident_nullMediaTitle_skipsTheIdentityCheck()
+    {
+        // No media title supplied → the pre-#42 floor, mirroring Score's nullable title.
+        // All five production search call sites do pass one; that this parameter keeps
+        // flowing is pinned through RankAndMark, because a test bound only to ThemeMatch
+        // cannot see the title stop flowing (#39's exact lesson).
+        Assert.True(ThemeMatch.IsConfident(40, "Endless Space 2 Original Soundtrack"));
+    }
+
+    [Fact]
+    public void BestMatchIndex_wrongWorkMusicOnTop_declines()
+    {
+        // Row 0 or nothing is unchanged by #42: the wrong-work row is refused outright,
+        // not skipped over in favor of a lower-ranked result.
+        var ranked = new[]
+        {
+            ("Endless Space 2 Original Soundtrack", 40),
+            ("The Endless (2017) - Official Trailer", 20),
+        };
+
+        Assert.Equal(-1, ThemeMatch.BestMatchIndex(ranked, "The Endless"));
+    }
 }
