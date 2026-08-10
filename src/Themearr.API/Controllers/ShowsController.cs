@@ -19,7 +19,10 @@ namespace Themearr.API.Controllers;
 [Route("api/shows")]
 public class ShowsController(
     Database db, YoutubeService youtube, DownloadService download, PosterUrlSigner posterSigner,
-    ILogger<ShowsController> log) : ControllerBase
+    ILogger<ShowsController> log,
+    // Optional so the existing test constructions keep compiling, and null-safe because
+    // the delete-side refresh is best-effort anyway — same pattern as DownloadService.
+    PlexService? plex = null) : ControllerBase
 {
     [HttpGet]
     public IActionResult ListShows()
@@ -149,7 +152,19 @@ public class ShowsController(
 
         // Reset the stored status so the column stays honest and the auto-download worker's
         // stored-status pre-filter re-adopts this show — same contract as the movie endpoint.
-        if (deleted) db.SetShowStatus(showId, "pending");
+        if (deleted)
+        {
+            db.SetShowStatus(showId, "pending");
+
+            // Plex keeps playing its cached theme until the item is refreshed — the same
+            // staleness issue #45 fixed for downloads, in the delete direction. Fire and
+            // forget: this action's signature is pinned synchronous, and a DELETE must
+            // not wait out PlexService.RefreshTimeout on a wedged server. The helper
+            // never faults, so discarding the task can't drop an exception.
+            _ = plex?.TryRefreshItemMetadataAsync(
+                show.GetValueOrDefault("source")?.ToString(),
+                show.GetValueOrDefault("sourceRef")?.ToString(), log, showId);
+        }
 
         return Ok(new { deleted });
     }

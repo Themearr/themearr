@@ -547,6 +547,31 @@ public class PlexService(HttpClient http, Database db, LocalFolderResolver folde
         }
     }
 
+    /// <summary>
+    /// Never-throws wrapper over <see cref="RefreshItemMetadataAsync"/> for the theme
+    /// delete endpoints — the sequel to issue #45: after a delete, Plex keeps playing its
+    /// cached theme until the item is refreshed, the same staleness the download path
+    /// fixed in the other direction. Those actions are synchronous (their signatures are
+    /// pinned by existing tests), so callers fire-and-forget the returned task; it must
+    /// therefore never fault — an unobserved faulted task is exactly the failure mode
+    /// this wrapper exists to prevent. A refresh failure is cosmetic here: the theme is
+    /// already gone from disk, so nothing is retried or surfaced to the caller.
+    /// </summary>
+    public async Task TryRefreshItemMetadataAsync(string? source, string? sourceRef, ILogger log, string itemId)
+    {
+        try
+        {
+            // The skip/failure messages are fixed strings (no user data), safe to log.
+            await RefreshItemMetadataAsync(source, sourceRef, msg => log.LogInformation("{Message}", msg));
+        }
+        catch (Exception ex)
+        {
+            // itemId comes from the route, so it is user-influenced (CWE-117).
+            log.LogWarning(ex, "Plex metadata refresh after theme delete failed for {ItemId}",
+                LogSanitizer.Clean(itemId));
+        }
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private static string BuildAuthUrl(string code, string clientId, string forwardUrl)
