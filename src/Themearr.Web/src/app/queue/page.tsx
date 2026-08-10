@@ -44,6 +44,15 @@ export default function QueuePage() {
 
   // Holds the movieId being downloaded so the polling closure keeps the right id
   const downloadingMovieId = useRef<string | null>(null)
+  // Monotonic download-attempt stamp -- the ownership half of settleDownloadFailure's
+  // identity gate. The bare id is not enough there: after the status poll's
+  // lost-contact path hands control back, a *second* download of the same item
+  // (or of a show sharing the id) can be running when the first attempt's hung
+  // request finally rejects, and an id comparison would let that stale rejection
+  // tear down the newer attempt's tracking. Same latest-stamp technique
+  // useResource (src/lib/useResource.ts) uses: each starter claims a number at
+  // issue time, and only the newest issued may settle the shared download state.
+  const downloadAttempt    = useRef(0)
   const searchedFor        = useRef<string | null>(null)
   // Tracks whether we've already triggered auto-download for the current movie
   const autoTriggeredFor   = useRef<string | null>(null)
@@ -75,6 +84,17 @@ export default function QueuePage() {
 
   const current   = pending?.[currentIdx] ?? null
   const remaining = pending ? Math.max(0, pending.length - currentIdx) : 0
+
+  // What the card is showing right now, for the download catch handlers below:
+  // the "Up next" rows and the media toggle deliberately stay clickable while a
+  // download runs, so by the time a request rejects the card may be showing a
+  // different item -- and the rejection's error must not render under it (#43).
+  // A ref (same technique as autoModeRef) because the deciders are closures
+  // that outlive the render they were created in. Media-qualified because
+  // movie and show ids come from different tables and can collide -- a bare id
+  // can't tell movie 7 from show 7 across the toggle.
+  const onScreenKeyRef = useRef<string | null>(null)
+  useEffect(() => { onScreenKeyRef.current = current ? `${media}:${current.id}` : null }, [current, media])
 
   // ── Load auto mode setting ──────────────────────────────────────────────────
   useEffect(() => {
@@ -165,6 +185,26 @@ export default function QueuePage() {
     downloadingMovieId.current = null
   }
 
+  // Every download starter's catch lands here, with the attempt stamp and
+  // on-screen key it captured before its request went out. Two identity
+  // checks, in order:
+  //
+  // 1. Ownership: only the newest attempt may clear the in-flight state. The
+  //    status poll's lost-contact path can hand control back mid-request, so a
+  //    newer download -- possibly of the same item -- may be running by the
+  //    time this rejection finally arrives, and clearing `downloading` then
+  //    would kill the newer attempt's tracking.
+  // 2. Placement: the error only renders if the item it concerns is still the
+  //    one on the card. A stale banner under whatever the user browsed to
+  //    reads as *that* title having failed (#43); the failed item is pending
+  //    either way, so the queue will offer it again.
+  function settleDownloadFailure(attempt: number, forKey: string, message: string) {
+    if (downloadAttempt.current !== attempt) return
+    setDownloading(false)
+    downloadingMovieId.current = null
+    if (onScreenKeyRef.current === forKey) setError(message)
+  }
+
   async function skipForever() {
     if (!current) return
     try {
@@ -186,15 +226,16 @@ export default function QueuePage() {
     if (!autoMode || !current || downloading) return
     if (autoTriggeredFor.current === current.id) return
 
-    autoTriggeredFor.current = current.id
-    downloadingMovieId.current = current.id
+    const forId   = current.id
+    const forKey  = `${media}:${forId}`
+    const attempt = ++downloadAttempt.current
+    autoTriggeredFor.current = forId
+    downloadingMovieId.current = forId
     setDownloading(true)
     setError('')
-    adapter.autoDownload(current.id)
+    adapter.autoDownload(forId)
       .catch((e: Error) => {
-        setError(e.message)
-        setDownloading(false)
-        downloadingMovieId.current = null
+        settleDownloadFailure(attempt, forKey, e.message)
         // Deliberately NOT resetting autoTriggeredFor here. `downloading` flipping back
         // to false re-runs this effect, and a cleared guard reads as "never tried this
         // one" -- so a movie that fails once would retry at round-trip rate forever, each
@@ -203,7 +244,7 @@ export default function QueuePage() {
         // stays visible, and Skip/Ignore plus the per-result Download button remain the
         // way out.
       })
-  }, [autoMode, current, downloading, adapter])
+  }, [autoMode, current, downloading, adapter, media])
 
   // ── Poll download status while a download is in flight ────────────────────
   useEffect(() => {
@@ -281,43 +322,46 @@ export default function QueuePage() {
 
   async function doDownload(videoId: string) {
     if (!current) return
-    downloadingMovieId.current = current.id
+    const forId   = current.id
+    const forKey  = `${media}:${forId}`
+    const attempt = ++downloadAttempt.current
+    downloadingMovieId.current = forId
     setDownloading(true)
     setError('')
     try {
-      await adapter.download(current.id, videoId)
+      await adapter.download(forId, videoId)
     } catch (e) {
-      setError((e as Error).message)
-      setDownloading(false)
-      downloadingMovieId.current = null
+      settleDownloadFailure(attempt, forKey, (e as Error).message)
     }
   }
 
   async function doDownloadUrl() {
     if (!current || !manualUrl.trim()) return
-    downloadingMovieId.current = current.id
+    const forId   = current.id
+    const forKey  = `${media}:${forId}`
+    const attempt = ++downloadAttempt.current
+    downloadingMovieId.current = forId
     setDownloading(true)
     setError('')
     try {
-      await adapter.downloadUrl(current.id, manualUrl.trim())
+      await adapter.downloadUrl(forId, manualUrl.trim())
     } catch (e) {
-      setError((e as Error).message)
-      setDownloading(false)
-      downloadingMovieId.current = null
+      settleDownloadFailure(attempt, forKey, (e as Error).message)
     }
   }
 
   async function doAutoDownload() {
     if (!current) return
-    downloadingMovieId.current = current.id
+    const forId   = current.id
+    const forKey  = `${media}:${forId}`
+    const attempt = ++downloadAttempt.current
+    downloadingMovieId.current = forId
     setDownloading(true)
     setError('')
     try {
-      await adapter.autoDownload(current.id)
+      await adapter.autoDownload(forId)
     } catch (e) {
-      setError((e as Error).message)
-      setDownloading(false)
-      downloadingMovieId.current = null
+      settleDownloadFailure(attempt, forKey, (e as Error).message)
     }
   }
 
