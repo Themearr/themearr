@@ -38,7 +38,10 @@ public class YoutubeService
             if (raw.Count >= maxResults) break;
         }
 
-        return RankAndMark(raw);
+        // The title rides along so the floor can check work identity (issue #42). This
+        // forward is the one hop no offline test can pin — SearchAsync is the network
+        // half — the same epistemic status its call of RankAndMark has had since #39.
+        return RankAndMark(raw, title);
     }
 
     /// <summary>
@@ -51,16 +54,17 @@ public class YoutubeService
     /// the floor on YouTube's raw order instead of the ranked one — passed the full suite.
     /// </summary>
     public static List<Dictionary<string, object?>> RankAndMark(
-        List<(Dictionary<string, object?> result, int score, string videoTitle)> raw)
+        List<(Dictionary<string, object?> result, int score, string videoTitle)> raw,
+        string? title = null)
     {
         // Sort by score descending
         raw.Sort((a, b) => b.score.CompareTo(a.score));
 
-        // Mark the top result as bestMatch — only when it is plausibly the work's music,
+        // Mark the top result as bestMatch — only when it is plausibly THIS work's music,
         // not merely the least-bad of a poor pool. Both auto-download workers and the
         // manual search badge read this flag, and all of them should decline together.
         var best = ThemeMatch.BestMatchIndex(
-            raw.Select(r => (r.videoTitle, r.score)).ToList());
+            raw.Select(r => (r.videoTitle, r.score)).ToList(), title);
         if (best >= 0)
             raw[best].result["bestMatch"] = true;
 
