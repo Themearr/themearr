@@ -4,7 +4,7 @@ import type { MediaItem, YoutubeResult } from '@/lib/types'
 import { AppShell } from '@/components/layout/AppShell'
 import { Button, EmptyState, ErrorIcon, Input, Spinner } from '@/components/ui'
 import { useResource } from '@/lib/useResource'
-import { moviesAdapter, showsAdapter } from '@/lib/media/adapter'
+import { moviesAdapter, showsAdapter, type MediaAdapter } from '@/lib/media/adapter'
 
 // Bounds the polled `downloadStatus` request below (the "in-flight" guard's
 // own comment explains what it's guarding against). `request()` in
@@ -53,11 +53,23 @@ export default function QueuePage() {
   // useResource (src/lib/useResource.ts) uses: each starter claims a number at
   // issue time, and only the newest issued may settle the shared download state.
   const downloadAttempt    = useRef(0)
+  // What the running download is bound to, captured at start alongside the
+  // attempt stamp: the adapter and media it was started under, plus the
+  // on-screen key its errors belong to. The status poll reads THIS rather than
+  // the live `adapter`/`media` -- the toggle stays clickable during a download
+  // (#43), so by the next tick the live values may describe the other library,
+  // and asking the shows endpoint about a movie's download answers "no such
+  // job, not finished" forever (DownloadService.GetStatus's unknown-id shape),
+  // wedging the queue in "Downloading…" with Skip/Ignore disabled.
+  const downloadBinding    = useRef<{ adapter: MediaAdapter; media: 'movies' | 'shows'; attempt: number; key: string } | null>(null)
   const searchedFor        = useRef<string | null>(null)
   // Tracks whether we've already triggered auto-download for the current movie
   const autoTriggeredFor   = useRef<string | null>(null)
   // Keep a ref in sync with autoMode so polling closures never see stale state
   const autoModeRef        = useRef(autoMode)
+  // Same, for the media toggle: the poll's settle paths need to know which
+  // library is on screen *now*, not which one their download started under.
+  const mediaRef           = useRef(media)
 
   // The initial load. Routed through useResource so a failed request surfaces
   // as an error screen instead of "every movie already has a theme".
@@ -103,8 +115,9 @@ export default function QueuePage() {
       .catch(() => null)
   }, [])
 
-  // Keep ref in sync
+  // Keep refs in sync
   useEffect(() => { autoModeRef.current = autoMode }, [autoMode])
+  useEffect(() => { mediaRef.current = media }, [media])
 
   // Saves first and only flips the switch once the server confirms it, rather
   // than flipping optimistically and trying to unwind it on failure -- so the
@@ -185,9 +198,11 @@ export default function QueuePage() {
     downloadingMovieId.current = null
   }
 
-  // Every download starter's catch lands here, with the attempt stamp and
-  // on-screen key it captured before its request went out. Two identity
-  // checks, in order:
+  // Every download failure lands here -- the four starters' catches with the
+  // attempt stamp and on-screen key they captured before their request went
+  // out, and the status poll's settle paths with the ones captured at download
+  // start (a server-reported failure is the same event arriving on the other
+  // channel). Two identity checks, in order:
   //
   // 1. Ownership: only the newest attempt may clear the in-flight state. The
   //    status poll's lost-contact path can hand control back mid-request, so a
@@ -231,6 +246,7 @@ export default function QueuePage() {
     const attempt = ++downloadAttempt.current
     autoTriggeredFor.current = forId
     downloadingMovieId.current = forId
+    downloadBinding.current = { adapter, media, attempt, key: forKey }
     setDownloading(true)
     setError('')
     adapter.autoDownload(forId)
@@ -251,6 +267,14 @@ export default function QueuePage() {
     if (!downloading) return
     const movieId = downloadingMovieId.current
     if (!movieId) return
+    // Bound at download start, deliberately NOT the live `adapter` (which is
+    // why it isn't a dependency): a mid-download media toggle must not re-point
+    // this poll at the other library's status endpoint -- see downloadBinding's
+    // comment for what that wedges. The attempt stamp and key ride along so the
+    // settle paths below can run the same identity gate as the catch sites.
+    const binding = downloadBinding.current
+    if (!binding) return
+    const { adapter: boundAdapter, media: forMedia, attempt, key: forKey } = binding
 
     // A status request that takes longer than the interval used to leave two
     // callbacks in flight at once. Both saw `finished`, and both advanced the
@@ -278,23 +302,41 @@ export default function QueuePage() {
       const timeoutId = setTimeout(() => controller.abort(), STATUS_TIMEOUT_MS)
 
       try {
-        const st = await adapter.downloadStatus(movieId, { signal: controller.signal })
+        const st = await boundAdapter.downloadStatus(movieId, { signal: controller.signal })
         failures = 0 // a status came back -- we're still in contact with the server
-        if (st.logs?.length) setDownloadLogs(st.logs)
+        // Ownership-gated like every settle below: a stale tick surviving a
+        // handback must not paint the old attempt's logs under a newer one.
+        if (st.logs?.length && downloadAttempt.current === attempt) setDownloadLogs(st.logs)
         if (!st.finished) return
         clearInterval(id)
         if (st.error) {
-          setError(st.error)
-          setDownloading(false)
+          // The server-reported twin of the catch sites' rejections (#43):
+          // same stakes, same gate. Without it, browsing away mid-download
+          // painted this error under whichever card the user was on.
+          settleDownloadFailure(attempt, forKey, st.error)
           // Auto mode: skip this movie automatically after a short pause
           if (autoModeRef.current) {
             setTimeout(() => {
+              // Re-checked at fire time: three seconds is long enough for auto
+              // mode to have started the next item's download (whose freshly
+              // shown error this would wipe) or for the user to be triaging
+              // the other library (whose queue this would advance).
+              if (downloadAttempt.current !== attempt) return
+              if (mediaRef.current !== forMedia) return
               setError('')
-              advanceQueue(movieId)
+              advanceQueue()
             }, 3000)
           }
-        } else {
+        } else if (mediaRef.current === forMedia) {
           advanceQueue(movieId)
+        } else if (downloadAttempt.current === attempt) {
+          // Finished under the other library: advancing would silently skip an
+          // item from the list now on screen, so just end the tracking. The
+          // completed item stops being pending on the next list load, which
+          // switching back already triggers (switchMedia -> retryMovies).
+          setDownloading(false)
+          setDownloadLogs([])
+          downloadingMovieId.current = null
         }
       } catch {
         // A transient drop/timeout: the next tick normally recovers it. But if
@@ -303,12 +345,14 @@ export default function QueuePage() {
         // Give up tracking, say so, and re-enable the in-app escapes. We can't
         // know the download's real outcome, so we don't advance -- a reload (or
         // the next visit) will reflect whatever actually happened server-side.
+        // Routed through the identity gate: a hung check can settle long after
+        // control was handed back, when a newer attempt may own the state and
+        // a different item may own the card.
         failures++
         if (failures >= STATUS_MAX_FAILURES) {
           clearInterval(id)
-          setError('Lost contact with the server while tracking this download. It may still finish — reload to check.')
-          setDownloading(false)
-          downloadingMovieId.current = null
+          settleDownloadFailure(attempt, forKey,
+            'Lost contact with the server while tracking this download. It may still finish — reload to check.')
         }
       }
       finally {
@@ -318,7 +362,7 @@ export default function QueuePage() {
     }, 1000)
 
     return () => clearInterval(id)
-  }, [downloading, adapter])
+  }, [downloading])
 
   async function doDownload(videoId: string) {
     if (!current) return
@@ -326,6 +370,7 @@ export default function QueuePage() {
     const forKey  = `${media}:${forId}`
     const attempt = ++downloadAttempt.current
     downloadingMovieId.current = forId
+    downloadBinding.current = { adapter, media, attempt, key: forKey }
     setDownloading(true)
     setError('')
     try {
@@ -341,6 +386,7 @@ export default function QueuePage() {
     const forKey  = `${media}:${forId}`
     const attempt = ++downloadAttempt.current
     downloadingMovieId.current = forId
+    downloadBinding.current = { adapter, media, attempt, key: forKey }
     setDownloading(true)
     setError('')
     try {
@@ -356,6 +402,7 @@ export default function QueuePage() {
     const forKey  = `${media}:${forId}`
     const attempt = ++downloadAttempt.current
     downloadingMovieId.current = forId
+    downloadBinding.current = { adapter, media, attempt, key: forKey }
     setDownloading(true)
     setError('')
     try {
