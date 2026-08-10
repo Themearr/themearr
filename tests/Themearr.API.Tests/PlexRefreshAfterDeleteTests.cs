@@ -226,9 +226,9 @@ public class PlexRefreshAfterDeleteTests
         Assert.False(ThemeFiles.HasUsableTheme(Path.Combine(dir.Path, "Test Movie")));
         Assert.Equal("pending", db.GetMovie(id)!["status"]);
 
-        // Let the fire-and-forget refresh run to completion so a faulted task (the
-        // failure mode the never-throws wrapper exists to prevent) would surface as an
-        // unobserved exception here rather than in an unrelated test.
+        // Drain the fire-and-forget refresh before TempDir teardown. A faulted discarded
+        // task would be invisible to xUnit here, so the wrapper's never-faults contract
+        // is pinned directly in PlexRefreshWrapperTests instead.
         await Task.Delay(250);
     }
 
