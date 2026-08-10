@@ -290,6 +290,9 @@ export default function SettingsPage() {
     setPlexTesting(p => ({ ...p, [serverId]: true }))
     setPlexTest(p => ({ ...p, [serverId]: null }))
     setPlexError(p => ({ ...p, [serverId]: '' }))
+    // The Saved flag too: claiming the stamp supersedes a pending save's
+    // hide-timeout, so a flag left up here would never be cleared by anything.
+    setPlexSaved(p => ({ ...p, [serverId]: false }))
     try {
       const res = await plexApi.test(serverId, plexUrls[serverId] ?? '')
       if (seq !== plexUrlSeq.current[serverId]) return // superseded by a later edit/test/save
@@ -311,19 +314,29 @@ export default function SettingsPage() {
     setPlexError(p => ({ ...p, [serverId]: '' }))
     try {
       const res = await plexApi.saveUrl(serverId, plexUrls[serverId] ?? '')
-      // Superseded by a later edit/test/save: the save persisted server-side,
-      // but none of its echo may land here -- setPlexUrls in particular would
-      // clobber the newer text in the box with the older URL's normalised
-      // form. The next successful save re-syncs selectedServers wholesale.
+      // The save persisted server-side whether or not a later action has
+      // superseded it, so its echo must reach `settings` either way: a
+      // whole-object save (the header's "Save changes", the library sections)
+      // posts selectedServers wholesale (SettingsController's Save), and a
+      // stale entry there would silently revert the URL the server already
+      // applied. Merge only the saved server's entry -- res.selectedServers is
+      // the full list, and replacing wholesale would let two servers' save
+      // echoes settling in reverse order revert each other's URL.
+      setSettings(s => s ? {
+        ...s,
+        selectedServers: s.selectedServers.map(x =>
+          x.id === serverId ? (res.selectedServers.find(r => r.id === serverId) ?? x) : x),
+      } : s)
+      // Superseded by a later edit/test/save: no transient feedback may land --
+      // setPlexUrls in particular would clobber the newer text in the box with
+      // the older URL's normalised form.
       if (seq !== plexUrlSeq.current[serverId]) return
-      // Sync to the response rather than trusting what was typed: the backend
+      // Sync the box to the response rather than to what was typed: the backend
       // normalises the URL (adds a scheme, trims a trailing slash), and
-      // saveUrl() -- unlike radarrApi.save() -- already echoes the
-      // normalised value back, so there's no need for a separate re-fetch.
-      // Only the saved server's own entry is touched -- res.selectedServers
-      // is the full list, and overwriting every entry would silently discard
-      // any unsaved edit the user has typed into another server's field.
-      setSettings(s => s ? { ...s, selectedServers: res.selectedServers } : s)
+      // saveUrl() -- unlike radarrApi.save() -- already echoes the normalised
+      // value back, so there's no need for a separate re-fetch. Only this
+      // server's entry is touched: overwriting every entry would silently
+      // discard an unsaved edit typed into another server's field.
       setPlexUrls(p => ({ ...p, [serverId]: res.selectedServers.find(srv => srv.id === serverId)?.url ?? p[serverId] }))
       setPlexSaved(p => ({ ...p, [serverId]: true }))
       setTimeout(() => {

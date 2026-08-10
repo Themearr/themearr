@@ -146,6 +146,81 @@ describe('an in-flight Plex test/save cannot outlive a re-edit of that URL', () 
   })
 })
 
+// Concurrency-review finding on the stamp guard: a save superseded by an edit
+// still persisted server-side. If its echo never reaches `settings`, any later
+// whole-object save (the header's "Save changes", the library sections) posts
+// selectedServers wholesale (SettingsController.cs:86) with the pre-save URL --
+// silently reverting the save the server already applied.
+describe("a superseded save's echo still lands in settings", () => {
+  it('keeps the newer text in the box but posts the persisted URL on a later global save', async () => {
+    const dl = deferred<{ selectedServers: { id: string; name: string; url: string }[] }>()
+    vi.mocked(api.plexApi.saveUrl).mockReturnValue(dl.promise as never)
+    vi.mocked(api.settingsApi.save).mockResolvedValue({} as never)
+
+    const { default: SettingsPage } = await import('@/app/settings/page')
+    renderPage(<SettingsPage />)
+
+    const input = await screen.findByDisplayValue('https://old.plex.direct:32400')
+    const card = screen.getByText('Tower').closest('div') as HTMLElement
+
+    await userEvent.click(within(card).getByRole('button', { name: /^save$/i }))
+    await waitFor(() => expect(api.plexApi.saveUrl).toHaveBeenCalledTimes(1))
+
+    // Keep typing while the save is in flight, then let its response land: the
+    // backend HAS persisted the normalised URL by now.
+    await userEvent.type(input, 'x')
+    await act(async () => {
+      dl.resolve({ selectedServers: [{ id: 'srv1', name: 'Tower', url: 'http://192.168.1.50:32400' }] })
+    })
+
+    // The box keeps the newer typing -- the echo may not clobber it...
+    expect(input).toHaveValue('https://old.plex.direct:32400x')
+
+    // ...but a whole-object save must post the URL the server persisted, not
+    // the pre-save one it would otherwise silently revert to.
+    await userEvent.click(screen.getByRole('button', { name: /save changes/i }))
+    await waitFor(() => expect(api.settingsApi.save).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(api.settingsApi.save).mock.calls[0][0]).toMatchObject({
+      selectedServers: [{ id: 'srv1', url: 'http://192.168.1.50:32400' }],
+    })
+  })
+})
+
+// Concurrency-review finding: claiming a stamp without clearing the flag it
+// governs wedges the flag. A test right after a save claims a new stamp, the
+// save's hide-timeout defers to it, and nothing else ever clears "Saved ✓".
+describe('a test right after a save cannot wedge Saved ✓ on', () => {
+  beforeEach(() => { vi.useFakeTimers() })
+  afterEach(() => { vi.useRealTimers() })
+
+  function flush(ms: number) {
+    return act(async () => { await vi.advanceTimersByTimeAsync(ms) })
+  }
+
+  it('the confirmation still goes away when a test supersedes the save', async () => {
+    vi.mocked(api.plexApi.test).mockResolvedValue({ ok: true, detail: 'Reached the Plex server.' } as never)
+
+    const { default: SettingsPage } = await import('@/app/settings/page')
+    renderPage(<SettingsPage />)
+    await flush(50)
+
+    const card = screen.getByText('Tower').closest('div') as HTMLElement
+
+    await act(async () => { fireEvent.click(within(card).getByRole('button', { name: /^save/i })) })
+    expect(within(card).getByRole('button', { name: /saved/i })).toBeInTheDocument()
+
+    // t+1000: a test on the same server supersedes the save's stamp.
+    await flush(1000)
+    await act(async () => { fireEvent.click(within(card).getByRole('button', { name: /test connection/i })) })
+    expect(within(card).getByText(/reached the plex server/i)).toBeInTheDocument()
+
+    // Long past every 2s window the confirmation must be gone -- the save's
+    // superseded timeout defers, so something else has to have cleared it.
+    await flush(5000)
+    expect(within(card).queryByRole('button', { name: /saved/i })).toBeNull()
+  })
+})
+
 // savePlexUrl's 2s hide-timeout captured nothing about which save it belonged
 // to, so a first save's timeout could fire inside a second save's confirmation
 // window and hide its "Saved ✓" early. Fake timers because the bug is entirely
