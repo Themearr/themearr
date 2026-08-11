@@ -24,6 +24,16 @@ const STATUS_TIMEOUT_MS = 8000
 // queue behind a reload. At that point we give up tracking and hand control back.
 const STATUS_MAX_FAILURES = 3
 
+// Until the start POST settles, the poll skips its ticks (see the start gate in
+// the poll below) -- so those skipped ticks need their own give-up horizon, or
+// a start POST that never lands wedges the queue with Skip/Ignore disabled and
+// no escape: the status checks themselves would keep SUCCEEDING (the unknown-id
+// shape is a healthy response), so STATUS_MAX_FAILURES never trips. Matched to
+// the failing-status horizon above: three hung checks cost about
+// 3 x (1s interval + STATUS_TIMEOUT_MS) ~= 27s, so 30 one-second ticks hand
+// control back at the same point a status outage would.
+const START_MAX_WAIT_TICKS = 30
+
 export default function QueuePage() {
   // Component state, deliberately not persisted and not in the URL: someone who once
   // looked at shows would otherwise return to the Queue, find an empty triage list and
@@ -72,7 +82,13 @@ export default function QueuePage() {
   // and asking the shows endpoint about a movie's download answers "no such
   // job, not finished" forever (DownloadService.GetStatus's unknown-id shape),
   // wedging the queue in "Downloading…" with Skip/Ignore disabled.
-  const downloadBinding    = useRef<{ adapter: MediaAdapter; media: 'movies' | 'shows'; attempt: number; key: string } | null>(null)
+  //
+  // `startSettled` is mutated (not replaced) when the starter's POST resolves:
+  // until then the server's status for this id is the PREVIOUS job's --
+  // Start() only writes the fresh JobState right before returning
+  // (DownloadService.cs:70) -- so the poll must not read status yet, or a
+  // retry of a failed item is instantly re-settled by the failure it retries.
+  const downloadBinding    = useRef<{ adapter: MediaAdapter; media: 'movies' | 'shows'; attempt: number; key: string; startSettled: boolean } | null>(null)
   const searchedFor        = useRef<string | null>(null)
   // Tracks whether we've already triggered auto-download for the current movie
   const autoTriggeredFor   = useRef<string | null>(null)
@@ -260,6 +276,10 @@ export default function QueuePage() {
     if (downloadAttempt.current !== attempt) return
     setDownloading(false)
     downloadingMovieId.current = null
+    // The log tail belongs to the attempt that failed: left in state, it
+    // renders under the NEXT download's panel until that download's first
+    // status tick overwrites it. (advanceQueue already clears it on success.)
+    setDownloadLogs([])
     if (onScreenKeyRef.current === forKey) setError(message)
   }
 
@@ -305,10 +325,12 @@ export default function QueuePage() {
     const attempt = ++downloadAttempt.current
     autoTriggeredFor.current = forId
     downloadingMovieId.current = forId
-    downloadBinding.current = { adapter, media, attempt, key: forKey }
+    const binding = { adapter, media, attempt, key: forKey, startSettled: false }
+    downloadBinding.current = binding
     setDownloading(true)
     setError('')
     adapter.autoDownload(forId)
+      .then(() => { binding.startSettled = true })
       .catch((e: Error) => {
         settleDownloadFailure(attempt, forKey, e.message)
         // Deliberately NOT resetting autoTriggeredFor here. `downloading` flipping back
@@ -346,8 +368,22 @@ export default function QueuePage() {
     // Counts consecutive failed status checks; any success resets it. Local to
     // this effect run so a fresh download always starts from a clean slate.
     let failures = 0
+    // Counts ticks skipped while the start POST is unsettled -- see the start
+    // gate below and START_MAX_WAIT_TICKS for why they need their own horizon.
+    let startWaits = 0
 
     const id = setInterval(async () => {
+      // Start gate: until the start POST settles, the server's status for this
+      // id is the PREVIOUS job's (see downloadBinding's comment) -- reading it
+      // would re-settle a retry with the old attempt's outcome.
+      if (!binding.startSettled) {
+        if (++startWaits >= START_MAX_WAIT_TICKS) {
+          clearInterval(id)
+          settleDownloadFailure(attempt, forKey,
+            'Lost contact with the server before it confirmed this download started — reload to check.')
+        }
+        return
+      }
       if (inFlight) return
       inFlight = true
 
@@ -440,11 +476,13 @@ export default function QueuePage() {
     const forKey  = `${media}:${forId}`
     const attempt = ++downloadAttempt.current
     downloadingMovieId.current = forId
-    downloadBinding.current = { adapter, media, attempt, key: forKey }
+    const binding = { adapter, media, attempt, key: forKey, startSettled: false }
+    downloadBinding.current = binding
     setDownloading(true)
     setError('')
     try {
       await adapter.download(forId, videoId)
+      binding.startSettled = true
     } catch (e) {
       settleDownloadFailure(attempt, forKey, (e as Error).message)
     }
@@ -457,11 +495,13 @@ export default function QueuePage() {
     const forKey  = `${media}:${forId}`
     const attempt = ++downloadAttempt.current
     downloadingMovieId.current = forId
-    downloadBinding.current = { adapter, media, attempt, key: forKey }
+    const binding = { adapter, media, attempt, key: forKey, startSettled: false }
+    downloadBinding.current = binding
     setDownloading(true)
     setError('')
     try {
       await adapter.downloadUrl(forId, manualUrl.trim())
+      binding.startSettled = true
     } catch (e) {
       settleDownloadFailure(attempt, forKey, (e as Error).message)
     }
@@ -474,11 +514,13 @@ export default function QueuePage() {
     const forKey  = `${media}:${forId}`
     const attempt = ++downloadAttempt.current
     downloadingMovieId.current = forId
-    downloadBinding.current = { adapter, media, attempt, key: forKey }
+    const binding = { adapter, media, attempt, key: forKey, startSettled: false }
+    downloadBinding.current = binding
     setDownloading(true)
     setError('')
     try {
       await adapter.autoDownload(forId)
+      binding.startSettled = true
     } catch (e) {
       settleDownloadFailure(attempt, forKey, (e as Error).message)
     }

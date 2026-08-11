@@ -246,3 +246,90 @@ describe('a running download keeps polling the media it started under', () => {
     expect(screen.getByRole('button', { name: /^skip$/i })).not.toBeDisabled()
   })
 })
+
+// Until the start POST settles, the server's status for this id is the
+// PREVIOUS job's: Start() only writes the fresh JobState right before
+// returning (DownloadService.cs:70), and the poll begins ticking the moment
+// `downloading` flips -- while that POST is still in flight.
+describe("the poll cannot act on the previous job's status before the start POST lands", () => {
+  it('a retry is not settled by the very failure it is retrying', async () => {
+    // The server still remembers the last attempt's terminal state -- exactly
+    // what GetStatus serves until the new Start() is processed.
+    movieStatus = { inProgress: false, finished: true, error: 'old failure from the last attempt', logs: [] }
+    let settleStart!: (v: unknown) => void
+    vi.mocked(api.moviesApi.download).mockReturnValue(
+      new Promise(res => { settleStart = res }) as never,
+    )
+
+    renderPage()
+    await flush(50)
+    await startDownload()
+
+    // Two ticks pass with the start POST still in flight. Acting on what they
+    // read would re-report the old failure and tear down the new attempt
+    // while its download proceeds server-side, unobserved.
+    await flush(2500)
+    expect(screen.queryByText(/old failure from the last attempt/i)).toBeNull()
+    expect(screen.getByRole('button', { name: /^skip$/i })).toBeDisabled()
+
+    // The start POST lands; from here the status genuinely describes this
+    // attempt, and the ordinary lifecycle resumes.
+    movieStatus = { inProgress: true, finished: false, error: null, logs: [] }
+    await act(async () => { settleStart({ started: true }) })
+    await flush(1100)
+    expect(screen.getByRole('button', { name: /^skip$/i })).toBeDisabled()
+
+    movieStatus = { inProgress: false, finished: true, error: null, logs: [] }
+    await flush(1100)
+    expect(screen.queryByText('2 movies left in queue')).not.toBeNull()
+  })
+
+  it('a start POST that never lands hands control back instead of wedging forever', async () => {
+    // No previous job: the server answers every status check with the
+    // unknown-id shape (DownloadService.cs:117) -- a SUCCESSFUL response that
+    // never says finished, so the failing-status escape never triggers.
+    movieStatus = { inProgress: false, finished: false, error: null, logs: [] }
+    vi.mocked(api.moviesApi.download).mockReturnValue(new Promise(() => {}) as never)
+
+    renderPage()
+    await flush(50)
+    await startDownload()
+
+    // Long past any reasonable start: the queue must hand control back the
+    // same way it does when status checks themselves fail.
+    await flush(45000)
+    expect(screen.queryByText(/lost contact/i)).not.toBeNull()
+    expect(screen.getByRole('button', { name: /^skip$/i })).not.toBeDisabled()
+    // And it cannot know the download's fate, so it must not have advanced.
+    expect(screen.queryByText('3 movies left in queue')).not.toBeNull()
+  })
+})
+
+// advanceQueue clears the log tail on success, but a failure settle left it in
+// state -- and the panel renders whatever is there the moment the NEXT download
+// starts, until that download's first status tick overwrites it.
+describe("a failed attempt's logs cannot flash under the next download", () => {
+  it('starting a new download shows no log lines from the failed one', async () => {
+    renderPage()
+    await flush(50)
+    await startDownload()
+
+    // A's download streams a log line, then fails.
+    movieStatus = { inProgress: true, finished: false, error: null, logs: ['yt-dlp: fetching Movie A'] }
+    await flush(1100)
+    expect(screen.queryByText('yt-dlp: fetching Movie A')).not.toBeNull()
+    movieStatus = { inProgress: false, finished: true, error: 'A failed', logs: ['yt-dlp: fetching Movie A'] }
+    await flush(1100)
+    expect(screen.queryByText('A failed')).not.toBeNull()
+
+    // The user moves on to Movie B and downloads it. Before B's first status
+    // tick, the panel must not replay A's log tail under B.
+    movieStatus = { inProgress: true, finished: false, error: null, logs: [] }
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /movie b/i })) })
+    await flush(50)
+    await startDownload()
+
+    expect(screen.queryByText(/downloading theme/i)).not.toBeNull()
+    expect(screen.queryByText('yt-dlp: fetching Movie A')).toBeNull()
+  })
+})
