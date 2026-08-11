@@ -86,6 +86,11 @@ export default function SettingsPage() {
   // response decides the panel's state -- a slow Replace re-claiming
   // "configured" after a successful Remove.
   const rapidSeq = useRef(0)
+  // Typing while a Save/Replace is in flight claims the stamp too: the late
+  // response may not empty the boxes over the newer text, nor flip the panel
+  // out from under the user mid-edit.
+  const editRapidApiKey      = (v: string) => { rapidSeq.current++; setRapidApiKey(v) }
+  const editRapidApiUsername = (v: string) => { rapidSeq.current++; setRapidApiUsername(v) }
   const [librarySource,    setLibrarySource]    = useState<'plex' | 'radarr'>('plex')
   const [radarrUrl,        setRadarrUrl]        = useState('')
   const [radarrApiKey,     setRadarrApiKey]     = useState('')
@@ -198,9 +203,14 @@ export default function SettingsPage() {
   // Poll update status while in progress
   useEffect(() => {
     if (!updating) return
+    // A tick can outlive the poll: one that hung while a later tick observed
+    // `finished` resolves after the interval is gone, and its older logs would
+    // overwrite the final ones with nothing left to heal them.
+    let stale = false
     const id = setInterval(async () => {
       try {
         const st = await versionApi.updateStatus()
+        if (stale) return
         if (st.logs.length) setUpdateLogs(st.logs)
         if (st.finished) {
           setUpdating(false)
@@ -209,7 +219,7 @@ export default function SettingsPage() {
         }
       } catch { /* ignore */ }
     }, 1000)
-    return () => clearInterval(id)
+    return () => { stale = true; clearInterval(id) }
   }, [updating])
 
   // Shows a transient ✓ flag (header Saved, Regenerated, the Copy buttons) for
@@ -1094,18 +1104,18 @@ export default function SettingsPage() {
                 <Button variant="ghost" size="sm" onClick={removeRapidApiKey} loading={rapidApiRemoving}>Remove</Button>
               </div>
               <div className="space-y-2">
-                <Input placeholder="New RapidAPI key…" value={rapidApiKey} onChange={e => setRapidApiKey(e.target.value)} className="font-mono text-xs" />
+                <Input placeholder="New RapidAPI key…" value={rapidApiKey} onChange={e => editRapidApiKey(e.target.value)} className="font-mono text-xs" />
                 <div className="flex gap-2">
-                  <Input placeholder="RapidAPI username…" value={rapidApiUsername} onChange={e => setRapidApiUsername(e.target.value)} className="flex-1 text-xs" />
+                  <Input placeholder="RapidAPI username…" value={rapidApiUsername} onChange={e => editRapidApiUsername(e.target.value)} className="flex-1 text-xs" />
                   <Button onClick={saveRapidApiKey} loading={rapidApiSaving} size="sm" disabled={!rapidApiKey.trim() || !rapidApiUsername.trim()}>Replace</Button>
                 </div>
               </div>
             </div>
           ) : (
             <div className="space-y-2">
-              <Input placeholder="RapidAPI key…" value={rapidApiKey} onChange={e => setRapidApiKey(e.target.value)} className="font-mono text-xs" />
+              <Input placeholder="RapidAPI key…" value={rapidApiKey} onChange={e => editRapidApiKey(e.target.value)} className="font-mono text-xs" />
               <div className="flex gap-2">
-                <Input placeholder="RapidAPI username…" value={rapidApiUsername} onChange={e => setRapidApiUsername(e.target.value)} className="flex-1 text-xs" />
+                <Input placeholder="RapidAPI username…" value={rapidApiUsername} onChange={e => editRapidApiUsername(e.target.value)} className="flex-1 text-xs" />
                 <Button onClick={saveRapidApiKey} loading={rapidApiSaving} size="sm" disabled={!rapidApiKey.trim() || !rapidApiUsername.trim()}>Save</Button>
               </div>
             </div>

@@ -180,6 +180,86 @@ describe('a slow RapidAPI Replace cannot outvote a later Remove', () => {
   })
 })
 
+// The RapidAPI save's success path empties the key/username boxes. Typed input
+// is the one thing a late response must never eat (the rule the Radarr
+// config-reload fix follows): an edit made while the POST is in flight owns
+// the boxes.
+describe('a RapidAPI save landing after a re-edit cannot eat the newer typing', () => {
+  it('keeps text typed while the save was in flight', async () => {
+    const dl = deferred<object>()
+    vi.mocked(api.rapidApiApi.save).mockReturnValue(dl.promise as never)
+
+    const { default: SettingsPage } = await import('@/app/settings/page')
+    renderPage(<SettingsPage />)
+
+    const keyInput = await screen.findByPlaceholderText('RapidAPI key…')
+    await userEvent.type(keyInput, 'first-key')
+    await userEvent.type(screen.getByPlaceholderText('RapidAPI username…'), 'user')
+
+    const rapid = sectionOf('RapidAPI Key')
+    await userEvent.click(rapid.getByRole('button', { name: /^save$/i }))
+    await waitFor(() => expect(api.rapidApiApi.save).toHaveBeenCalledTimes(1))
+
+    // A correction typed while the POST is in flight.
+    await userEvent.type(keyInput, '-oops')
+    await act(async () => { dl.resolve({}) })
+
+    // Queried from the document, not via the held element: the pre-fix flip to
+    // the "configured" branch unmounts the input, and a detached node would
+    // still report its old value. What matters is that the typing is on screen.
+    expect(screen.getByDisplayValue('first-key-oops')).toBeInTheDocument()
+  })
+})
+
+// The update poll writes st.logs wholesale per tick. A slow tick resolving
+// after the tick that observed `finished` used to land its older logs on the
+// closed modal -- and with the interval gone, nothing ever healed them.
+describe('a stale update-status tick cannot truncate the finished log', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    // jsdom doesn't implement scrollIntoView, which the modal's auto-scroll
+    // effect calls on every log change.
+    Element.prototype.scrollIntoView = vi.fn()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+    Reflect.deleteProperty(Element.prototype, 'scrollIntoView')
+  })
+
+  function flush(ms: number) {
+    return act(async () => { await vi.advanceTimersByTimeAsync(ms) })
+  }
+
+  it('keeps the final logs when an earlier slow tick resolves last', async () => {
+    vi.mocked(api.versionApi.get).mockResolvedValue({ current: 'v1', latest: 'v2', updateAvailable: true } as never)
+    vi.mocked(api.versionApi.update).mockResolvedValue({} as never)
+    const slowTick = deferred<{ inProgress: boolean; finished: boolean; error: string | null; logs: string[] }>()
+    vi.mocked(api.versionApi.updateStatus)
+      .mockReturnValueOnce(slowTick.promise as never)
+      .mockResolvedValue({ inProgress: false, finished: true, error: null, logs: ['line-a', 'line-b'] } as never)
+
+    const { default: SettingsPage } = await import('@/app/settings/page')
+    renderPage(<SettingsPage />)
+    await flush(50)
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /update now/i })) })
+
+    // t+1000: tick #1 hangs. t+2000: tick #2 sees `finished` and closes out
+    // the update with the full log.
+    await flush(2000)
+    expect(screen.getByText('line-b')).toBeInTheDocument()
+
+    // Tick #1 finally resolves with the older, shorter log. The poll is over;
+    // if this write lands, nothing will ever restore line-b.
+    await act(async () => {
+      slowTick.resolve({ inProgress: true, finished: false, error: null, logs: ['line-a'] })
+    })
+
+    expect(screen.getByText('line-b')).toBeInTheDocument()
+    expect(screen.getByText(/update complete/i)).toBeInTheDocument()
+  })
+})
+
 // Switching the library source invalidates the Radarr form's feedback the same
 // way editing a field does -- including a response still in flight, whose error
 // would otherwise surface under the *Plex* branch's Save button.
