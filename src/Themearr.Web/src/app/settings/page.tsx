@@ -28,6 +28,12 @@ export default function SettingsPage() {
   const [syncingLibs,    setSyncingLibs]    = useState<LibKind | null>(null)
   const [libSyncStarted, setLibSyncStarted] = useState<LibKind | null>(null)
 
+  // Latest-action stamps for the two library pickers, same rule as the
+  // plexUrlSeq/radarrSeq stamps below: a checkbox toggle claims a new number,
+  // so a save response landing after it may still record what was persisted
+  // but may not claim the *current* selection is saved.
+  const libsSeq = useRef<Record<LibKind, number>>({ movies: 0, shows: 0 })
+
   // ── Show libraries (opt-in: nothing selected means shows stay off) ──────────
   const [plexLibraries, setPlexLibraries] = useState<Record<string, PlexLibrary[]>>({})
   const [showLibs,      setShowLibs]      = useState<Record<string, string[]>>({})
@@ -75,6 +81,11 @@ export default function SettingsPage() {
   const [rapidApiSaving,   setRapidApiSaving]   = useState(false)
   const [rapidApiRemoving, setRapidApiRemoving] = useState(false)
   const [rapidApiError,    setRapidApiError]    = useState('')
+  // Latest-action stamp for the RapidAPI panel: Save/Replace and Remove are
+  // separate buttons that can be in flight together, and without it the slower
+  // response decides the panel's state -- a slow Replace re-claiming
+  // "configured" after a successful Remove.
+  const rapidSeq = useRef(0)
   const [librarySource,    setLibrarySource]    = useState<'plex' | 'radarr'>('plex')
   const [radarrUrl,        setRadarrUrl]        = useState('')
   const [radarrApiKey,     setRadarrApiKey]     = useState('')
@@ -201,14 +212,26 @@ export default function SettingsPage() {
     return () => clearInterval(id)
   }, [updating])
 
+  // Shows a transient ✓ flag (header Saved, Regenerated, the Copy buttons) for
+  // 2s. Stamped per flag so a retrigger inside the window restarts it rather
+  // than being truncated when the earlier trigger's timeout fires -- the same
+  // rule the savePlexUrl/saveLibrarySource hide-timeouts follow. Keyed by the
+  // setter, which useState guarantees is referentially stable.
+  const flashSeq = useRef(new Map<(v: boolean) => void, number>())
+  function flash(set: (v: boolean) => void) {
+    const seq = (flashSeq.current.get(set) ?? 0) + 1
+    flashSeq.current.set(set, seq)
+    set(true)
+    setTimeout(() => { if (flashSeq.current.get(set) === seq) set(false) }, 2000)
+  }
+
   async function save() {
     if (!settings) return
     setSaving(true)
     setError('')
     try {
       await settingsApi.save(settings)
-      setSaved(true)
-      setTimeout(() => setSaved(false), 2000)
+      flash(setSaved)
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -232,6 +255,7 @@ export default function SettingsPage() {
   }
 
   function toggleMovieLib(serverId: string, key: string) {
+    libsSeq.current.movies++ // a save still in flight may no longer claim "saved"
     setMovieLibsSaved(false)
     setMovieLibs(prev => {
       const cur = prev[serverId] ?? []
@@ -245,15 +269,24 @@ export default function SettingsPage() {
   // been written unconditionally — so no absent-means-unchanged handling applies.
   async function saveMovieLibraries() {
     if (!settings) return
+    const seq = ++libsSeq.current.movies
     setSavingMovieLibs(true)
     setLibSyncStarted(s => (s === 'movies' ? null : s))
     setMovieLibsError('')
     try {
       const next = { ...settings, selectedLibraries: movieLibs }
       await settingsApi.save(next)
-      setSettings(next)
+      // Record what was persisted by merging just that field: `next` is the
+      // pre-await snapshot, and writing it back wholesale would revert any
+      // other edit (a queue toggle, a path mapping) made while the POST was in
+      // flight. The merge itself is unguarded -- like savePlexUrl's echo, the
+      // save happened server-side whether or not a toggle superseded it, and a
+      // later whole-object save must not post the pre-save selection back.
+      setSettings(s => s ? { ...s, selectedLibraries: next.selectedLibraries } : s)
+      if (seq !== libsSeq.current.movies) return // a toggle superseded this save
       setMovieLibsSaved(true)
     } catch (e) {
+      if (seq !== libsSeq.current.movies) return
       setMovieLibsError((e as Error)?.message || 'Could not save the movie libraries.')
     } finally {
       setSavingMovieLibs(false)
@@ -261,6 +294,7 @@ export default function SettingsPage() {
   }
 
   function toggleShowLib(serverId: string, key: string) {
+    libsSeq.current.shows++ // a save still in flight may no longer claim "saved"
     setShowLibsSaved(false)
     setShowLibs(prev => {
       const cur = prev[serverId] ?? []
@@ -275,15 +309,19 @@ export default function SettingsPage() {
   // unticked would look like a successful save that quietly kept the old selection.
   async function saveShowLibraries() {
     if (!settings) return
+    const seq = ++libsSeq.current.shows
     setSavingShowLibs(true)
     setLibSyncStarted(s => (s === 'shows' ? null : s))
     setShowLibsError('')
     try {
       const next = { ...settings, selectedShowLibraries: showLibs }
       await settingsApi.save(next)
-      setSettings(next)
+      // Merge, don't replace -- see saveMovieLibraries for why both halves.
+      setSettings(s => s ? { ...s, selectedShowLibraries: next.selectedShowLibraries } : s)
+      if (seq !== libsSeq.current.shows) return // a toggle superseded this save
       setShowLibsSaved(true)
     } catch (e) {
+      if (seq !== libsSeq.current.shows) return
       setShowLibsError((e as Error)?.message || 'Could not save the show libraries.')
     } finally {
       setSavingShowLibs(false)
@@ -390,14 +428,17 @@ export default function SettingsPage() {
 
   async function saveRapidApiKey() {
     if (!rapidApiKey.trim() || !rapidApiUsername.trim()) return
+    const seq = ++rapidSeq.current
     setRapidApiSaving(true)
     setRapidApiError('')
     try {
       await rapidApiApi.save(rapidApiKey.trim(), rapidApiUsername.trim())
+      if (seq !== rapidSeq.current) return // a later Remove owns the panel's state now
       setRapidApiOk(true)
       setRapidApiKey('')
       setRapidApiUsername('')
     } catch (e) {
+      if (seq !== rapidSeq.current) return
       setRapidApiError((e as Error).message)
     } finally {
       setRapidApiSaving(false)
@@ -410,14 +451,17 @@ export default function SettingsPage() {
   // saying the removal failed.
   async function removeRapidApiKey() {
     if (rapidApiRemoving) return
+    const seq = ++rapidSeq.current
     setRapidApiRemoving(true)
     setRapidApiError('')
     try {
       await rapidApiApi.remove()
+      if (seq !== rapidSeq.current) return // a later Save/Replace owns the panel's state now
       setRapidApiOk(false)
       setRapidApiKey('')
       setRapidApiUsername('')
     } catch (e) {
+      if (seq !== rapidSeq.current) return
       // The DELETE failed, so the key is still stored server-side and still
       // spending quota -- rapidApiOk must stay whatever it already was rather
       // than being set to false, or the UI would claim the key is gone.
@@ -491,8 +535,7 @@ export default function SettingsPage() {
     try {
       const k = await apiKeyApi.regenerate()
       setApiKey(k.key)
-      setApiKeyRegenerated(true)
-      setTimeout(() => setApiKeyRegenerated(false), 2000)
+      flash(setApiKeyRegenerated)
     } catch (e) {
       setApiKeyError(`Couldn't regenerate the API key: ${(e as Error).message}`)
     } finally {
@@ -516,8 +559,7 @@ export default function SettingsPage() {
     if (window.isSecureContext && navigator.clipboard) {
       try {
         await navigator.clipboard.writeText(text)
-        setCopied(true)
-        setTimeout(() => setCopied(false), 2000)
+        flash(setCopied)
         return
       } catch {
         // Fall through to the manual-selection fallback below.
@@ -536,8 +578,7 @@ export default function SettingsPage() {
       copiedViaExecCommand = false
     }
     if (copiedViaExecCommand) {
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
+      flash(setCopied)
       return
     }
     setApiKeyError('Clipboard access needs HTTPS. The text has been selected — press Ctrl/Cmd+C to copy it.')
@@ -842,7 +883,11 @@ export default function SettingsPage() {
             {LIBRARY_SOURCE_OPTIONS.map(opt => (
               <button
                 key={opt.value}
-                onClick={() => { setLibrarySource(opt.value); setRadarrTestResult(null) }}
+                // Switching source invalidates the Radarr form's stale feedback
+                // like editing a field does -- including any response still in
+                // flight, whose error would otherwise surface under the Plex
+                // branch's Save button.
+                onClick={() => { setLibrarySource(opt.value); clearRadarrFeedback() }}
                 className={`flex-1 rounded-lg border px-4 py-2.5 text-sm font-medium transition-colors ${
                   librarySource === opt.value
                     ? 'border-[#BB0000] bg-[#BB0000]/10 text-[#F9FAFB]'
