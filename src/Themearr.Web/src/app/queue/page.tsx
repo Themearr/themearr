@@ -41,6 +41,10 @@ export default function QueuePage() {
   const [downloadLogs,  setDownloadLogs]  = useState<string[]>([])
   const [autoMode,      setAutoMode]      = useState(false)
   const [savingAuto,    setSavingAuto]    = useState(false)
+  // In-flight guard for Ignore (same reasoning as savingAuto): the round trip
+  // leaves the button live otherwise, and a double click means two ignores and
+  // two advances -- the second one silently dropping the NEXT item from triage.
+  const [ignoring,      setIgnoring]      = useState(false)
 
   // Holds the movieId being downloaded so the polling closure keeps the right id
   const downloadingMovieId = useRef<string | null>(null)
@@ -53,6 +57,13 @@ export default function QueuePage() {
   // useResource (src/lib/useResource.ts) uses: each starter claims a number at
   // issue time, and only the newest issued may settle the shared download state.
   const downloadAttempt    = useRef(0)
+  // Identifies the newest search, so a slow earlier one cannot land its
+  // results, error, or spinner-clear under whichever item is on screen when it
+  // settles -- the latest-stamp technique again (useResource, downloadAttempt).
+  // Stale results are worse than a stale banner: they are clickable, and
+  // Download pairs the on-screen item's id with the stale result's videoId --
+  // the previous item's theme, downloaded onto this one.
+  const searchSeq          = useRef(0)
   // What the running download is bound to, captured at start alongside the
   // attempt stamp: the adapter and media it was started under, plus the
   // on-screen key its errors belong to. The status poll reads THIS rather than
@@ -71,9 +82,25 @@ export default function QueuePage() {
   // library is on screen *now*, not which one their download started under.
   const mediaRef           = useRef(media)
 
+  // Which media the list in `movies` belongs to. useResource keeps the old
+  // data until a refetch lands, so after switchMedia there is a beat where
+  // `current` is still the OTHER library's item while `media`/`adapter` are
+  // already the new one -- a torn pair that must not be rendered as a queue or
+  // acted on by the effects below (ids come from different tables, so a
+  // shows-adapter call with a movie's id hits a nonexistent -- or worse, a
+  // colliding -- show). Tagged in the fetcher, gated by its own latest-stamp
+  // so an abandoned fetch settling late cannot mislabel a newer list.
+  const [listFor, setListFor] = useState<'movies' | 'shows'>('movies')
+  const listFetchSeq = useRef(0)
   // The initial load. Routed through useResource so a failed request surfaces
   // as an error screen instead of "every movie already has a theme".
-  const { data: movies, error: moviesError, retry: retryMovies } = useResource(useCallback(() => adapter.list(), [adapter]))
+  const { data: movies, error: moviesError, retry: retryMovies } = useResource(useCallback(() => {
+    const mine = ++listFetchSeq.current
+    return adapter.list().then(list => {
+      if (mine === listFetchSeq.current) setListFor(media)
+      return list
+    })
+  }, [adapter, media]))
   // 'pending' only — a plexTheme show is not outstanding work, which matches
   // GetPendingShows filtering on plex_has_theme = 0. Manual triage and the
   // auto-download worker therefore agree on what is left to do.
@@ -85,12 +112,19 @@ export default function QueuePage() {
   function switchMedia(next: 'movies' | 'shows') {
     if (next === media) return
     setMedia(next)
+    // Assigned here as well as in the sync effect below: that effect is
+    // passive, so a poll tick due in the commit-to-effect gap would still read
+    // the old media and could act on the wrong list's index.
+    mediaRef.current = next
     setCurrentIdx(0)
     setResults([])
     setError('')
     setManualUrl('')
     searchedFor.current      = null
     autoTriggeredFor.current = null
+    // Invalidates any in-flight search: its results belong to the library the
+    // user just left, and the new library's search claims a fresh stamp.
+    searchSeq.current++
     retryMovies()
   }
 
@@ -151,28 +185,35 @@ export default function QueuePage() {
 
   // ── Auto-search when displayed movie changes ───────────────────────────────
   useEffect(() => {
+    // Torn beat (see listFor above): searching the other library for this id
+    // would be a request for an item that doesn't exist there. Returning
+    // without setting searchedFor keeps the real search armed for when the
+    // right list lands.
+    if (listFor !== media) return
     if (!current || searchedFor.current === current.id) return
     searchedFor.current = current.id
+    const mine = ++searchSeq.current
     setResults([])
     setError('')
     setManualUrl('')
     setSearchQuery('')
     setSearching(true)
     adapter.search(current.id)
-      .then(data => setResults(data.results))
-      .catch((e: Error) => setError(e.message))
-      .finally(() => setSearching(false))
-  }, [current, adapter])
+      .then(data => { if (mine === searchSeq.current) setResults(data.results) })
+      .catch((e: Error) => { if (mine === searchSeq.current) setError(e.message) })
+      .finally(() => { if (mine === searchSeq.current) setSearching(false) })
+  }, [current, adapter, listFor, media])
 
   function reSearch(q?: string) {
     if (!current) return
+    const mine = ++searchSeq.current
     setResults([])
     setError('')
     setSearching(true)
     adapter.search(current.id, q || undefined)
-      .then(data => setResults(data.results))
-      .catch((e: Error) => setError(e.message))
-      .finally(() => setSearching(false))
+      .then(data => { if (mine === searchSeq.current) setResults(data.results) })
+      .catch((e: Error) => { if (mine === searchSeq.current) setError(e.message) })
+      .finally(() => { if (mine === searchSeq.current) setSearching(false) })
   }
 
   // Declared before its first use — a hoisted call from above reads as a stale
@@ -185,8 +226,10 @@ export default function QueuePage() {
   // pointing at the next movie) and does nothing. The in-flight guard in the
   // poll below should stop those duplicates ever happening; this is the second
   // line of defence, because the failure mode it prevents (a movie skipped with
-  // no theme, no error and no trace) is completely silent. Callers acting on
-  // the user's behalf — Skip, Ignore — pass nothing and always advance.
+  // no theme, no error and no trace) is completely silent. Skip passes nothing
+  // and always advances -- it acts on the user's immediate click. Ignore also
+  // passes nothing, but only calls this after its own check that the ignored
+  // item is still on screen (see skipForever).
   function advanceQueue(forMovieId?: string) {
     if (forMovieId !== undefined && downloadingMovieId.current !== forMovieId) return
     setCurrentIdx((i: number) => i + 1)
@@ -220,18 +263,30 @@ export default function QueuePage() {
     if (onScreenKeyRef.current === forKey) setError(message)
   }
 
+  // The ignore round-trip has the same shape as a download request: the queue
+  // stays browsable while it's in flight, so its outcome must pass the #43
+  // placement check before acting on whatever is on screen by then.
   async function skipForever() {
-    if (!current) return
+    if (!current || ignoring) return
+    const forKey = `${media}:${current.id}`
+    setIgnoring(true)
     try {
       await adapter.ignore(current.id)
     } catch (e) {
       // The server didn't record the ignore, so advancing would hide a movie it
       // still has as pending -- it'd reappear on the next load, making the button
-      // look like it did nothing. Surface the failure and stay on this movie.
-      setError((e as Error).message)
+      // look like it did nothing. Surface the failure -- under the item it
+      // belongs to only -- and don't advance.
+      if (onScreenKeyRef.current === forKey) setError((e as Error).message)
       return
+    } finally {
+      setIgnoring(false)
     }
-    advanceQueue()
+    // Advance only past the item that was ignored: if the user browsed on while
+    // the request ran, the +1 would push them off an item that was never
+    // triaged. The ignore is recorded server-side either way; the item leaves
+    // the list on the next load.
+    if (onScreenKeyRef.current === forKey) advanceQueue()
   }
 
   // ── Auto-download in auto mode ─────────────────────────────────────────────
@@ -239,6 +294,10 @@ export default function QueuePage() {
   // for client-side search results — avoids silent failures from scoring edge cases.
   useEffect(() => {
     if (!autoMode || !current || downloading) return
+    // The switch's torn beat: `current` still belongs to the other library
+    // (see listFor above), so "auto-download the shown item" would send an
+    // old-media id through the new media's endpoints.
+    if (listFor !== media) return
     if (autoTriggeredFor.current === current.id) return
 
     const forId   = current.id
@@ -260,7 +319,7 @@ export default function QueuePage() {
         // stays visible, and Skip/Ignore plus the per-result Download button remain the
         // way out.
       })
-  }, [autoMode, current, downloading, adapter, media])
+  }, [autoMode, current, downloading, adapter, media, listFor])
 
   // ── Poll download status while a download is in flight ────────────────────
   useEffect(() => {
@@ -327,13 +386,18 @@ export default function QueuePage() {
               advanceQueue()
             }, 3000)
           }
-        } else if (mediaRef.current === forMedia) {
+        } else if (downloadAttempt.current === attempt && onScreenKeyRef.current === forKey) {
           advanceQueue(movieId)
         } else if (downloadAttempt.current === attempt) {
-          // Finished under the other library: advancing would silently skip an
-          // item from the list now on screen, so just end the tracking. The
-          // completed item stops being pending on the next list load, which
-          // switching back already triggers (switchMedia -> retryMovies).
+          // Finished, but the downloaded item is no longer the card: advancing
+          // would silently skip whatever IS -- the historical queue-race bug
+          // class. The id gate inside advanceQueue can't catch this on its own,
+          // because a switch-away-and-back re-bases currentIdx onto a refetched
+          // list that may already exclude the finished item, leaving the +1 to
+          // land on the new head. So: end the tracking here and let list
+          // reloads converge -- the completed item stops being pending on the
+          // next load, which switching back already triggers
+          // (switchMedia -> retryMovies).
           setDownloading(false)
           setDownloadLogs([])
           downloadingMovieId.current = null
@@ -365,6 +429,12 @@ export default function QueuePage() {
   }, [downloading])
 
   async function doDownload(videoId: string) {
+    // The buttons that reach the manual starters are hidden or disabled while
+    // a download runs, so this cannot fire today -- but a second concurrent
+    // start would corrupt every invariant the poll relies on (the old
+    // effect's interval would keep running against a reassigned binding), so
+    // the guard is structural, not decorative.
+    if (downloading) return
     if (!current) return
     const forId   = current.id
     const forKey  = `${media}:${forId}`
@@ -381,6 +451,7 @@ export default function QueuePage() {
   }
 
   async function doDownloadUrl() {
+    if (downloading) return // structural, as in doDownload
     if (!current || !manualUrl.trim()) return
     const forId   = current.id
     const forKey  = `${media}:${forId}`
@@ -397,6 +468,7 @@ export default function QueuePage() {
   }
 
   async function doAutoDownload() {
+    if (downloading) return // structural, as in doDownload
     if (!current) return
     const forId   = current.id
     const forKey  = `${media}:${forId}`
@@ -433,7 +505,10 @@ export default function QueuePage() {
   )
 
   // ── Loading / failed ───────────────────────────────────────────────────────
-  if (pending === null) {
+  // The listFor mismatch is the switch's torn beat (see listFor above): the
+  // only truthful render is "loading" -- showing the old library's items under
+  // the new toggle invites acting on them across media.
+  if (pending === null || listFor !== media) {
     return (
       <AppShell title="Queue">
         {mediaToggle}
@@ -500,7 +575,7 @@ export default function QueuePage() {
             )}
             Auto
           </button>
-          <Button variant="ghost" size="sm" onClick={skipForever} disabled={downloading} title={`Never show this ${adapter.labels.singular} in the queue again`}>
+          <Button variant="ghost" size="sm" onClick={skipForever} disabled={downloading || ignoring} title={`Never show this ${adapter.labels.singular} in the queue again`}>
             Ignore
           </Button>
           {/* Wrapped, not passed directly: advanceQueue's first parameter is a

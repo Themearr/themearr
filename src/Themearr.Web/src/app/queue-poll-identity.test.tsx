@@ -188,6 +188,41 @@ describe('a running download keeps polling the media it started under', () => {
     expect(screen.queryByText('2 movies left in queue')).not.toBeNull()
   })
 
+  it('a success landing after a switch-away-and-back cannot skip the new head of the queue', async () => {
+    renderPage()
+    await flush(50)
+    await startDownload()
+    await flush(1100)
+
+    // Away: the user visits Shows while A downloads...
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^Shows$/ })) })
+    await flush(50)
+    expect(screen.queryByText('1 show left in queue')).not.toBeNull()
+
+    // ...meanwhile the download completes server-side, and the movie list now
+    // reflects it: A is downloaded, gone from pending.
+    movieStatus = { inProgress: false, finished: true, error: null, logs: [] }
+    vi.mocked(api.moviesApi.list).mockResolvedValue([
+      item('b', 'Movie B', 2002),
+      item('c', 'Movie C', 2003),
+    ] as never)
+
+    // ...and back, before the next poll tick observes the finish. The refetch
+    // re-bases the queue on [B, C] with B at the head.
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^Movies$/ })) })
+    await flush(50)
+    expect(screen.queryByText('2 movies left in queue')).not.toBeNull()
+
+    // The tick lands. Its advance is for A -- already gone from this list --
+    // so a +1 here would silently drop B from triage, the queue-race bug class.
+    await flush(1100)
+
+    expect(screen.queryByText('2 movies left in queue')).not.toBeNull()
+    expect(screen.queryByText('1 movie left in queue')).toBeNull()
+    // Tracking still ended: the queue is not wedged.
+    expect(screen.getByRole('button', { name: /^skip$/i })).not.toBeDisabled()
+  })
+
   it('a download surviving a switch away and back settles normally', async () => {
     renderPage()
     await flush(50)
