@@ -260,6 +260,88 @@ describe('a stale update-status tick cannot truncate the finished log', () => {
   })
 })
 
+// Reviewer finding on the rapid stamp: a keystroke and a conflicting mutation
+// are opposite supersessions. A keystroke owns the *boxes*; it must not stop a
+// mutation's outcome from reaching the panel -- a Remove the server completed
+// has deleted the key whether or not the user was mid-keystroke, and nothing
+// re-checks the status until the next mount.
+describe('a keystroke during an in-flight Remove cannot preserve a deleted key\'s panel', () => {
+  it('the panel flips to unconfigured and the typing survives', async () => {
+    vi.mocked(api.rapidApiApi.status).mockResolvedValue({ configured: true } as never)
+    const dl = deferred<object>()
+    vi.mocked(api.rapidApiApi.remove).mockReturnValue(dl.promise as never)
+
+    const { default: SettingsPage } = await import('@/app/settings/page')
+    renderPage(<SettingsPage />)
+    await screen.findByText('API key configured')
+
+    const rapid = sectionOf('RapidAPI Key')
+    await userEvent.click(rapid.getByRole('button', { name: /^remove$/i }))
+    await waitFor(() => expect(api.rapidApiApi.remove).toHaveBeenCalledTimes(1))
+
+    // First character of a replacement key, typed while the DELETE is in flight.
+    await userEvent.type(screen.getByPlaceholderText('New RapidAPI key…'), 'x')
+    await act(async () => { dl.resolve({}) })
+
+    // The server deleted the key; the panel may not keep claiming otherwise.
+    expect(screen.queryByText('API key configured')).toBeNull()
+    // ...but the keystroke owns the boxes: the typing is still on screen.
+    expect(screen.getByDisplayValue('x')).toBeInTheDocument()
+  })
+})
+
+// Reviewer finding on loadLibrarySource's guard: whether the load succeeded is
+// a fact, not transient feedback. A Retry that succeeds must clear the failure
+// banner and re-enable Save even if the user edited while the GET was in
+// flight -- only the box/picker writes are what the guard exists for.
+describe('a Retry that succeeds clears the failure banner despite concurrent edits', () => {
+  it('the banner goes away and Save re-enables', async () => {
+    const dl = deferred<{ source: string; url: string; configured: boolean }>()
+    vi.mocked(api.radarrApi.get)
+      .mockRejectedValueOnce(new Error('nope'))     // the mount load fails
+      .mockReturnValue(dl.promise as never)         // the Retry's GET, held in flight
+
+    const { default: SettingsPage } = await import('@/app/settings/page')
+    renderPage(<SettingsPage />)
+    await screen.findByText(/couldn't load the current library source/i)
+
+    const source = sectionOf('Library Source')
+    await userEvent.click(source.getByRole('button', { name: /^retry$/i }))
+    await waitFor(() => expect(api.radarrApi.get).toHaveBeenCalledTimes(2))
+
+    // The user acts while the GET is in flight: picks Radarr and types a URL.
+    await userEvent.click(source.getByRole('button', { name: /^radarr$/i }))
+    await userEvent.type(source.getByPlaceholderText('http://localhost:7878'), 'http://radarr:7878')
+
+    await act(async () => { dl.resolve({ source: 'plex', url: '', configured: false }) })
+
+    expect(screen.queryByText(/couldn't load the current library source/i)).toBeNull()
+    expect(source.getByRole('button', { name: /^save$/i })).not.toBeDisabled()
+  })
+})
+
+// Same class, mount edition: the mount effect's radarr load was a stampless
+// inline duplicate of loadLibrarySource. A slow mount GET settling after the
+// user picked Radarr and typed a URL flipped the picker back and wiped the box.
+describe('a slow mount load cannot flip the source picker or wipe a typed URL', () => {
+  it('keeps the picked source and the typed URL when the mount GET settles late', async () => {
+    const dl = deferred<{ source: string; url: string; configured: boolean }>()
+    vi.mocked(api.radarrApi.get).mockReturnValue(dl.promise as never)
+
+    const { default: SettingsPage } = await import('@/app/settings/page')
+    renderPage(<SettingsPage />)
+    await screen.findByRole('heading', { name: 'Library Source' })
+
+    const source = sectionOf('Library Source')
+    await userEvent.click(source.getByRole('button', { name: /^radarr$/i }))
+    await userEvent.type(source.getByPlaceholderText('http://localhost:7878'), 'http://radarr:7878')
+
+    await act(async () => { dl.resolve({ source: 'plex', url: '', configured: false }) })
+
+    expect(screen.getByDisplayValue('http://radarr:7878')).toBeInTheDocument()
+  })
+})
+
 // Switching the library source invalidates the Radarr form's feedback the same
 // way editing a field does -- including a response still in flight, whose error
 // would otherwise surface under the *Plex* branch's Save button.

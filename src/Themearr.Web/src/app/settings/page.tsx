@@ -81,16 +81,19 @@ export default function SettingsPage() {
   const [rapidApiSaving,   setRapidApiSaving]   = useState(false)
   const [rapidApiRemoving, setRapidApiRemoving] = useState(false)
   const [rapidApiError,    setRapidApiError]    = useState('')
-  // Latest-action stamp for the RapidAPI panel: Save/Replace and Remove are
-  // separate buttons that can be in flight together, and without it the slower
-  // response decides the panel's state -- a slow Replace re-claiming
-  // "configured" after a successful Remove.
-  const rapidSeq = useRef(0)
-  // Typing while a Save/Replace is in flight claims the stamp too: the late
-  // response may not empty the boxes over the newer text, nor flip the panel
-  // out from under the user mid-edit.
-  const editRapidApiKey      = (v: string) => { rapidSeq.current++; setRapidApiKey(v) }
-  const editRapidApiUsername = (v: string) => { rapidSeq.current++; setRapidApiUsername(v) }
+  // Two stamps for the RapidAPI panel, because its two kinds of supersession
+  // want opposite outcomes. A conflicting *mutation* (Remove clicked while a
+  // Replace is in flight) owns the whole panel: rapidMutSeq gates rapidApiOk,
+  // so the slower response can't decide whether a key is configured. A
+  // *keystroke* owns only the boxes: rapidEditSeq gates the input clears, so a
+  // late response can't eat the typing -- but it must NOT block the mutation's
+  // outcome, because a Remove the server completed has deleted the key whether
+  // or not the user was mid-keystroke, and nothing re-checks the status until
+  // the next mount.
+  const rapidMutSeq  = useRef(0)
+  const rapidEditSeq = useRef(0)
+  const editRapidApiKey      = (v: string) => { rapidEditSeq.current++; setRapidApiKey(v) }
+  const editRapidApiUsername = (v: string) => { rapidEditSeq.current++; setRapidApiUsername(v) }
   const [librarySource,    setLibrarySource]    = useState<'plex' | 'radarr'>('plex')
   const [radarrUrl,        setRadarrUrl]        = useState('')
   const [radarrApiKey,     setRadarrApiKey]     = useState('')
@@ -175,16 +178,10 @@ export default function SettingsPage() {
     }).catch(e => {
       setRapidApiCheckError((e as Error)?.message || 'Failed to check RapidAPI status.')
     })
-    radarrApi.get().then(s => {
-      setLibrarySource(s.source)
-      setRadarrUrl(s.url)
-      setRadarrConfigured(s.configured)
-      setRadarrLoaded(true)
-      setRadarrLoadError('')
-    }).catch(e => {
-      setRadarrLoaded(false)
-      setRadarrLoadError((e as Error)?.message || 'Failed to load the current library source.')
-    })
+    // Through loadLibrarySource rather than an inline duplicate: the mount GET
+    // can be slow, and only the shared path's stamp check stops it flipping
+    // the source picker back and wiping a URL typed in the meantime.
+    loadLibrarySource()
     apiKeyApi.get().then(k => {
       setApiKey(k.key)
       setApiKeyLoaded(true)
@@ -226,7 +223,9 @@ export default function SettingsPage() {
   // 2s. Stamped per flag so a retrigger inside the window restarts it rather
   // than being truncated when the earlier trigger's timeout fires -- the same
   // rule the savePlexUrl/saveLibrarySource hide-timeouts follow. Keyed by the
-  // setter, which useState guarantees is referentially stable.
+  // setter, which useState guarantees is referentially stable -- pass the
+  // setter itself, never a wrapper: a fresh `v => setX(v)` per call would key
+  // a fresh Map entry and silently reintroduce the truncation.
   const flashSeq = useRef(new Map<(v: boolean) => void, number>())
   function flash(set: (v: boolean) => void) {
     const seq = (flashSeq.current.get(set) ?? 0) + 1
@@ -438,17 +437,21 @@ export default function SettingsPage() {
 
   async function saveRapidApiKey() {
     if (!rapidApiKey.trim() || !rapidApiUsername.trim()) return
-    const seq = ++rapidSeq.current
+    const mut  = ++rapidMutSeq.current
+    const edit = rapidEditSeq.current
     setRapidApiSaving(true)
     setRapidApiError('')
     try {
       await rapidApiApi.save(rapidApiKey.trim(), rapidApiUsername.trim())
-      if (seq !== rapidSeq.current) return // a later Remove owns the panel's state now
-      setRapidApiOk(true)
+      // The panel's state belongs to the newest *mutation* only -- a keystroke
+      // must not stop this landing: the key IS stored now.
+      if (mut === rapidMutSeq.current) setRapidApiOk(true)
+      // The boxes belong to the newest action of any kind.
+      if (mut !== rapidMutSeq.current || edit !== rapidEditSeq.current) return
       setRapidApiKey('')
       setRapidApiUsername('')
     } catch (e) {
-      if (seq !== rapidSeq.current) return
+      if (mut !== rapidMutSeq.current || edit !== rapidEditSeq.current) return
       setRapidApiError((e as Error).message)
     } finally {
       setRapidApiSaving(false)
@@ -461,17 +464,21 @@ export default function SettingsPage() {
   // saying the removal failed.
   async function removeRapidApiKey() {
     if (rapidApiRemoving) return
-    const seq = ++rapidSeq.current
+    const mut  = ++rapidMutSeq.current
+    const edit = rapidEditSeq.current
     setRapidApiRemoving(true)
     setRapidApiError('')
     try {
       await rapidApiApi.remove()
-      if (seq !== rapidSeq.current) return // a later Save/Replace owns the panel's state now
-      setRapidApiOk(false)
+      // Mirror of saveRapidApiKey: the server deleted the key, and a keystroke
+      // typed while the DELETE was in flight may not keep the panel claiming
+      // "configured" for a key that is gone.
+      if (mut === rapidMutSeq.current) setRapidApiOk(false)
+      if (mut !== rapidMutSeq.current || edit !== rapidEditSeq.current) return
       setRapidApiKey('')
       setRapidApiUsername('')
     } catch (e) {
-      if (seq !== rapidSeq.current) return
+      if (mut !== rapidMutSeq.current || edit !== rapidEditSeq.current) return
       // The DELETE failed, so the key is still stored server-side and still
       // spending quota -- rapidApiOk must stay whatever it already was rather
       // than being set to false, or the UI would claim the key is gone.
@@ -491,12 +498,16 @@ export default function SettingsPage() {
     const seq = radarrSeq.current
     try {
       const s = await radarrApi.get()
+      // Facts about the load land regardless of edits made meanwhile: the GET
+      // succeeded, so the failure banner may not keep claiming otherwise and
+      // Save may not stay disabled behind radarrLoaded until a hands-off
+      // retry. Only the box/picker writes below are what the guard exists for.
+      setRadarrLoaded(true)
+      setRadarrLoadError('')
       if (seq !== radarrSeq.current) return
       setLibrarySource(s.source)
       setRadarrUrl(s.url)
       setRadarrConfigured(s.configured)
-      setRadarrLoaded(true)
-      setRadarrLoadError('')
     } catch (e) {
       if (seq !== radarrSeq.current) return
       setRadarrLoaded(false)
