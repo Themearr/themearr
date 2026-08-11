@@ -129,6 +129,46 @@ public static class ThemeFiles
             ? Directory.EnumerateFiles(folder, "theme.*").FirstOrDefault(f => !IsNonTheme(f))
             : null;
 
+    /// <summary>
+    /// The extension the theme's leading bytes say it should have (issue #48). Decided
+    /// from the bytes we actually stored, never from a CDN Content-Type header: the
+    /// confirmed production failure is precisely a promise (an "mp3" converter API)
+    /// contradicted by the delivered bytes (an MP4/AAC stream inside theme.mp3), so the
+    /// header is the one witness known to lie. The result is a closed two-value set —
+    /// a filename must never be derived from remote data. An MP4-family file opens with
+    /// a box: 4-byte size, then "ftyp"; everything else — including genuine MP3 (an ID3
+    /// tag, or a 0xFF-plus-3-bits frame sync) and bytes we cannot identify — keeps the
+    /// historical .mp3 name. Unknown-keeps-mp3 is deliberate: possibly wrong, but
+    /// exactly as wrong as every download was before sniffing existed, so it can never
+    /// regress a working install.
+    /// </summary>
+    public static string SniffedThemeExtension(ReadOnlySpan<byte> header)
+        => header.Length >= 8 && header[4..8].SequenceEqual("ftyp"u8) ? ".m4a" : ".mp3";
+
+    /// <summary>
+    /// Renames a just-downloaded theme so its extension states the container actually
+    /// received (issue #48), returning the (possibly new) path. The bytes are stored as
+    /// received — there is no transcode step — so this is the only point where name and
+    /// content can be made to agree. A same-directory <c>File.Move</c> is atomic and
+    /// overwrites, so a stale sibling from a previous run with the target name is
+    /// replaced rather than collided with.
+    /// </summary>
+    public static string NormalizeThemeExtension(string path)
+    {
+        Span<byte> header = stackalloc byte[8];
+        int read;
+        using (var fs = File.OpenRead(path))
+            read = fs.ReadAtLeast(header, header.Length, throwOnEndOfStream: false);
+
+        var ext = SniffedThemeExtension(header[..read]);
+        if (string.Equals(Path.GetExtension(path), ext, StringComparison.OrdinalIgnoreCase))
+            return path;
+
+        var renamed = Path.ChangeExtension(path, ext);
+        File.Move(path, renamed, overwrite: true);
+        return renamed;
+    }
+
     /// <summary>Content type for a theme file, by extension. Falls back to audio/mpeg.</summary>
     public static string ContentTypeFor(string path) => Path.GetExtension(path).ToLowerInvariant() switch
     {

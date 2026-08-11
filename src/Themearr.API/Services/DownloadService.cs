@@ -201,8 +201,21 @@ public class DownloadService(
                     await dlResp.Content.ReadAsStreamAsync(token), outputPath, StreamLimits.MaxThemeBytes, token);
             }
 
+            // The bytes are stored as received — no transcode — so the extension must
+            // state what actually arrived: the "mp3" provider demonstrably delivers
+            // AAC/MP4 in production (format_name=mov,mp4,m4a probed inside a theme.mp3),
+            // and tools that trust the extension then mis-serve it (issue #48). Renaming
+            // after the atomic write keeps the write path untouched; best-effort because
+            // a rename failure must not turn an already-landed theme into a failed job.
+            try { outputPath = ThemeFiles.NormalizeThemeExtension(outputPath); }
+            catch (Exception ex)
+            {
+                log.LogWarning(ex, "Could not container-correct the theme name for {JobKey}", LogSanitizer.Clean(key));
+                AddLog(key, "[themearr] Could not correct the theme's file extension — keeping theme.mp3.");
+            }
+
             // Remove stale alternate-extension theme files (e.g. an old theme.m4a) now
-            // that the new theme.mp3 is safely in place — never before the download.
+            // that the new theme file is safely in place — never before the download.
             foreach (var f in Directory.EnumerateFiles(folder, "theme.*"))
                 if (!string.Equals(f, outputPath, StringComparison.Ordinal)
                     && Path.GetExtension(f) is not (".part" or ".ytdl"))
