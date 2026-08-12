@@ -28,6 +28,12 @@ export default function SettingsPage() {
   const [syncingLibs,    setSyncingLibs]    = useState<LibKind | null>(null)
   const [libSyncStarted, setLibSyncStarted] = useState<LibKind | null>(null)
 
+  // Latest-action stamps for the two library pickers, same rule as the
+  // plexUrlSeq/radarrSeq stamps below: a checkbox toggle claims a new number,
+  // so a save response landing after it may still record what was persisted
+  // but may not claim the *current* selection is saved.
+  const libsSeq = useRef<Record<LibKind, number>>({ movies: 0, shows: 0 })
+
   // ── Show libraries (opt-in: nothing selected means shows stay off) ──────────
   const [plexLibraries, setPlexLibraries] = useState<Record<string, PlexLibrary[]>>({})
   const [showLibs,      setShowLibs]      = useState<Record<string, string[]>>({})
@@ -55,6 +61,16 @@ export default function SettingsPage() {
   const [plexSaving,  setPlexSaving]  = useState<Record<string, boolean>>({})
   const [plexSaved,   setPlexSaved]   = useState<Record<string, boolean>>({})
   const [plexError,   setPlexError]   = useState<Record<string, string>>({})
+  // Latest-action stamp per server for the test/save round-trips -- the same
+  // idiom as the movies page's loadSeq and the queue's downloadAttempt. Every
+  // edit, test or save of a server's URL claims a new number, and a response
+  // (or the save's 2s hide-timeout) only writes if it is still the newest
+  // action when it settles. Without this a slow response resurrects a verdict
+  // for a URL no longer in the box, and an earlier save's timeout truncates a
+  // later save's "Saved ✓" window.
+  const plexUrlSeq = useRef<Record<string, number>>({})
+  const claimPlexSeq = (serverId: string) =>
+    (plexUrlSeq.current[serverId] = (plexUrlSeq.current[serverId] ?? 0) + 1)
   const [rapidApiOk,       setRapidApiOk]       = useState<boolean | null>(null)
   // Set when checking whether a RapidAPI key is stored fails. Supplementary
   // like versionLoadError: it leaves rapidApiOk at null (unknown) rather
@@ -65,6 +81,19 @@ export default function SettingsPage() {
   const [rapidApiSaving,   setRapidApiSaving]   = useState(false)
   const [rapidApiRemoving, setRapidApiRemoving] = useState(false)
   const [rapidApiError,    setRapidApiError]    = useState('')
+  // Two stamps for the RapidAPI panel, because its two kinds of supersession
+  // want opposite outcomes. A conflicting *mutation* (Remove clicked while a
+  // Replace is in flight) owns the whole panel: rapidMutSeq gates rapidApiOk,
+  // so the slower response can't decide whether a key is configured. A
+  // *keystroke* owns only the boxes: rapidEditSeq gates the input clears, so a
+  // late response can't eat the typing -- but it must NOT block the mutation's
+  // outcome, because a Remove the server completed has deleted the key whether
+  // or not the user was mid-keystroke, and nothing re-checks the status until
+  // the next mount.
+  const rapidMutSeq  = useRef(0)
+  const rapidEditSeq = useRef(0)
+  const editRapidApiKey      = (v: string) => { rapidEditSeq.current++; setRapidApiKey(v) }
+  const editRapidApiUsername = (v: string) => { rapidEditSeq.current++; setRapidApiUsername(v) }
   const [librarySource,    setLibrarySource]    = useState<'plex' | 'radarr'>('plex')
   const [radarrUrl,        setRadarrUrl]        = useState('')
   const [radarrApiKey,     setRadarrApiKey]     = useState('')
@@ -76,6 +105,11 @@ export default function SettingsPage() {
   const [radarrError,      setRadarrError]      = useState('')
   const [radarrLoaded,     setRadarrLoaded]     = useState(false)
   const [radarrLoadError,  setRadarrLoadError]  = useState('')
+  // Latest-action stamp for the Radarr form's round-trips -- the
+  // single-instance analogue of plexUrlSeq above. Edits, tests and saves each
+  // claim a new number; a response, the save's config re-read, or the 2s
+  // hide-timeout only writes if it is still the newest action when it settles.
+  const radarrSeq = useRef(0)
   const [apiKey,             setApiKey]             = useState('')
   const [apiKeyLoaded,       setApiKeyLoaded]       = useState(false)
   const [apiKeyLoadError,    setApiKeyLoadError]    = useState('')
@@ -144,16 +178,10 @@ export default function SettingsPage() {
     }).catch(e => {
       setRapidApiCheckError((e as Error)?.message || 'Failed to check RapidAPI status.')
     })
-    radarrApi.get().then(s => {
-      setLibrarySource(s.source)
-      setRadarrUrl(s.url)
-      setRadarrConfigured(s.configured)
-      setRadarrLoaded(true)
-      setRadarrLoadError('')
-    }).catch(e => {
-      setRadarrLoaded(false)
-      setRadarrLoadError((e as Error)?.message || 'Failed to load the current library source.')
-    })
+    // Through loadLibrarySource rather than an inline duplicate: the mount GET
+    // can be slow, and only the shared path's stamp check stops it flipping
+    // the source picker back and wiping a URL typed in the meantime.
+    loadLibrarySource()
     apiKeyApi.get().then(k => {
       setApiKey(k.key)
       setApiKeyLoaded(true)
@@ -172,9 +200,14 @@ export default function SettingsPage() {
   // Poll update status while in progress
   useEffect(() => {
     if (!updating) return
+    // A tick can outlive the poll: one that hung while a later tick observed
+    // `finished` resolves after the interval is gone, and its older logs would
+    // overwrite the final ones with nothing left to heal them.
+    let stale = false
     const id = setInterval(async () => {
       try {
         const st = await versionApi.updateStatus()
+        if (stale) return
         if (st.logs.length) setUpdateLogs(st.logs)
         if (st.finished) {
           setUpdating(false)
@@ -183,8 +216,23 @@ export default function SettingsPage() {
         }
       } catch { /* ignore */ }
     }, 1000)
-    return () => clearInterval(id)
+    return () => { stale = true; clearInterval(id) }
   }, [updating])
+
+  // Shows a transient ✓ flag (header Saved, Regenerated, the Copy buttons) for
+  // 2s. Stamped per flag so a retrigger inside the window restarts it rather
+  // than being truncated when the earlier trigger's timeout fires -- the same
+  // rule the savePlexUrl/saveLibrarySource hide-timeouts follow. Keyed by the
+  // setter, which useState guarantees is referentially stable -- pass the
+  // setter itself, never a wrapper: a fresh `v => setX(v)` per call would key
+  // a fresh Map entry and silently reintroduce the truncation.
+  const flashSeq = useRef(new Map<(v: boolean) => void, number>())
+  function flash(set: (v: boolean) => void) {
+    const seq = (flashSeq.current.get(set) ?? 0) + 1
+    flashSeq.current.set(set, seq)
+    set(true)
+    setTimeout(() => { if (flashSeq.current.get(set) === seq) set(false) }, 2000)
+  }
 
   async function save() {
     if (!settings) return
@@ -192,8 +240,7 @@ export default function SettingsPage() {
     setError('')
     try {
       await settingsApi.save(settings)
-      setSaved(true)
-      setTimeout(() => setSaved(false), 2000)
+      flash(setSaved)
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -217,6 +264,7 @@ export default function SettingsPage() {
   }
 
   function toggleMovieLib(serverId: string, key: string) {
+    libsSeq.current.movies++ // a save still in flight may no longer claim "saved"
     setMovieLibsSaved(false)
     setMovieLibs(prev => {
       const cur = prev[serverId] ?? []
@@ -230,15 +278,24 @@ export default function SettingsPage() {
   // been written unconditionally — so no absent-means-unchanged handling applies.
   async function saveMovieLibraries() {
     if (!settings) return
+    const seq = ++libsSeq.current.movies
     setSavingMovieLibs(true)
     setLibSyncStarted(s => (s === 'movies' ? null : s))
     setMovieLibsError('')
     try {
       const next = { ...settings, selectedLibraries: movieLibs }
       await settingsApi.save(next)
-      setSettings(next)
+      // Record what was persisted by merging just that field: `next` is the
+      // pre-await snapshot, and writing it back wholesale would revert any
+      // other edit (a queue toggle, a path mapping) made while the POST was in
+      // flight. The merge itself is unguarded -- like savePlexUrl's echo, the
+      // save happened server-side whether or not a toggle superseded it, and a
+      // later whole-object save must not post the pre-save selection back.
+      setSettings(s => s ? { ...s, selectedLibraries: next.selectedLibraries } : s)
+      if (seq !== libsSeq.current.movies) return // a toggle superseded this save
       setMovieLibsSaved(true)
     } catch (e) {
+      if (seq !== libsSeq.current.movies) return
       setMovieLibsError((e as Error)?.message || 'Could not save the movie libraries.')
     } finally {
       setSavingMovieLibs(false)
@@ -246,6 +303,7 @@ export default function SettingsPage() {
   }
 
   function toggleShowLib(serverId: string, key: string) {
+    libsSeq.current.shows++ // a save still in flight may no longer claim "saved"
     setShowLibsSaved(false)
     setShowLibs(prev => {
       const cur = prev[serverId] ?? []
@@ -260,15 +318,19 @@ export default function SettingsPage() {
   // unticked would look like a successful save that quietly kept the old selection.
   async function saveShowLibraries() {
     if (!settings) return
+    const seq = ++libsSeq.current.shows
     setSavingShowLibs(true)
     setLibSyncStarted(s => (s === 'shows' ? null : s))
     setShowLibsError('')
     try {
       const next = { ...settings, selectedShowLibraries: showLibs }
       await settingsApi.save(next)
-      setSettings(next)
+      // Merge, don't replace -- see saveMovieLibraries for why both halves.
+      setSettings(s => s ? { ...s, selectedShowLibraries: next.selectedShowLibraries } : s)
+      if (seq !== libsSeq.current.shows) return // a toggle superseded this save
       setShowLibsSaved(true)
     } catch (e) {
+      if (seq !== libsSeq.current.shows) return
       setShowLibsError((e as Error)?.message || 'Could not save the show libraries.')
     } finally {
       setSavingShowLibs(false)
@@ -276,39 +338,71 @@ export default function SettingsPage() {
   }
 
   async function testPlexUrl(serverId: string) {
+    const seq = claimPlexSeq(serverId)
     setPlexTesting(p => ({ ...p, [serverId]: true }))
     setPlexTest(p => ({ ...p, [serverId]: null }))
     setPlexError(p => ({ ...p, [serverId]: '' }))
+    // The Saved flag too: claiming the stamp supersedes a pending save's
+    // hide-timeout, so a flag left up here would never be cleared by anything.
+    setPlexSaved(p => ({ ...p, [serverId]: false }))
     try {
       const res = await plexApi.test(serverId, plexUrls[serverId] ?? '')
+      if (seq !== plexUrlSeq.current[serverId]) return // superseded by a later edit/test/save
       setPlexTest(p => ({ ...p, [serverId]: res }))
     } catch (e) {
+      if (seq !== plexUrlSeq.current[serverId]) return
       setPlexError(p => ({ ...p, [serverId]: (e as Error).message })) // surface, never swallow
     } finally {
+      // Deliberately unguarded: the request being over is true whether or not
+      // its verdict still applies, and skipping it would wedge the button.
       setPlexTesting(p => ({ ...p, [serverId]: false }))
     }
   }
 
   async function savePlexUrl(serverId: string) {
+    const seq = claimPlexSeq(serverId)
     setPlexSaving(p => ({ ...p, [serverId]: true }))
     setPlexSaved(p => ({ ...p, [serverId]: false }))
     setPlexError(p => ({ ...p, [serverId]: '' }))
     try {
       const res = await plexApi.saveUrl(serverId, plexUrls[serverId] ?? '')
-      // Sync to the response rather than trusting what was typed: the backend
+      // The save persisted server-side whether or not a later action has
+      // superseded it, so its echo must reach `settings` either way: a
+      // whole-object save (the header's "Save changes", the library sections)
+      // posts selectedServers wholesale (SettingsController's Save), and a
+      // stale entry there would silently revert the URL the server already
+      // applied. Merge only the saved server's entry -- res.selectedServers is
+      // the full list, and replacing wholesale would let two servers' save
+      // echoes settling in reverse order revert each other's URL.
+      setSettings(s => s ? {
+        ...s,
+        selectedServers: s.selectedServers.map(x =>
+          x.id === serverId ? (res.selectedServers.find(r => r.id === serverId) ?? x) : x),
+      } : s)
+      // Superseded by a later edit/test/save: no transient feedback may land --
+      // setPlexUrls in particular would clobber the newer text in the box with
+      // the older URL's normalised form.
+      if (seq !== plexUrlSeq.current[serverId]) return
+      // Sync the box to the response rather than to what was typed: the backend
       // normalises the URL (adds a scheme, trims a trailing slash), and
-      // saveUrl() -- unlike radarrApi.save() -- already echoes the
-      // normalised value back, so there's no need for a separate re-fetch.
-      // Only the saved server's own entry is touched -- res.selectedServers
-      // is the full list, and overwriting every entry would silently discard
-      // any unsaved edit the user has typed into another server's field.
-      setSettings(s => s ? { ...s, selectedServers: res.selectedServers } : s)
+      // saveUrl() -- unlike radarrApi.save() -- already echoes the normalised
+      // value back, so there's no need for a separate re-fetch. Only this
+      // server's entry is touched: overwriting every entry would silently
+      // discard an unsaved edit typed into another server's field.
       setPlexUrls(p => ({ ...p, [serverId]: res.selectedServers.find(srv => srv.id === serverId)?.url ?? p[serverId] }))
       setPlexSaved(p => ({ ...p, [serverId]: true }))
-      setTimeout(() => setPlexSaved(p => ({ ...p, [serverId]: false })), 2000)
+      setTimeout(() => {
+        // Only the newest action's timeout may hide the flag: an earlier
+        // save's 2s window ending must not truncate a later save's "Saved ✓"
+        // (and after an edit there is nothing left for it to hide).
+        if (seq !== plexUrlSeq.current[serverId]) return
+        setPlexSaved(p => ({ ...p, [serverId]: false }))
+      }, 2000)
     } catch (e) {
+      if (seq !== plexUrlSeq.current[serverId]) return
       setPlexError(p => ({ ...p, [serverId]: (e as Error).message }))
     } finally {
+      // Deliberately unguarded, as in testPlexUrl: the request is over either way.
       setPlexSaving(p => ({ ...p, [serverId]: false }))
     }
   }
@@ -343,14 +437,21 @@ export default function SettingsPage() {
 
   async function saveRapidApiKey() {
     if (!rapidApiKey.trim() || !rapidApiUsername.trim()) return
+    const mut  = ++rapidMutSeq.current
+    const edit = rapidEditSeq.current
     setRapidApiSaving(true)
     setRapidApiError('')
     try {
       await rapidApiApi.save(rapidApiKey.trim(), rapidApiUsername.trim())
-      setRapidApiOk(true)
+      // The panel's state belongs to the newest *mutation* only -- a keystroke
+      // must not stop this landing: the key IS stored now.
+      if (mut === rapidMutSeq.current) setRapidApiOk(true)
+      // The boxes belong to the newest action of any kind.
+      if (mut !== rapidMutSeq.current || edit !== rapidEditSeq.current) return
       setRapidApiKey('')
       setRapidApiUsername('')
     } catch (e) {
+      if (mut !== rapidMutSeq.current || edit !== rapidEditSeq.current) return
       setRapidApiError((e as Error).message)
     } finally {
       setRapidApiSaving(false)
@@ -363,14 +464,21 @@ export default function SettingsPage() {
   // saying the removal failed.
   async function removeRapidApiKey() {
     if (rapidApiRemoving) return
+    const mut  = ++rapidMutSeq.current
+    const edit = rapidEditSeq.current
     setRapidApiRemoving(true)
     setRapidApiError('')
     try {
       await rapidApiApi.remove()
-      setRapidApiOk(false)
+      // Mirror of saveRapidApiKey: the server deleted the key, and a keystroke
+      // typed while the DELETE was in flight may not keep the panel claiming
+      // "configured" for a key that is gone.
+      if (mut === rapidMutSeq.current) setRapidApiOk(false)
+      if (mut !== rapidMutSeq.current || edit !== rapidEditSeq.current) return
       setRapidApiKey('')
       setRapidApiUsername('')
     } catch (e) {
+      if (mut !== rapidMutSeq.current || edit !== rapidEditSeq.current) return
       // The DELETE failed, so the key is still stored server-side and still
       // spending quota -- rapidApiOk must stay whatever it already was rather
       // than being set to false, or the UI would claim the key is gone.
@@ -384,14 +492,24 @@ export default function SettingsPage() {
   // load, and re-run after a successful save so the URL reflects any
   // server-side normalisation (e.g. a trimmed trailing slash).
   async function loadLibrarySource() {
+    // Observes the stamp rather than claiming one: a load invalidates nothing,
+    // but its writes -- setRadarrUrl in particular -- must not clobber text the
+    // user typed while the GET was in flight.
+    const seq = radarrSeq.current
     try {
       const s = await radarrApi.get()
+      // Facts about the load land regardless of edits made meanwhile: the GET
+      // succeeded, so the failure banner may not keep claiming otherwise and
+      // Save may not stay disabled behind radarrLoaded until a hands-off
+      // retry. Only the box/picker writes below are what the guard exists for.
+      setRadarrLoaded(true)
+      setRadarrLoadError('')
+      if (seq !== radarrSeq.current) return
       setLibrarySource(s.source)
       setRadarrUrl(s.url)
       setRadarrConfigured(s.configured)
-      setRadarrLoaded(true)
-      setRadarrLoadError('')
     } catch (e) {
+      if (seq !== radarrSeq.current) return
       setRadarrLoaded(false)
       setRadarrLoadError((e as Error)?.message || 'Failed to load the current library source.')
     }
@@ -438,8 +556,7 @@ export default function SettingsPage() {
     try {
       const k = await apiKeyApi.regenerate()
       setApiKey(k.key)
-      setApiKeyRegenerated(true)
-      setTimeout(() => setApiKeyRegenerated(false), 2000)
+      flash(setApiKeyRegenerated)
     } catch (e) {
       setApiKeyError(`Couldn't regenerate the API key: ${(e as Error).message}`)
     } finally {
@@ -463,8 +580,7 @@ export default function SettingsPage() {
     if (window.isSecureContext && navigator.clipboard) {
       try {
         await navigator.clipboard.writeText(text)
-        setCopied(true)
-        setTimeout(() => setCopied(false), 2000)
+        flash(setCopied)
         return
       } catch {
         // Fall through to the manual-selection fallback below.
@@ -483,8 +599,7 @@ export default function SettingsPage() {
       copiedViaExecCommand = false
     }
     if (copiedViaExecCommand) {
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
+      flash(setCopied)
       return
     }
     setApiKeyError('Clipboard access needs HTTPS. The text has been selected — press Ctrl/Cmd+C to copy it.')
@@ -498,34 +613,67 @@ export default function SettingsPage() {
     await copyToClipboard(webhookUrl, webhookFieldRef, setWebhookCopied)
   }
 
+  // An edit invalidates every stale Radarr verdict, not just the test result --
+  // a lingering error or "Saved ✓" would describe a URL/key no longer in the
+  // boxes. Same rule as the per-server Plex onChange (#26), minus the keying:
+  // this form is single-instance. Claiming a new stamp extends that to
+  // responses still in flight.
+  function clearRadarrFeedback() {
+    radarrSeq.current++
+    setRadarrTestResult(null)
+    setRadarrError('')
+    setRadarrSaved(false)
+  }
+
   async function testRadarrConnection() {
+    const seq = ++radarrSeq.current
     setRadarrTesting(true)
     setRadarrTestResult(null)
     setRadarrError('')
+    // The Saved flag too: claiming the stamp supersedes a pending save's
+    // hide-timeout, so a flag left up here would never be cleared by anything.
+    setRadarrSaved(false)
     try {
       const res = await radarrApi.test(radarrUrl.trim(), radarrApiKey.trim())
+      if (seq !== radarrSeq.current) return // superseded by a later edit/test/save
       setRadarrTestResult(res)
     } catch (e) {
+      if (seq !== radarrSeq.current) return
       setRadarrError((e as Error).message)
     } finally {
+      // Deliberately unguarded, as on the Plex side: the request is over either way.
       setRadarrTesting(false)
     }
   }
 
   async function saveLibrarySource() {
+    const seq = ++radarrSeq.current
     setRadarrSaving(true)
     setRadarrError('')
     try {
       await radarrApi.save(librarySource, radarrUrl.trim(), radarrApiKey.trim())
+      // Superseded by an edit while the POST was in flight: the save persisted
+      // server-side, but clearing the key box or re-reading the config would
+      // eat the newer typing. (Unlike savePlexUrl there is no echo that must
+      // land regardless -- the Radarr config is not part of the `settings`
+      // object, so no whole-object save can revert what was just persisted.)
+      if (seq !== radarrSeq.current) return
       setRadarrApiKey('')
       setRadarrTestResult(null)
       // Re-read from the server rather than trusting the save response, since
       // the backend normalises the URL (e.g. trims a trailing slash) and that
       // isn't reflected in what save() returns.
       await loadLibrarySource()
+      if (seq !== radarrSeq.current) return
       setRadarrSaved(true)
-      setTimeout(() => setRadarrSaved(false), 2000)
+      setTimeout(() => {
+        // Only the newest action's timeout may hide the flag -- same rule as
+        // savePlexUrl's.
+        if (seq !== radarrSeq.current) return
+        setRadarrSaved(false)
+      }, 2000)
     } catch (e) {
+      if (seq !== radarrSeq.current) return
       setRadarrError((e as Error).message)
     } finally {
       setRadarrSaving(false)
@@ -619,6 +767,10 @@ export default function SettingsPage() {
                     // An edit invalidates every stale verdict for this server,
                     // not just the test result -- a lingering error or
                     // "Saved ✓" would describe a URL no longer in the box.
+                    // Claiming a new stamp extends that to responses still in
+                    // flight: a test/save that started before this keystroke
+                    // must not write its verdict after it.
+                    claimPlexSeq(srv.id)
                     setPlexTest(p => ({ ...p, [srv.id]: null }))
                     setPlexError(p => ({ ...p, [srv.id]: '' }))
                     setPlexSaved(p => ({ ...p, [srv.id]: false }))
@@ -752,7 +904,11 @@ export default function SettingsPage() {
             {LIBRARY_SOURCE_OPTIONS.map(opt => (
               <button
                 key={opt.value}
-                onClick={() => { setLibrarySource(opt.value); setRadarrTestResult(null) }}
+                // Switching source invalidates the Radarr form's stale feedback
+                // like editing a field does -- including any response still in
+                // flight, whose error would otherwise surface under the Plex
+                // branch's Save button.
+                onClick={() => { setLibrarySource(opt.value); clearRadarrFeedback() }}
                 className={`flex-1 rounded-lg border px-4 py-2.5 text-sm font-medium transition-colors ${
                   librarySource === opt.value
                     ? 'border-[#BB0000] bg-[#BB0000]/10 text-[#F9FAFB]'
@@ -770,14 +926,14 @@ export default function SettingsPage() {
                 label="Radarr URL"
                 placeholder="http://localhost:7878"
                 value={radarrUrl}
-                onChange={e => { setRadarrUrl(e.target.value); setRadarrTestResult(null) }}
+                onChange={e => { setRadarrUrl(e.target.value); clearRadarrFeedback() }}
               />
               <Input
                 label="API key"
                 type="password"
                 placeholder={radarrConfigured ? 'Leave blank to keep the current key' : 'Radarr API key…'}
                 value={radarrApiKey}
-                onChange={e => { setRadarrApiKey(e.target.value); setRadarrTestResult(null) }}
+                onChange={e => { setRadarrApiKey(e.target.value); clearRadarrFeedback() }}
                 className="font-mono text-xs"
               />
               {radarrTestResult && (
@@ -959,18 +1115,18 @@ export default function SettingsPage() {
                 <Button variant="ghost" size="sm" onClick={removeRapidApiKey} loading={rapidApiRemoving}>Remove</Button>
               </div>
               <div className="space-y-2">
-                <Input placeholder="New RapidAPI key…" value={rapidApiKey} onChange={e => setRapidApiKey(e.target.value)} className="font-mono text-xs" />
+                <Input placeholder="New RapidAPI key…" value={rapidApiKey} onChange={e => editRapidApiKey(e.target.value)} className="font-mono text-xs" />
                 <div className="flex gap-2">
-                  <Input placeholder="RapidAPI username…" value={rapidApiUsername} onChange={e => setRapidApiUsername(e.target.value)} className="flex-1 text-xs" />
+                  <Input placeholder="RapidAPI username…" value={rapidApiUsername} onChange={e => editRapidApiUsername(e.target.value)} className="flex-1 text-xs" />
                   <Button onClick={saveRapidApiKey} loading={rapidApiSaving} size="sm" disabled={!rapidApiKey.trim() || !rapidApiUsername.trim()}>Replace</Button>
                 </div>
               </div>
             </div>
           ) : (
             <div className="space-y-2">
-              <Input placeholder="RapidAPI key…" value={rapidApiKey} onChange={e => setRapidApiKey(e.target.value)} className="font-mono text-xs" />
+              <Input placeholder="RapidAPI key…" value={rapidApiKey} onChange={e => editRapidApiKey(e.target.value)} className="font-mono text-xs" />
               <div className="flex gap-2">
-                <Input placeholder="RapidAPI username…" value={rapidApiUsername} onChange={e => setRapidApiUsername(e.target.value)} className="flex-1 text-xs" />
+                <Input placeholder="RapidAPI username…" value={rapidApiUsername} onChange={e => editRapidApiUsername(e.target.value)} className="flex-1 text-xs" />
                 <Button onClick={saveRapidApiKey} loading={rapidApiSaving} size="sm" disabled={!rapidApiKey.trim() || !rapidApiUsername.trim()}>Save</Button>
               </div>
             </div>

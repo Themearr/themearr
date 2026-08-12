@@ -19,7 +19,10 @@ namespace Themearr.API.Controllers;
 [Route("api/shows")]
 public class ShowsController(
     Database db, YoutubeService youtube, DownloadService download, PosterUrlSigner posterSigner,
-    ILogger<ShowsController> log) : ControllerBase
+    ILogger<ShowsController> log,
+    // Optional so the existing test constructions keep compiling, and null-safe because
+    // the delete-side refresh is best-effort anyway — same pattern as DownloadService.
+    PlexService? plex = null) : ControllerBase
 {
     [HttpGet]
     public IActionResult ListShows()
@@ -149,7 +152,19 @@ public class ShowsController(
 
         // Reset the stored status so the column stays honest and the auto-download worker's
         // stored-status pre-filter re-adopts this show — same contract as the movie endpoint.
-        if (deleted) db.SetShowStatus(showId, "pending");
+        if (deleted)
+        {
+            db.SetShowStatus(showId, "pending");
+
+            // Plex keeps playing its cached theme until the item is refreshed — the same
+            // staleness issue #45 fixed for downloads, in the delete direction. Fire and
+            // forget: this action's signature is pinned synchronous, and a DELETE must
+            // not wait out PlexService.RefreshTimeout on a wedged server. The helper
+            // never faults, so discarding the task can't drop an exception.
+            _ = plex?.TryRefreshItemMetadataAsync(
+                show.GetValueOrDefault("source")?.ToString(),
+                show.GetValueOrDefault("sourceRef")?.ToString(), log, showId);
+        }
 
         return Ok(new { deleted });
     }
@@ -168,11 +183,15 @@ public class ShowsController(
 
         // ETag + Last-Modified so repeated visits don't re-download the same theme file.
         // Framework honours If-None-Match / If-Modified-Since and returns 304 automatically.
-        var info = new FileInfo(themeFile);
-        var etag = new EntityTagHeaderValue($"\"{info.Length:x}-{info.LastWriteTimeUtc.Ticks:x}\"");
+        // ThemeStat, not a bare FileInfo: the theme can vanish between FindThemeFile
+        // above and the stat — a re-download whose container changed replaces across
+        // names (issue #48) — and one unlucky request must degrade to 404, never 500.
+        if (ThemeFiles.ThemeStat(themeFile) is not { } stat)
+            return NotFound(new { detail = "No theme file" });
+        var etag = new EntityTagHeaderValue($"\"{stat.Length:x}-{stat.LastWriteTimeUtc.Ticks:x}\"");
         Response.Headers.CacheControl = "private, max-age=300";
         return PhysicalFile(themeFile, ThemeFiles.ContentTypeFor(themeFile),
-            info.LastWriteTimeUtc, etag, enableRangeProcessing: true);
+            stat.LastWriteTimeUtc, etag, enableRangeProcessing: true);
     }
 }
 

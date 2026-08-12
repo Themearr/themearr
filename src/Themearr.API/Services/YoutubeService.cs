@@ -9,7 +9,7 @@ public class YoutubeService
     public async Task<List<Dictionary<string, object?>>> SearchAsync(
         string query, int maxResults = 8, string? title = null, int? year = null)
     {
-        var raw = new List<(Dictionary<string, object?> result, int score, string videoTitle)>();
+        var raw = new List<(Dictionary<string, object?> result, int score, string videoTitle, TimeSpan? duration)>();
 
         await foreach (var video in _yt.Search.GetVideosAsync(query))
         {
@@ -33,14 +33,15 @@ public class YoutubeService
             };
 
             var score = ThemeMatch.Score(video.Title, video.Author.ChannelTitle, video.Duration, title, year);
-            raw.Add((result, score, video.Title));
+            raw.Add((result, score, video.Title, video.Duration));
 
             if (raw.Count >= maxResults) break;
         }
 
-        // The title rides along so the floor can check work identity (issue #42). This
-        // forward is the one hop no offline test can pin — SearchAsync is the network
-        // half — the same epistemic status its call of RankAndMark has had since #39.
+        // The title rides along so the floor can check work identity (issue #42), and the
+        // duration so it can enforce the hard ceiling (issue #47). These forwards are the
+        // one hop no offline test can pin — SearchAsync is the network half — the same
+        // epistemic status its call of RankAndMark has had since #39.
         return RankAndMark(raw, title);
     }
 
@@ -54,7 +55,7 @@ public class YoutubeService
     /// the floor on YouTube's raw order instead of the ranked one — passed the full suite.
     /// </summary>
     public static List<Dictionary<string, object?>> RankAndMark(
-        List<(Dictionary<string, object?> result, int score, string videoTitle)> raw,
+        List<(Dictionary<string, object?> result, int score, string videoTitle, TimeSpan? duration)> raw,
         string? title = null)
     {
         // Sort by score descending
@@ -64,7 +65,7 @@ public class YoutubeService
         // not merely the least-bad of a poor pool. Both auto-download workers and the
         // manual search badge read this flag, and all of them should decline together.
         var best = ThemeMatch.BestMatchIndex(
-            raw.Select(r => (r.videoTitle, r.score)).ToList(), title);
+            raw.Select(r => (r.videoTitle, r.score, r.duration)).ToList(), title);
         if (best >= 0)
             raw[best].result["bestMatch"] = true;
 
@@ -73,4 +74,15 @@ public class YoutubeService
             return r.result;
         }).ToList();
     }
+
+    /// <summary>
+    /// Duration-less shape, kept so callers (and the pre-#47 fixtures) without a runtime
+    /// in hand keep working. Delegates so the sort/mark logic lives in exactly one place;
+    /// rows entering here get the null duration, which the floor treats as "no ceiling".
+    /// </summary>
+    public static List<Dictionary<string, object?>> RankAndMark(
+        List<(Dictionary<string, object?> result, int score, string videoTitle)> raw,
+        string? title = null)
+        => RankAndMark(
+            raw.Select(r => (r.result, r.score, r.videoTitle, (TimeSpan?)null)).ToList(), title);
 }

@@ -35,7 +35,27 @@ public static class ThemeFiles
     /// </summary>
     internal static bool HasUsableThemeInExistingFolder(string folder) =>
         Directory.EnumerateFiles(folder, "theme.*")
-            .Any(f => !IsNonTheme(f) && new FileInfo(f).Length > 0);
+            .Any(f => !IsNonTheme(f) && (ThemeStat(f)?.Length ?? 0) > 0);
+
+    /// <summary>
+    /// Stat for a theme file — length and last-write time — or null when the file is
+    /// gone by the time of the stat. A theme can vanish between enumeration and stat:
+    /// container-correct naming (issue #48) replaces across theme names on every
+    /// re-download whose container changed, so that gap is hit by ordinary polling, not
+    /// just freak deletes. Shared by the status derivation above and both theme-audio
+    /// endpoints so the readers cannot drift: vanished means "no theme this instant" (a
+    /// skipped file, a 404) — never an exception that takes down a whole library
+    /// listing or request.
+    /// </summary>
+    public static (long Length, DateTime LastWriteTimeUtc)? ThemeStat(string path)
+    {
+        try
+        {
+            var info = new FileInfo(path);
+            return (info.Length, info.LastWriteTimeUtc);
+        }
+        catch (FileNotFoundException) { return null; }
+    }
 
     /// <summary>
     /// True if the service user can actually create a file in <paramref name="folder"/>.
@@ -128,6 +148,73 @@ public static class ThemeFiles
         Directory.Exists(folder)
             ? Directory.EnumerateFiles(folder, "theme.*").FirstOrDefault(f => !IsNonTheme(f))
             : null;
+
+    /// <summary>
+    /// The extension the theme's leading bytes say it should have (issue #48). Decided
+    /// from the bytes we actually stored, never from a CDN Content-Type header: the
+    /// confirmed production failure is precisely a promise (an "mp3" converter API)
+    /// contradicted by the delivered bytes (an MP4/AAC stream inside theme.mp3), so the
+    /// header is the one witness known to lie. The result is a closed two-value set —
+    /// a filename must never be derived from remote data. An MP4-family file opens with
+    /// a box: 4-byte size, then "ftyp"; everything else — including genuine MP3 (an ID3
+    /// tag, or a 0xFF-plus-3-bits frame sync) and bytes we cannot identify — keeps the
+    /// historical .mp3 name. Unknown-keeps-mp3 is deliberate: possibly wrong, but
+    /// exactly as wrong as every download was before sniffing existed, so it can never
+    /// regress a working install.
+    /// </summary>
+    public static string SniffedThemeExtension(ReadOnlySpan<byte> header)
+        => header.Length >= 8 && header[4..8].SequenceEqual("ftyp"u8) ? ".m4a" : ".mp3";
+
+    /// <summary>
+    /// The shared in-flight name for a theme download in <paramref name="folder"/>. One
+    /// fixed name per folder — not a fresh temp name per attempt — so a crashed attempt
+    /// is overwritten by the next instead of accumulating debris; the cost is that
+    /// concurrent writers to one folder must be serialized, which
+    /// <c>DownloadService</c>'s per-folder gate does anyway to keep two landings'
+    /// cleanups from eating each other's theme. The <c>.part</c> extension keeps it
+    /// invisible to discovery, status and cleanup (see <see cref="NonThemeExtensions"/>).
+    /// </summary>
+    public static string ThemePartPath(string folder) => Path.Combine(folder, "theme.mp3.part");
+
+    /// <summary>
+    /// Promotes a finished in-flight download (<see cref="ThemePartPath"/>) to its final
+    /// theme name in ONE atomic move, the name chosen by sniffing the part's own leading
+    /// bytes (<see cref="SniffedThemeExtension"/>) — never a CDN Content-Type header,
+    /// because the confirmed production failure is precisely a promise (an "mp3"
+    /// converter API) contradicted by the delivered bytes (issue #48). Deciding the name
+    /// and landing the file in the same move means no reader can ever observe a
+    /// wrongly-named or half-renamed theme, and the extension comes from a closed
+    /// two-value set — a filename is never derived from remote data. Callers MUST have
+    /// already confirmed the folder is inside the configured library roots (see
+    /// <see cref="IsWithinRoots"/>), and MUST hold the per-folder download gate: the
+    /// part name is shared, so an unserialized second writer could consume or overwrite
+    /// the part between write and promotion. Returns the landed path.
+    /// </summary>
+    public static string PromoteThemePart(string folder)
+    {
+        var partPath = ThemePartPath(folder);
+
+        // A provider that reports success without delivering a file used to land as a
+        // silent no-theme "downloaded"; refuse loudly instead, like the 0-byte rule.
+        if (ThemeStat(partPath) is not { } stat)
+            throw new InvalidOperationException(
+                "The download reported success but no file was delivered.");
+        if (stat.Length == 0)
+        {
+            try { File.Delete(partPath); } catch { /* best effort */ }
+            throw new InvalidOperationException(
+                "Downloaded theme was empty (0 bytes) — refusing to save a corrupt theme.");
+        }
+
+        Span<byte> header = stackalloc byte[8];
+        int read;
+        using (var fs = File.OpenRead(partPath))
+            read = fs.ReadAtLeast(header, header.Length, throwOnEndOfStream: false);
+
+        var finalPath = Path.Combine(folder, "theme" + SniffedThemeExtension(header[..read]));
+        File.Move(partPath, finalPath, overwrite: true);
+        return finalPath;
+    }
 
     /// <summary>Content type for a theme file, by extension. Falls back to audio/mpeg.</summary>
     public static string ContentTypeFor(string path) => Path.GetExtension(path).ToLowerInvariant() switch

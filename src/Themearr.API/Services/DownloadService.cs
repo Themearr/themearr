@@ -15,6 +15,16 @@ public class DownloadService(
     private readonly ConcurrentDictionary<string, JobState>          _jobs    = new();
     private readonly ConcurrentDictionary<string, ConcurrentQueue<string>> _jobLogs = new();
 
+    // Serializes the whole theme landing (write → promote → cleanup) per canonical
+    // folder. Job single-flight is keyed {mediaType}:{id} (see JobKey), and a movie and
+    // a show sharing one folder are two DISTINCT jobs mutating the same theme.* files:
+    // unserialized, each one's name-dependent cleanup can delete the other's freshly
+    // landed theme, and both share one in-flight part name (#48 concurrency review).
+    // Entries are never removed — bounded by the number of distinct media folders, and
+    // an idle SemaphoreSlim is tiny. Instance state suffices: DownloadService is a DI
+    // singleton (Program.cs), so every download in the process crosses this map.
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _folderGates = new(StringComparer.Ordinal);
+
     private const int MaxLogLines = 300;
 
     // After a provider quota-exhaustion (HTTP 429) we pause downloads until this time
@@ -159,7 +169,15 @@ public class DownloadService(
                 throw new UnauthorizedAccessException(
                     $"Refusing to write outside the configured library roots: \"{folder}\".");
 
-            var outputPath = Path.Combine(folder, "theme.mp3");
+            // The download lands under a neutral in-flight name and is promoted to its
+            // container-correct final name in ONE atomic move — see PromoteThemePart
+            // (issue #48). The bytes are stored as received — no transcode — and the
+            // "mp3" provider demonstrably delivers AAC/MP4 in production
+            // (format_name=mov,mp4,m4a probed inside a theme.mp3), so the name cannot be
+            // fixed until the bytes are in hand. DownloadService owns the promotion for
+            // BOTH branches so there is exactly one namer and the cleanup below always
+            // knows the real landed name.
+            var partPath = ThemeFiles.ThemePartPath(folder);
 
             // Fail fast with an actionable message if the folder isn't writable — the
             // common Proxmox/LXC case where the themearr service user lacks permission
@@ -176,37 +194,56 @@ public class DownloadService(
             using var cts = new CancellationTokenSource(DownloadTimeout);
             var token = cts.Token;
 
-            if (videoId != null)
+            // One landing per folder at a time, on top of per-job single-flight: a movie
+            // and a show can share one folder under two job keys (see JobKey), and two
+            // unserialized landings share the part name and can cross-delete each
+            // other's landed theme via the name-dependent cleanup (#48 concurrency
+            // review). Canonicalized the same way IsWithinRoots canonicalizes.
+            var gate = _folderGates.GetOrAdd(
+                Path.TrimEndingDirectorySeparator(Path.GetFullPath(folder)),
+                _ => new SemaphoreSlim(1, 1));
+            if (!gate.Wait(0))
             {
-                // YouTube URL — delegate to the configured theme-audio provider.
-                themeTitle = await provider.DownloadAsync(videoId, outputPath, msg => AddLog(key, msg), token);
+                AddLog(key, "[themearr] Another download is writing to this folder — waiting for it to finish.");
+                await gate.WaitAsync(token);
             }
-            else
+            try
             {
-                // Non-YouTube URL — download directly
-                AddLog(key, "[themearr] Downloading from URL…");
-
-                using var dlResp = await FetchFollowingSafeRedirectsAsync(url, token);
-
-                if (!dlResp.IsSuccessStatusCode)
+                if (videoId != null)
                 {
-                    var errBody = await dlResp.Content.ReadAsStringAsync(token);
-                    var snippet = errBody.Length > 300 ? errBody[..300] : errBody;
-                    throw new InvalidOperationException($"Download failed ({(int)dlResp.StatusCode}): {snippet}");
+                    // YouTube URL — delegate to the configured theme-audio provider.
+                    themeTitle = await provider.DownloadAsync(videoId, partPath, msg => AddLog(key, msg), token);
+                }
+                else
+                {
+                    // Non-YouTube URL — download directly
+                    AddLog(key, "[themearr] Downloading from URL…");
+
+                    using var dlResp = await FetchFollowingSafeRedirectsAsync(url, token);
+
+                    if (!dlResp.IsSuccessStatusCode)
+                    {
+                        var errBody = await dlResp.Content.ReadAsStringAsync(token);
+                        var snippet = errBody.Length > 300 ? errBody[..300] : errBody;
+                        throw new InvalidOperationException($"Download failed ({(int)dlResp.StatusCode}): {snippet}");
+                    }
+
+                    // Atomic within the part name too, so a failed or empty download
+                    // never clobbers a previously-good theme.
+                    await ThemeFiles.WriteAtomicAsync(
+                        await dlResp.Content.ReadAsStreamAsync(token), partPath, StreamLimits.MaxThemeBytes, token);
                 }
 
-                // Atomic: stream to theme.mp3.part then move into place, so a failed or
-                // empty download never clobbers a previously-good theme.
-                await ThemeFiles.WriteAtomicAsync(
-                    await dlResp.Content.ReadAsStreamAsync(token), outputPath, StreamLimits.MaxThemeBytes, token);
-            }
+                var outputPath = ThemeFiles.PromoteThemePart(folder);
 
-            // Remove stale alternate-extension theme files (e.g. an old theme.m4a) now
-            // that the new theme.mp3 is safely in place — never before the download.
-            foreach (var f in Directory.EnumerateFiles(folder, "theme.*"))
-                if (!string.Equals(f, outputPath, StringComparison.Ordinal)
-                    && Path.GetExtension(f) is not (".part" or ".ytdl"))
-                    try { File.Delete(f); } catch { /* best effort */ }
+                // Remove stale alternate-extension theme files (e.g. an old theme.m4a) now
+                // that the new theme file is safely in place — never before the download.
+                foreach (var f in Directory.EnumerateFiles(folder, "theme.*"))
+                    if (!string.Equals(f, outputPath, StringComparison.Ordinal)
+                        && Path.GetExtension(f) is not (".part" or ".ytdl"))
+                        try { File.Delete(f); } catch { /* best effort */ }
+            }
+            finally { gate.Release(); }
 
             AddLog(key, "[themearr] Download complete.");
 

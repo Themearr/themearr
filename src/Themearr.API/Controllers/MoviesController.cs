@@ -10,7 +10,10 @@ namespace Themearr.API.Controllers;
 [Route("api")]
 public class MoviesController(
     Database db, YoutubeService youtube, DownloadService download, PosterUrlSigner posterSigner,
-    LibrarySourceResolver sources, ILogger<MoviesController> log) : ControllerBase
+    LibrarySourceResolver sources, ILogger<MoviesController> log,
+    // Optional so the existing test constructions keep compiling, and null-safe because
+    // the delete-side refresh is best-effort anyway — same pattern as DownloadService.
+    PlexService? plex = null) : ControllerBase
 {
     [HttpGet("movies")]
     public IActionResult ListMovies()
@@ -81,7 +84,19 @@ public class MoviesController(
         // it. Without this, a movie deleted while auto-download is on would keep its stale
         // 'downloaded' status and never be re-fetched once the worker stops disk-scanning
         // every movie every tick.
-        if (deleted) db.SetMovieStatus(movieId, "pending");
+        if (deleted)
+        {
+            db.SetMovieStatus(movieId, "pending");
+
+            // Plex keeps playing its cached theme until the item is refreshed — the same
+            // staleness issue #45 fixed for downloads, in the delete direction. Fire and
+            // forget: this action's signature is pinned synchronous, and a DELETE must
+            // not wait out PlexService.RefreshTimeout on a wedged server. The helper
+            // never faults, so discarding the task can't drop an exception.
+            _ = plex?.TryRefreshItemMetadataAsync(
+                movie.GetValueOrDefault("source")?.ToString(),
+                movie.GetValueOrDefault("sourceRef")?.ToString(), log, movieId);
+        }
 
         return Ok(new { deleted });
     }
@@ -118,10 +133,14 @@ public class MoviesController(
 
         // ETag + Last-Modified so repeated visits don't re-download the same theme file.
         // Framework honours If-None-Match / If-Modified-Since and returns 304 automatically.
-        var info = new FileInfo(themeFile);
-        var etag = new EntityTagHeaderValue($"\"{info.Length:x}-{info.LastWriteTimeUtc.Ticks:x}\"");
+        // ThemeStat, not a bare FileInfo: the theme can vanish between FindThemeFile
+        // above and the stat — a re-download whose container changed replaces across
+        // names (issue #48) — and one unlucky request must degrade to 404, never 500.
+        if (ThemeFiles.ThemeStat(themeFile) is not { } stat)
+            return NotFound(new { detail = "No theme file" });
+        var etag = new EntityTagHeaderValue($"\"{stat.Length:x}-{stat.LastWriteTimeUtc.Ticks:x}\"");
         Response.Headers.CacheControl = "private, max-age=300";
-        return PhysicalFile(themeFile, contentType, info.LastWriteTimeUtc, etag, enableRangeProcessing: true);
+        return PhysicalFile(themeFile, contentType, stat.LastWriteTimeUtc, etag, enableRangeProcessing: true);
     }
 
     [HttpPost("auto-download/{movieId}")]
