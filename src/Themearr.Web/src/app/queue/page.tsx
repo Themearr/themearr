@@ -4,7 +4,7 @@ import type { MediaItem, YoutubeResult } from '@/lib/types'
 import { AppShell } from '@/components/layout/AppShell'
 import { Button, EmptyState, ErrorIcon, Input, Spinner } from '@/components/ui'
 import { useResource } from '@/lib/useResource'
-import { moviesAdapter, showsAdapter } from '@/lib/media/adapter'
+import { moviesAdapter, showsAdapter, type MediaAdapter } from '@/lib/media/adapter'
 
 // Bounds the polled `downloadStatus` request below (the "in-flight" guard's
 // own comment explains what it's guarding against). `request()` in
@@ -24,6 +24,16 @@ const STATUS_TIMEOUT_MS = 8000
 // queue behind a reload. At that point we give up tracking and hand control back.
 const STATUS_MAX_FAILURES = 3
 
+// Until the start POST settles, the poll skips its ticks (see the start gate in
+// the poll below) -- so those skipped ticks need their own give-up horizon, or
+// a start POST that never lands wedges the queue with Skip/Ignore disabled and
+// no escape: the status checks themselves would keep SUCCEEDING (the unknown-id
+// shape is a healthy response), so STATUS_MAX_FAILURES never trips. Matched to
+// the failing-status horizon above: three hung checks cost about
+// 3 x (1s interval + STATUS_TIMEOUT_MS) ~= 27s, so 30 one-second ticks hand
+// control back at the same point a status outage would.
+const START_MAX_WAIT_TICKS = 30
+
 export default function QueuePage() {
   // Component state, deliberately not persisted and not in the URL: someone who once
   // looked at shows would otherwise return to the Queue, find an empty triage list and
@@ -41,6 +51,10 @@ export default function QueuePage() {
   const [downloadLogs,  setDownloadLogs]  = useState<string[]>([])
   const [autoMode,      setAutoMode]      = useState(false)
   const [savingAuto,    setSavingAuto]    = useState(false)
+  // In-flight guard for Ignore (same reasoning as savingAuto): the round trip
+  // leaves the button live otherwise, and a double click means two ignores and
+  // two advances -- the second one silently dropping the NEXT item from triage.
+  const [ignoring,      setIgnoring]      = useState(false)
 
   // Holds the movieId being downloaded so the polling closure keeps the right id
   const downloadingMovieId = useRef<string | null>(null)
@@ -53,15 +67,56 @@ export default function QueuePage() {
   // useResource (src/lib/useResource.ts) uses: each starter claims a number at
   // issue time, and only the newest issued may settle the shared download state.
   const downloadAttempt    = useRef(0)
+  // Identifies the newest search, so a slow earlier one cannot land its
+  // results, error, or spinner-clear under whichever item is on screen when it
+  // settles -- the latest-stamp technique again (useResource, downloadAttempt).
+  // Stale results are worse than a stale banner: they are clickable, and
+  // Download pairs the on-screen item's id with the stale result's videoId --
+  // the previous item's theme, downloaded onto this one.
+  const searchSeq          = useRef(0)
+  // What the running download is bound to, captured at start alongside the
+  // attempt stamp: the adapter and media it was started under, plus the
+  // on-screen key its errors belong to. The status poll reads THIS rather than
+  // the live `adapter`/`media` -- the toggle stays clickable during a download
+  // (#43), so by the next tick the live values may describe the other library,
+  // and asking the shows endpoint about a movie's download answers "no such
+  // job, not finished" forever (DownloadService.GetStatus's unknown-id shape),
+  // wedging the queue in "Downloading…" with Skip/Ignore disabled.
+  //
+  // `startSettled` is mutated (not replaced) when the starter's POST resolves:
+  // until then the server's status for this id is the PREVIOUS job's --
+  // Start() only writes the fresh JobState right before returning
+  // (DownloadService.cs:70) -- so the poll must not read status yet, or a
+  // retry of a failed item is instantly re-settled by the failure it retries.
+  const downloadBinding    = useRef<{ adapter: MediaAdapter; media: 'movies' | 'shows'; attempt: number; key: string; startSettled: boolean } | null>(null)
   const searchedFor        = useRef<string | null>(null)
   // Tracks whether we've already triggered auto-download for the current movie
   const autoTriggeredFor   = useRef<string | null>(null)
   // Keep a ref in sync with autoMode so polling closures never see stale state
   const autoModeRef        = useRef(autoMode)
+  // Same, for the media toggle: the poll's settle paths need to know which
+  // library is on screen *now*, not which one their download started under.
+  const mediaRef           = useRef(media)
 
+  // Which media the list in `movies` belongs to. useResource keeps the old
+  // data until a refetch lands, so after switchMedia there is a beat where
+  // `current` is still the OTHER library's item while `media`/`adapter` are
+  // already the new one -- a torn pair that must not be rendered as a queue or
+  // acted on by the effects below (ids come from different tables, so a
+  // shows-adapter call with a movie's id hits a nonexistent -- or worse, a
+  // colliding -- show). Tagged in the fetcher, gated by its own latest-stamp
+  // so an abandoned fetch settling late cannot mislabel a newer list.
+  const [listFor, setListFor] = useState<'movies' | 'shows'>('movies')
+  const listFetchSeq = useRef(0)
   // The initial load. Routed through useResource so a failed request surfaces
   // as an error screen instead of "every movie already has a theme".
-  const { data: movies, error: moviesError, retry: retryMovies } = useResource(useCallback(() => adapter.list(), [adapter]))
+  const { data: movies, error: moviesError, retry: retryMovies } = useResource(useCallback(() => {
+    const mine = ++listFetchSeq.current
+    return adapter.list().then(list => {
+      if (mine === listFetchSeq.current) setListFor(media)
+      return list
+    })
+  }, [adapter, media]))
   // 'pending' only — a plexTheme show is not outstanding work, which matches
   // GetPendingShows filtering on plex_has_theme = 0. Manual triage and the
   // auto-download worker therefore agree on what is left to do.
@@ -73,12 +128,23 @@ export default function QueuePage() {
   function switchMedia(next: 'movies' | 'shows') {
     if (next === media) return
     setMedia(next)
+    // Assigned here as well as in the sync effect below: that effect is
+    // passive, so a poll tick due in the commit-to-effect gap would still read
+    // the old media and could act on the wrong list's index.
+    mediaRef.current = next
     setCurrentIdx(0)
     setResults([])
     setError('')
     setManualUrl('')
     searchedFor.current      = null
     autoTriggeredFor.current = null
+    // Synchronous for the same commit-to-effect-gap reason as mediaRef above:
+    // nothing is truthfully on screen until the new list lands, and a settle
+    // reading the old key in the gap could still act on the old item.
+    onScreenKeyRef.current   = null
+    // Invalidates any in-flight search: its results belong to the library the
+    // user just left, and the new library's search claims a fresh stamp.
+    searchSeq.current++
     retryMovies()
   }
 
@@ -93,8 +159,24 @@ export default function QueuePage() {
   // that outlive the render they were created in. Media-qualified because
   // movie and show ids come from different tables and can collide -- a bare id
   // can't tell movie 7 from show 7 across the toggle.
+  //
+  // Null during the switch's torn beat (listFor !== media): `current` is still
+  // the OTHER library's item then, and stamping it with the new media's prefix
+  // would vouch for a colliding id -- movie H's finish landing while show H
+  // sits behind the loading branch would read as "H is on screen" and advance
+  // a queue about to be re-based. Null is the truthful value: the page renders
+  // loading, so nothing is on screen, and every settle path fails closed.
+  //
+  // This passive sync is the CONVERGENCE path, not the only writer: the sites
+  // that change what's on screen (Up-next clicks, advanceQueue, switchMedia)
+  // also assign synchronously, because a settle resuming in the commit-to-
+  // effect gap would otherwise read the previous key -- which matches its own
+  // forKey -- and advance over the item the user just browsed to. Same window
+  // switchMedia already treats as real for mediaRef.
   const onScreenKeyRef = useRef<string | null>(null)
-  useEffect(() => { onScreenKeyRef.current = current ? `${media}:${current.id}` : null }, [current, media])
+  useEffect(() => {
+    onScreenKeyRef.current = current && listFor === media ? `${media}:${current.id}` : null
+  }, [current, media, listFor])
 
   // ── Load auto mode setting ──────────────────────────────────────────────────
   useEffect(() => {
@@ -103,8 +185,9 @@ export default function QueuePage() {
       .catch(() => null)
   }, [])
 
-  // Keep ref in sync
+  // Keep refs in sync
   useEffect(() => { autoModeRef.current = autoMode }, [autoMode])
+  useEffect(() => { mediaRef.current = media }, [media])
 
   // Saves first and only flips the switch once the server confirms it, rather
   // than flipping optimistically and trying to unwind it on failure -- so the
@@ -138,28 +221,35 @@ export default function QueuePage() {
 
   // ── Auto-search when displayed movie changes ───────────────────────────────
   useEffect(() => {
+    // Torn beat (see listFor above): searching the other library for this id
+    // would be a request for an item that doesn't exist there. Returning
+    // without setting searchedFor keeps the real search armed for when the
+    // right list lands.
+    if (listFor !== media) return
     if (!current || searchedFor.current === current.id) return
     searchedFor.current = current.id
+    const mine = ++searchSeq.current
     setResults([])
     setError('')
     setManualUrl('')
     setSearchQuery('')
     setSearching(true)
     adapter.search(current.id)
-      .then(data => setResults(data.results))
-      .catch((e: Error) => setError(e.message))
-      .finally(() => setSearching(false))
-  }, [current, adapter])
+      .then(data => { if (mine === searchSeq.current) setResults(data.results) })
+      .catch((e: Error) => { if (mine === searchSeq.current) setError(e.message) })
+      .finally(() => { if (mine === searchSeq.current) setSearching(false) })
+  }, [current, adapter, listFor, media])
 
   function reSearch(q?: string) {
     if (!current) return
+    const mine = ++searchSeq.current
     setResults([])
     setError('')
     setSearching(true)
     adapter.search(current.id, q || undefined)
-      .then(data => setResults(data.results))
-      .catch((e: Error) => setError(e.message))
-      .finally(() => setSearching(false))
+      .then(data => { if (mine === searchSeq.current) setResults(data.results) })
+      .catch((e: Error) => { if (mine === searchSeq.current) setError(e.message) })
+      .finally(() => { if (mine === searchSeq.current) setSearching(false) })
   }
 
   // Declared before its first use — a hoisted call from above reads as a stale
@@ -172,8 +262,16 @@ export default function QueuePage() {
   // pointing at the next movie) and does nothing. The in-flight guard in the
   // poll below should stop those duplicates ever happening; this is the second
   // line of defence, because the failure mode it prevents (a movie skipped with
-  // no theme, no error and no trace) is completely silent. Callers acting on
-  // the user's behalf — Skip, Ignore — pass nothing and always advance.
+  // no theme, no error and no trace) is completely silent. Skip passes nothing
+  // and always advances -- it acts on the user's immediate click. Ignore also
+  // passes nothing, but only calls this after its own check that the ignored
+  // item is still on screen (see skipForever).
+  // Callers whose advance can be followed by a settle reading onScreenKeyRef
+  // in the commit-to-effect gap must null the ref themselves first (see the
+  // Skip button and the auto-skip timer): the write can't live here because
+  // this function is referenced from the poll effect, and the compiler lint
+  // (react-hooks/immutability) forbids effect-reachable functions mutating a
+  // ref an effect also writes.
   function advanceQueue(forMovieId?: string) {
     if (forMovieId !== undefined && downloadingMovieId.current !== forMovieId) return
     setCurrentIdx((i: number) => i + 1)
@@ -185,9 +283,11 @@ export default function QueuePage() {
     downloadingMovieId.current = null
   }
 
-  // Every download starter's catch lands here, with the attempt stamp and
-  // on-screen key it captured before its request went out. Two identity
-  // checks, in order:
+  // Every download failure lands here -- the four starters' catches with the
+  // attempt stamp and on-screen key they captured before their request went
+  // out, and the status poll's settle paths with the ones captured at download
+  // start (a server-reported failure is the same event arriving on the other
+  // channel). Two identity checks, in order:
   //
   // 1. Ownership: only the newest attempt may clear the in-flight state. The
   //    status poll's lost-contact path can hand control back mid-request, so a
@@ -202,21 +302,51 @@ export default function QueuePage() {
     if (downloadAttempt.current !== attempt) return
     setDownloading(false)
     downloadingMovieId.current = null
+    // The log tail belongs to the attempt that failed: left in state, it
+    // renders under the NEXT download's panel until that download's first
+    // status tick overwrites it. (advanceQueue already clears it on success.)
+    setDownloadLogs([])
     if (onScreenKeyRef.current === forKey) setError(message)
   }
 
+  // The Skip button. Not advanceQueue directly: the ref is nulled first
+  // (synchronously, like mediaRef in switchMedia) so an in-flight ignore
+  // resolving in the commit-to-effect gap can't read the pre-advance key,
+  // match, and advance a second time -- skipping the item Skip just moved to.
+  // The disable is the same trade login/page.tsx:57 makes: the compiler lint
+  // can't see that this handler only runs on click, and every lint-legal home
+  // for the write (inside advanceQueue, an inline arrow) it rejects too --
+  // while accepting the identical writes in switchMedia.
+  function skipCurrent() {
+    // eslint-disable-next-line react-hooks/immutability
+    onScreenKeyRef.current = null
+    advanceQueue()
+  }
+
+  // The ignore round-trip has the same shape as a download request: the queue
+  // stays browsable while it's in flight, so its outcome must pass the #43
+  // placement check before acting on whatever is on screen by then.
   async function skipForever() {
-    if (!current) return
+    if (!current || ignoring) return
+    const forKey = `${media}:${current.id}`
+    setIgnoring(true)
     try {
       await adapter.ignore(current.id)
     } catch (e) {
       // The server didn't record the ignore, so advancing would hide a movie it
       // still has as pending -- it'd reappear on the next load, making the button
-      // look like it did nothing. Surface the failure and stay on this movie.
-      setError((e as Error).message)
+      // look like it did nothing. Surface the failure -- under the item it
+      // belongs to only -- and don't advance.
+      if (onScreenKeyRef.current === forKey) setError((e as Error).message)
       return
+    } finally {
+      setIgnoring(false)
     }
-    advanceQueue()
+    // Advance only past the item that was ignored: if the user browsed on while
+    // the request ran, the +1 would push them off an item that was never
+    // triaged. The ignore is recorded server-side either way; the item leaves
+    // the list on the next load.
+    if (onScreenKeyRef.current === forKey) advanceQueue()
   }
 
   // ── Auto-download in auto mode ─────────────────────────────────────────────
@@ -224,6 +354,10 @@ export default function QueuePage() {
   // for client-side search results — avoids silent failures from scoring edge cases.
   useEffect(() => {
     if (!autoMode || !current || downloading) return
+    // The switch's torn beat: `current` still belongs to the other library
+    // (see listFor above), so "auto-download the shown item" would send an
+    // old-media id through the new media's endpoints.
+    if (listFor !== media) return
     if (autoTriggeredFor.current === current.id) return
 
     const forId   = current.id
@@ -231,9 +365,12 @@ export default function QueuePage() {
     const attempt = ++downloadAttempt.current
     autoTriggeredFor.current = forId
     downloadingMovieId.current = forId
+    const binding = { adapter, media, attempt, key: forKey, startSettled: false }
+    downloadBinding.current = binding
     setDownloading(true)
     setError('')
     adapter.autoDownload(forId)
+      .then(() => { binding.startSettled = true })
       .catch((e: Error) => {
         settleDownloadFailure(attempt, forKey, e.message)
         // Deliberately NOT resetting autoTriggeredFor here. `downloading` flipping back
@@ -244,13 +381,21 @@ export default function QueuePage() {
         // stays visible, and Skip/Ignore plus the per-result Download button remain the
         // way out.
       })
-  }, [autoMode, current, downloading, adapter, media])
+  }, [autoMode, current, downloading, adapter, media, listFor])
 
   // ── Poll download status while a download is in flight ────────────────────
   useEffect(() => {
     if (!downloading) return
     const movieId = downloadingMovieId.current
     if (!movieId) return
+    // Bound at download start, deliberately NOT the live `adapter` (which is
+    // why it isn't a dependency): a mid-download media toggle must not re-point
+    // this poll at the other library's status endpoint -- see downloadBinding's
+    // comment for what that wedges. The attempt stamp and key ride along so the
+    // settle paths below can run the same identity gate as the catch sites.
+    const binding = downloadBinding.current
+    if (!binding) return
+    const { adapter: boundAdapter, media: forMedia, attempt, key: forKey } = binding
 
     // A status request that takes longer than the interval used to leave two
     // callbacks in flight at once. Both saw `finished`, and both advanced the
@@ -263,8 +408,22 @@ export default function QueuePage() {
     // Counts consecutive failed status checks; any success resets it. Local to
     // this effect run so a fresh download always starts from a clean slate.
     let failures = 0
+    // Counts ticks skipped while the start POST is unsettled -- see the start
+    // gate below and START_MAX_WAIT_TICKS for why they need their own horizon.
+    let startWaits = 0
 
     const id = setInterval(async () => {
+      // Start gate: until the start POST settles, the server's status for this
+      // id is the PREVIOUS job's (see downloadBinding's comment) -- reading it
+      // would re-settle a retry with the old attempt's outcome.
+      if (!binding.startSettled) {
+        if (++startWaits >= START_MAX_WAIT_TICKS) {
+          clearInterval(id)
+          settleDownloadFailure(attempt, forKey,
+            'Lost contact with the server before it confirmed this download started — reload to check.')
+        }
+        return
+      }
       if (inFlight) return
       inFlight = true
 
@@ -278,23 +437,56 @@ export default function QueuePage() {
       const timeoutId = setTimeout(() => controller.abort(), STATUS_TIMEOUT_MS)
 
       try {
-        const st = await adapter.downloadStatus(movieId, { signal: controller.signal })
+        const st = await boundAdapter.downloadStatus(movieId, { signal: controller.signal })
         failures = 0 // a status came back -- we're still in contact with the server
-        if (st.logs?.length) setDownloadLogs(st.logs)
+        // Ownership-gated like every settle below: a stale tick surviving a
+        // handback must not paint the old attempt's logs under a newer one.
+        if (st.logs?.length && downloadAttempt.current === attempt) setDownloadLogs(st.logs)
         if (!st.finished) return
         clearInterval(id)
         if (st.error) {
-          setError(st.error)
-          setDownloading(false)
+          // The server-reported twin of the catch sites' rejections (#43):
+          // same stakes, same gate. Without it, browsing away mid-download
+          // painted this error under whichever card the user was on.
+          settleDownloadFailure(attempt, forKey, st.error)
           // Auto mode: skip this movie automatically after a short pause
           if (autoModeRef.current) {
             setTimeout(() => {
+              // Re-checked at fire time: three seconds is long enough for auto
+              // mode to have started the next item's download (whose freshly
+              // shown error this would wipe), for the user to be triaging
+              // the other library (whose queue this would advance) -- or for
+              // them to have turned auto OFF to handle this item by hand, in
+              // which case no new attempt bumps the stamp and only this check
+              // stops the queue being moved out from under them.
+              if (!autoModeRef.current) return
+              if (downloadAttempt.current !== attempt) return
+              if (mediaRef.current !== forMedia) return
               setError('')
-              advanceQueue(movieId)
+              // Nulled before the advance (advanceQueue can't do it -- see its
+              // comment): the user can have clicked Ignore on the failed item
+              // inside this timer's 3s window, and that ignore resolving in
+              // the commit-to-effect gap would read the pre-advance key,
+              // match, and advance a second time.
+              onScreenKeyRef.current = null
+              advanceQueue()
             }, 3000)
           }
-        } else {
+        } else if (downloadAttempt.current === attempt && onScreenKeyRef.current === forKey) {
           advanceQueue(movieId)
+        } else if (downloadAttempt.current === attempt) {
+          // Finished, but the downloaded item is no longer the card: advancing
+          // would silently skip whatever IS -- the historical queue-race bug
+          // class. The id gate inside advanceQueue can't catch this on its own,
+          // because a switch-away-and-back re-bases currentIdx onto a refetched
+          // list that may already exclude the finished item, leaving the +1 to
+          // land on the new head. So: end the tracking here and let list
+          // reloads converge -- the completed item stops being pending on the
+          // next load, which switching back already triggers
+          // (switchMedia -> retryMovies).
+          setDownloading(false)
+          setDownloadLogs([])
+          downloadingMovieId.current = null
         }
       } catch {
         // A transient drop/timeout: the next tick normally recovers it. But if
@@ -303,12 +495,14 @@ export default function QueuePage() {
         // Give up tracking, say so, and re-enable the in-app escapes. We can't
         // know the download's real outcome, so we don't advance -- a reload (or
         // the next visit) will reflect whatever actually happened server-side.
+        // Routed through the identity gate: a hung check can settle long after
+        // control was handed back, when a newer attempt may own the state and
+        // a different item may own the card.
         failures++
         if (failures >= STATUS_MAX_FAILURES) {
           clearInterval(id)
-          setError('Lost contact with the server while tracking this download. It may still finish — reload to check.')
-          setDownloading(false)
-          downloadingMovieId.current = null
+          settleDownloadFailure(attempt, forKey,
+            'Lost contact with the server while tracking this download. It may still finish — reload to check.')
         }
       }
       finally {
@@ -318,48 +512,65 @@ export default function QueuePage() {
     }, 1000)
 
     return () => clearInterval(id)
-  }, [downloading, adapter])
+  }, [downloading])
 
   async function doDownload(videoId: string) {
+    // The buttons that reach the manual starters are hidden or disabled while
+    // a download runs, so this cannot fire today -- but a second concurrent
+    // start would corrupt every invariant the poll relies on (the old
+    // effect's interval would keep running against a reassigned binding), so
+    // the guard is structural, not decorative.
+    if (downloading) return
     if (!current) return
     const forId   = current.id
     const forKey  = `${media}:${forId}`
     const attempt = ++downloadAttempt.current
     downloadingMovieId.current = forId
+    const binding = { adapter, media, attempt, key: forKey, startSettled: false }
+    downloadBinding.current = binding
     setDownloading(true)
     setError('')
     try {
       await adapter.download(forId, videoId)
+      binding.startSettled = true
     } catch (e) {
       settleDownloadFailure(attempt, forKey, (e as Error).message)
     }
   }
 
   async function doDownloadUrl() {
+    if (downloading) return // structural, as in doDownload
     if (!current || !manualUrl.trim()) return
     const forId   = current.id
     const forKey  = `${media}:${forId}`
     const attempt = ++downloadAttempt.current
     downloadingMovieId.current = forId
+    const binding = { adapter, media, attempt, key: forKey, startSettled: false }
+    downloadBinding.current = binding
     setDownloading(true)
     setError('')
     try {
       await adapter.downloadUrl(forId, manualUrl.trim())
+      binding.startSettled = true
     } catch (e) {
       settleDownloadFailure(attempt, forKey, (e as Error).message)
     }
   }
 
   async function doAutoDownload() {
+    if (downloading) return // structural, as in doDownload
     if (!current) return
     const forId   = current.id
     const forKey  = `${media}:${forId}`
     const attempt = ++downloadAttempt.current
     downloadingMovieId.current = forId
+    const binding = { adapter, media, attempt, key: forKey, startSettled: false }
+    downloadBinding.current = binding
     setDownloading(true)
     setError('')
     try {
       await adapter.autoDownload(forId)
+      binding.startSettled = true
     } catch (e) {
       settleDownloadFailure(attempt, forKey, (e as Error).message)
     }
@@ -386,7 +597,10 @@ export default function QueuePage() {
   )
 
   // ── Loading / failed ───────────────────────────────────────────────────────
-  if (pending === null) {
+  // The listFor mismatch is the switch's torn beat (see listFor above): the
+  // only truthful render is "loading" -- showing the old library's items under
+  // the new toggle invites acting on them across media.
+  if (pending === null || listFor !== media) {
     return (
       <AppShell title="Queue">
         {mediaToggle}
@@ -453,12 +667,10 @@ export default function QueuePage() {
             )}
             Auto
           </button>
-          <Button variant="ghost" size="sm" onClick={skipForever} disabled={downloading} title={`Never show this ${adapter.labels.singular} in the queue again`}>
+          <Button variant="ghost" size="sm" onClick={skipForever} disabled={downloading || ignoring} title={`Never show this ${adapter.labels.singular} in the queue again`}>
             Ignore
           </Button>
-          {/* Wrapped, not passed directly: advanceQueue's first parameter is a
-              movie id, and handing it the click event would make it a no-op. */}
-          <Button variant="ghost" size="sm" onClick={() => advanceQueue()} disabled={downloading}>
+          <Button variant="ghost" size="sm" onClick={skipCurrent} disabled={downloading}>
             Skip
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
               <path d="M5 12h14M12 5l7 7-7 7" />
@@ -500,7 +712,15 @@ export default function QueuePage() {
               {pending.slice(currentIdx + 1, currentIdx + 11).map((movie: MediaItem, i: number) => (
                 <button
                   key={movie.id}
-                  onClick={() => setCurrentIdx(currentIdx + 1 + i)}
+                  onClick={() => {
+                    // Synchronous, like mediaRef in switchMedia: a status tick
+                    // resuming in the commit-to-effect gap would read the
+                    // PREVIOUS key, match its own forKey, and advance -- over
+                    // the item just clicked. Here the next key IS knowable:
+                    // it's this row's.
+                    onScreenKeyRef.current = `${media}:${movie.id}`
+                    setCurrentIdx(currentIdx + 1 + i)
+                  }}
                   className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-[#1D2939]/60 transition-colors text-left"
                 >
                   <span className="text-xs text-[#475467] w-4 flex-shrink-0">{i + 1}</span>
