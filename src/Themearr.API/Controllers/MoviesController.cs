@@ -133,10 +133,14 @@ public class MoviesController(
 
         // ETag + Last-Modified so repeated visits don't re-download the same theme file.
         // Framework honours If-None-Match / If-Modified-Since and returns 304 automatically.
-        var info = new FileInfo(themeFile);
-        var etag = new EntityTagHeaderValue($"\"{info.Length:x}-{info.LastWriteTimeUtc.Ticks:x}\"");
+        // ThemeStat, not a bare FileInfo: the theme can vanish between FindThemeFile
+        // above and the stat — a re-download whose container changed replaces across
+        // names (issue #48) — and one unlucky request must degrade to 404, never 500.
+        if (ThemeFiles.ThemeStat(themeFile) is not { } stat)
+            return NotFound(new { detail = "No theme file" });
+        var etag = new EntityTagHeaderValue($"\"{stat.Length:x}-{stat.LastWriteTimeUtc.Ticks:x}\"");
         Response.Headers.CacheControl = "private, max-age=300";
-        return PhysicalFile(themeFile, contentType, info.LastWriteTimeUtc, etag, enableRangeProcessing: true);
+        return PhysicalFile(themeFile, contentType, stat.LastWriteTimeUtc, etag, enableRangeProcessing: true);
     }
 
     [HttpPost("auto-download/{movieId}")]

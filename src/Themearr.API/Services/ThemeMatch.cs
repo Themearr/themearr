@@ -128,9 +128,24 @@ public static class ThemeMatch
     }
 
     /// <summary>
+    /// Hard ceiling on a result's runtime for the unattended path (issue #47). 15 minutes
+    /// because that is the boundary the scorer already calls pathological — its −20 band
+    /// starts at <c>mins &gt; 15.0</c> below — so acceptance binds exactly where ranking
+    /// already judged, with 2.5× margin over the longest measured legitimate theme
+    /// (3–6 min) and far under any "complete score" upload (the measured worst case:
+    /// 3h33m). A soft penalty can only rank; it cannot refuse — a full soundtrack of the
+    /// CORRECT work is genuinely music (#39's floor passes it) for genuinely this work
+    /// (#42's rule passes it) and absorbs −20 easily, which is how every prior guard was
+    /// blind to "is this a theme, or hours of one?". Not redundant with the 100 MB byte
+    /// cap: two hours at ~100 kbps is ~90 MB and clears it.
+    /// </summary>
+    public static readonly TimeSpan MaxConfidentDuration = TimeSpan.FromMinutes(15);
+
+    /// <summary>
     /// Whether a ranked result may be acted on with no human looking at it: it must
-    /// out-rank the field, say it is music, not itself be a trailer/promo/clip, and —
-    /// when the caller supplies the media title — identify THIS work
+    /// out-rank the field, say it is music, not itself be a trailer/promo/clip, be no
+    /// longer than <see cref="MaxConfidentDuration"/> when the caller supplies a runtime,
+    /// and — when the caller supplies the media title — identify THIS work
     /// (<see cref="TitleIdentityHolds"/>). The score alone was never a quality bar — it
     /// exists to order candidates against each other, so "best of a bad pool" and "good"
     /// were the same answer, and low-profile films got trailers. The promo check is not
@@ -139,15 +154,23 @@ public static class ThemeMatch
     /// film's music, so evidence alone is not enough — a marker in
     /// <see cref="PromoMarkers"/> vetoes the result outright. The identity check is not
     /// redundant with either: "Endless Space 2 Original Soundtrack" is real music with
-    /// no promo marker, and still the wrong work (issue #42).
+    /// no promo marker, and still the wrong work (issue #42). And the ceiling is not
+    /// redundant with any of them — the failure it exists for passes all three. A null
+    /// duration skips the ceiling, mirroring <see cref="Score"/>'s HasValue skip and the
+    /// null media title: the #39 accept baseline was measured without a ceiling and
+    /// cannot be re-measured, so absence of the input must not change the answer.
+    /// Manual downloads and pasted URLs never consult this floor — declining here only
+    /// stops the unattended path.
     /// </summary>
-    public static bool IsConfident(int score, string videoTitle, string? mediaTitle = null)
+    public static bool IsConfident(int score, string videoTitle, string? mediaTitle = null,
+        TimeSpan? duration = null)
     {
         var vt = videoTitle.ToLowerInvariant();
         return score > 0
             && !PromoMarkers.Any(m => vt.Contains(m, StringComparison.Ordinal))
             && HasMusicEvidence(videoTitle)
-            && TitleIdentityHolds(vt, mediaTitle);
+            && TitleIdentityHolds(vt, mediaTitle)
+            && (duration is null || duration <= MaxConfidentDuration);
     }
 
     /// <summary>
@@ -156,11 +179,25 @@ public static class ThemeMatch
     /// the ranking already judged it the weaker candidate. Declining is a supported
     /// outcome everywhere — both auto-download workers back off 6h and the movie
     /// endpoint returns 422. The media title rides along for the identity half of the
-    /// floor (issue #42); null keeps the pre-#42 floor, like <see cref="IsConfident"/>.
+    /// floor (issue #42) and the duration for the ceiling (issue #47); null keeps the
+    /// pre-#42/pre-#47 floor respectively, like <see cref="IsConfident"/>.
+    /// </summary>
+    public static int BestMatchIndex(
+        IReadOnlyList<(string VideoTitle, int Score, TimeSpan? Duration)> ranked,
+        string? mediaTitle = null)
+        => ranked.Count > 0
+           && IsConfident(ranked[0].Score, ranked[0].VideoTitle, mediaTitle, ranked[0].Duration)
+            ? 0 : -1;
+
+    /// <summary>
+    /// Duration-less shape, kept for callers with no runtime in hand. Delegates so the
+    /// row-0-or-nothing rule and the floor live in exactly one place and the two shapes
+    /// can never drift.
     /// </summary>
     public static int BestMatchIndex(IReadOnlyList<(string VideoTitle, int Score)> ranked,
         string? mediaTitle = null)
-        => ranked.Count > 0 && IsConfident(ranked[0].Score, ranked[0].VideoTitle, mediaTitle) ? 0 : -1;
+        => BestMatchIndex(
+            ranked.Select(r => (r.VideoTitle, r.Score, (TimeSpan?)null)).ToList(), mediaTitle);
 
     /// <param name="year">Accepted for caller symmetry; the weights do not use it today.</param>
     public static int Score(string videoTitle, string channel, TimeSpan? duration,

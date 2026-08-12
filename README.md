@@ -34,6 +34,10 @@ It reads your library from **either Plex or Radarr**. Radarr is a first-class so
 - System page with health checks and scheduled tasks, arr-style
 - An API key plus a **Radarr webhook**, so a theme is fetched the moment a movie is imported
 
+### Disk usage
+
+Themes are stored full-length as received — there is no trimming or re-encoding — which works out to roughly **3.7 GB of theme audio per 1,000 films** (measured on one production install: 1,438 films, 5.28 GB). Plan for that growth on the volume holding your media folders. Plex users: Plex also imports a copy of each theme into its own metadata bundle, so the space is used twice on the volume holding Plex's metadata directory.
+
 ## Downloads require a RapidAPI key
 
 Theme audio is fetched through the [youtube-mp36](https://rapidapi.com/ytjar/api/youtube-mp36) API on RapidAPI — Themearr does **not** bundle or shell out to `yt-dlp` or `ffmpeg`. **Downloads will not work until you add your RapidAPI key and username** in **Settings → RapidAPI**. Signing in and browsing your library work without it — only downloading a `theme.mp3` needs it. The free RapidAPI tier is quota-limited, so Themearr backs off automatically when the quota is exhausted.
