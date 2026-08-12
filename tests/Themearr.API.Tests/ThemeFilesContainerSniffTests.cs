@@ -3,12 +3,16 @@ using Themearr.API.Services;
 namespace Themearr.API.Tests;
 
 /// <summary>
-/// Pins container sniffing for theme naming (issue #48). The extension is decided by the
-/// file's own leading bytes, never by a CDN Content-Type header — the confirmed
-/// production failure is precisely a promise ("mp3" converter API) contradicted by the
-/// delivered bytes (<c>format_name=mov,mp4,m4a</c> probed inside a theme.mp3), so the
-/// header is the one witness known to lie. The result is a closed two-value set
-/// {.mp3, .m4a}: a filename must never be derived from remote data.
+/// Pins container sniffing and the part-promotion that lands a theme under its sniffed
+/// name (issue #48). The extension is decided by the file's own leading bytes, never by
+/// a CDN Content-Type header — the confirmed production failure is precisely a promise
+/// ("mp3" converter API) contradicted by the delivered bytes
+/// (<c>format_name=mov,mp4,m4a</c> probed inside a theme.mp3), so the header is the one
+/// witness known to lie. The result is a closed two-value set {.mp3, .m4a}: a filename
+/// must never be derived from remote data. Promotion is ONE atomic move from the
+/// in-flight part to the final name — deciding the name and landing the file together is
+/// what keeps a reader from ever observing a wrongly-named or half-renamed theme (#48
+/// concurrency review).
 /// </summary>
 public class ThemeFilesContainerSniffTests
 {
@@ -20,6 +24,8 @@ public class ThemeFilesContainerSniffTests
         bytes.AddRange(System.Text.Encoding.ASCII.GetBytes(brand));
         return bytes.ToArray();
     }
+
+    private static readonly byte[] Id3 = [0x49, 0x44, 0x33, 9, 9, 9, 9, 9];
 
     [Fact]
     public void Sniff_ftypBox_isM4a_regardlessOfBrand()
@@ -34,7 +40,7 @@ public class ThemeFilesContainerSniffTests
     [Fact]
     public void Sniff_id3Tag_isMp3()
     {
-        Assert.Equal(".mp3", ThemeFiles.SniffedThemeExtension(new byte[] { 0x49, 0x44, 0x33, 9, 9, 9, 9, 9 }));
+        Assert.Equal(".mp3", ThemeFiles.SniffedThemeExtension(Id3));
     }
 
     [Fact]
@@ -66,61 +72,96 @@ public class ThemeFilesContainerSniffTests
     }
 
     [Fact]
-    public void Normalize_mp3NamedFileWithMp4Bytes_isRenamedToM4a()
+    public void Promote_mp4Part_landsAsThemeM4a()
     {
         using var dir = new TempDir();
-        var mp3Path = dir.File("theme.mp3");
-        File.WriteAllBytes(mp3Path, Ftyp("M4A "));
+        File.WriteAllBytes(ThemeFiles.ThemePartPath(dir.Path), Ftyp("M4A "));
 
-        var final = ThemeFiles.NormalizeThemeExtension(mp3Path);
+        var final = ThemeFiles.PromoteThemePart(dir.Path);
 
         Assert.Equal(dir.File("theme.m4a"), final);
-        Assert.True(File.Exists(final));
-        Assert.False(File.Exists(mp3Path));
         Assert.Equal(Ftyp("M4A "), File.ReadAllBytes(final));
+        Assert.False(File.Exists(ThemeFiles.ThemePartPath(dir.Path)));
+        Assert.False(File.Exists(dir.File("theme.mp3")));
     }
 
     [Fact]
-    public void Normalize_mp3NamedFileWithMp3Bytes_isLeftAlone()
+    public void Promote_mp3Part_landsAsThemeMp3()
     {
         using var dir = new TempDir();
-        var mp3Path = dir.File("theme.mp3");
-        File.WriteAllBytes(mp3Path, new byte[] { 0x49, 0x44, 0x33, 9, 9, 9 });
+        File.WriteAllBytes(ThemeFiles.ThemePartPath(dir.Path), Id3);
 
-        Assert.Equal(mp3Path, ThemeFiles.NormalizeThemeExtension(mp3Path));
-        Assert.True(File.Exists(mp3Path));
+        var final = ThemeFiles.PromoteThemePart(dir.Path);
+
+        Assert.Equal(dir.File("theme.mp3"), final);
+        Assert.Equal(Id3, File.ReadAllBytes(final));
+        Assert.False(File.Exists(dir.File("theme.m4a")));
     }
 
     [Fact]
-    public void Normalize_staleM4aSibling_isOverwrittenByTheRename()
+    public void Promote_unknownBytes_landAsThemeMp3()
     {
-        // A re-download that changes container must replace, not collide: the stale
-        // theme.m4a from a previous run is overwritten by the corrected new file.
+        using var dir = new TempDir();
+        dir.Write("theme.mp3.part", "not any known audio container");
+
+        Assert.Equal(dir.File("theme.mp3"), ThemeFiles.PromoteThemePart(dir.Path));
+    }
+
+    [Fact]
+    public void Promote_staleSameNameTheme_isOverwrittenAtomically()
+    {
+        // A re-download that keeps its container must replace, not collide: the stale
+        // theme.m4a from a previous run is overwritten by the single move.
         using var dir = new TempDir();
         dir.Write("theme.m4a", new byte[] { 1, 2, 3 });
-        var mp3Path = dir.File("theme.mp3");
-        File.WriteAllBytes(mp3Path, Ftyp("isom"));
+        File.WriteAllBytes(ThemeFiles.ThemePartPath(dir.Path), Ftyp("isom"));
 
-        var final = ThemeFiles.NormalizeThemeExtension(mp3Path);
+        var final = ThemeFiles.PromoteThemePart(dir.Path);
 
         Assert.Equal(dir.File("theme.m4a"), final);
         Assert.Equal(Ftyp("isom"), File.ReadAllBytes(final));
-        Assert.False(File.Exists(mp3Path));
     }
 
     [Fact]
-    public void Normalize_m4aNamedFileWithMp3Bytes_isRenamedToMp3()
+    public void Promote_otherNameSibling_isLeftForTheGatedCleanup()
     {
-        // Symmetric on purpose: the function corrects toward whatever the bytes say,
-        // so a future caller holding a differently-named theme gets the same behavior.
+        // Division of labor, on purpose: promotion lands the new file; removing the
+        // now-stale other-extension sibling is DownloadService's cleanup, which runs
+        // under the same per-folder gate so the two can never interleave with another
+        // landing. Promotion deleting siblings itself would duplicate that logic
+        // outside the gate's owner.
         using var dir = new TempDir();
-        var m4aPath = dir.File("theme.m4a");
-        File.WriteAllBytes(m4aPath, new byte[] { 0xFF, 0xFB, 0x90, 0x00 });
+        dir.Write("theme.mp3", new byte[] { 0x49, 0x44, 0x33, 9 });
+        File.WriteAllBytes(ThemeFiles.ThemePartPath(dir.Path), Ftyp("M4A "));
 
-        var final = ThemeFiles.NormalizeThemeExtension(m4aPath);
+        var final = ThemeFiles.PromoteThemePart(dir.Path);
 
-        Assert.Equal(dir.File("theme.mp3"), final);
-        Assert.True(File.Exists(final));
-        Assert.False(File.Exists(m4aPath));
+        Assert.Equal(dir.File("theme.m4a"), final);
+        Assert.True(File.Exists(dir.File("theme.mp3")));   // still there — cleanup's job
+    }
+
+    [Fact]
+    public void Promote_missingPart_throwsClearly_insteadOfSilentNoFileSuccess()
+    {
+        // A provider that reports success without delivering a file used to land as a
+        // silent "downloaded" with no theme on disk. The promote step is where that
+        // finally becomes a loud, actionable failure.
+        using var dir = new TempDir();
+
+        var ex = Assert.Throws<InvalidOperationException>(() => ThemeFiles.PromoteThemePart(dir.Path));
+        Assert.Contains("no file", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Promote_emptyPart_refusesAndRemovesThePart()
+    {
+        // Mirrors WriteAtomicAsync's 0-byte rule: an empty delivery must neither land
+        // nor leave a partial behind for the next attempt to trip over.
+        using var dir = new TempDir();
+        dir.Write("theme.mp3.part", Array.Empty<byte>());
+
+        Assert.Throws<InvalidOperationException>(() => ThemeFiles.PromoteThemePart(dir.Path));
+        Assert.False(File.Exists(ThemeFiles.ThemePartPath(dir.Path)));
+        Assert.False(File.Exists(dir.File("theme.mp3")));
     }
 }
