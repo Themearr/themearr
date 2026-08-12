@@ -13,6 +13,8 @@
 - **Movies and shows are parallel code paths.** Every task below that touches one must touch the other. `ILibrarySource.FetchAsync` is movie-only (`ILibrarySource.cs:21`), so nothing is shared automatically.
 - **Never edit an existing test to make a change pass.** If a change breaks a test, the change is wrong until proven otherwise.
 - **A test must fail for the right reason.** Every task's "run it and watch it fail" step states the expected failure message. If it fails differently, stop.
+- **Paste the red output into your report, verbatim.** A report showing only green cannot distinguish a test that binds from one that would pass with the implementation deleted. If test and implementation were written together, go back: disable the implementation, capture the failure, restore it, capture the pass. Both outputs go in the report.
+- **Restore with `git checkout <file>`, never `mv` from a `.bak`.** `sed -i.bak` preserves the original's mtime, so restoring by `mv` hands MSBuild a source file older than the compiled assembly — it skips the rebuild and the next run tests the *previous* build. That produced a false red here; the same mechanism produces a false **green** when you restore a broken change, which is the direction that ships bugs. If you must restore by hand, `touch` the file afterwards.
 - **Green is `Failed: 0, Skipped: 0`** — read both fields.
 - **Lint baseline is 0 errors, 3 warnings.** A fourth is yours.
 - **Comments explain _why_.** Match the density of `HostGuard.cs` / `ApiAuthMiddleware.cs`.
@@ -443,34 +445,56 @@ public class RecheckSchemaTests
     }
 
     [Fact]
-    public void Init_onAnUpgradedDatabase_leavesExistingRowsWithNullProvenance()
+    public void Init_migratesADatabaseThatPredatesTheColumns_preservingItsRows()
     {
+        // The only case that can lose data, and therefore the only one worth this much
+        // setup: a database built by the OLD schema, migrated for the first time. Calling
+        // Init() before inserting would prove nothing — the columns would already exist,
+        // and the test would pass even if the migration were deleted entirely.
         using var dir = new TempDir();
         var path = dir.File("upgrade.db");
 
-        // A history row written by the pre-upgrade schema: no picked_by, no match_score.
-        var db = new Database(path);
-        db.Init();
-        using (var conn = new SqliteConnection($"Data Source={path}"))
+        // Hand-build the pre-V3 theme_history: read the CREATE TABLE in Database.cs plus
+        // MigrateHistoryTable / MigrateHistoryTableV2 for the exact pre-migration shape.
+        using (var old = new SqliteConnection($"Data Source={path}"))
         {
-            conn.Open();
-            using var cmd = conn.CreateCommand();
-            cmd.CommandText =
-                "INSERT INTO theme_history (movie_id, movie_title, downloaded_at, media_type) " +
-                "VALUES ('m1', 'Dune', '2026-01-01T00:00:00Z', 'movie')";
-            cmd.ExecuteNonQuery();
+            old.Open();
+            using var create = old.CreateCommand();
+            create.CommandText = """
+                CREATE TABLE theme_history (
+                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                    movie_id      TEXT NOT NULL,
+                    movie_title   TEXT NOT NULL,
+                    movie_year    INTEGER,
+                    theme_title   TEXT,
+                    source_url    TEXT,
+                    downloaded_at TEXT NOT NULL,
+                    media_type    TEXT NOT NULL DEFAULT 'movie'
+                )
+                """;
+            create.ExecuteNonQuery();
+
+            using var insert = old.CreateCommand();
+            insert.CommandText =
+                "INSERT INTO theme_history (movie_id, movie_title, theme_title, downloaded_at, media_type) " +
+                "VALUES ('m1', 'Dune', 'Dune Main Theme', '2026-01-01T00:00:00Z', 'movie')";
+            insert.ExecuteNonQuery();
         }
 
-        new Database(path).Init();   // re-run migrations over the existing row
+        new Database(path).Init();   // first migration this database has ever seen
+
+        Assert.Contains("picked_by",   Columns(path, "theme_history"));
+        Assert.Contains("match_score", Columns(path, "theme_history"));
 
         using var check = new SqliteConnection($"Data Source={path}");
         check.Open();
         using var q = check.CreateCommand();
-        q.CommandText = "SELECT picked_by, match_score FROM theme_history WHERE movie_id = 'm1'";
+        q.CommandText = "SELECT theme_title, picked_by, match_score FROM theme_history WHERE movie_id = 'm1'";
         using var reader = q.ExecuteReader();
-        Assert.True(reader.Read());
-        Assert.True(reader.IsDBNull(0));
+        Assert.True(reader.Read(), "the pre-existing row must survive the migration");
+        Assert.Equal("Dune Main Theme", reader.GetString(0));
         Assert.True(reader.IsDBNull(1));
+        Assert.True(reader.IsDBNull(2));
     }
 }
 ```
