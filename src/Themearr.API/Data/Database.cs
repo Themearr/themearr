@@ -69,6 +69,8 @@ public class Database(string dbPath)
         MigrateMoviesTableV2(conn);
         MigrateMoviesTableV3(conn);
         MigrateMoviesTableV4(conn);
+        MigrateHistoryTableV3(conn);
+        MigrateRecheckColumns(conn);
         PruneDeadSettings(conn);
     }
 
@@ -233,6 +235,51 @@ public class Database(string dbPath)
 
         conn.Execute("DROP TABLE movies_v4_old");
         tx.Commit();
+    }
+
+    /// <summary>
+    /// Provenance for the re-check: which mechanism chose this theme, and the score
+    /// behind the pick. Both are null on rows written before the re-check shipped —
+    /// ThemeRecheckService resolves those from source_url instead, and takes a weaker
+    /// score test (see ThemeMatch.RejectionReason).
+    /// </summary>
+    private static void MigrateHistoryTableV3(SqliteConnection conn)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "PRAGMA table_info(theme_history)";
+        var columns = new HashSet<string>();
+        using (var r = cmd.ExecuteReader())
+            while (r.Read()) columns.Add(r.GetString(1));
+
+        if (!columns.Contains("picked_by"))
+            conn.Execute("ALTER TABLE theme_history ADD COLUMN picked_by TEXT");
+        if (!columns.Contains("match_score"))
+            conn.Execute("ALTER TABLE theme_history ADD COLUMN match_score INTEGER");
+    }
+
+    /// <summary>
+    /// "Is the theme any good" is orthogonal to "do I have a theme", so it gets its own
+    /// column rather than a new `status` value. Packing them together produces a
+    /// specific bug: the auto-download worker reconciles any 'pending' row that has a
+    /// theme file on disk straight back to 'downloaded' (AutoDownloadService.cs:176-180),
+    /// so a flagged item would leave the queue on the very next tick.
+    /// </summary>
+    private static void MigrateRecheckColumns(SqliteConnection conn)
+    {
+        foreach (var table in new[] { "movies", "shows" })
+        {
+            using var cmd = conn.CreateCommand();
+            // nosemgrep: csharp-sqli — `table` comes from the literal array above, never a caller
+            cmd.CommandText = $"PRAGMA table_info({table})";
+            var columns = new HashSet<string>();
+            using (var r = cmd.ExecuteReader())
+                while (r.Read()) columns.Add(r.GetString(1));
+
+            if (!columns.Contains("recheck_state"))
+                conn.Execute($"ALTER TABLE {table} ADD COLUMN recheck_state TEXT");   // nosemgrep: csharp-sqli
+            if (!columns.Contains("recheck_reason"))
+                conn.Execute($"ALTER TABLE {table} ADD COLUMN recheck_reason TEXT");  // nosemgrep: csharp-sqli
+        }
     }
 
     private static void MigrateMoviesTable(SqliteConnection conn)
