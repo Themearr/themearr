@@ -62,7 +62,7 @@ public class RejectionReasonTests
     {
         // THE false-flag guard. "opening credits" is a MusicPhrase (ThemeMatch.cs:25)
         // but contributes nothing to Score, and "[ost]" misses the literal " ost"
-        // (ThemeMatch.cs:147) that HasMusicEvidence matches via ContainsWord. So this
+        // (ThemeMatch.cs:200) that HasMusicEvidence matches via ContainsWord. So this
         // scored 15 at download time on its duration bonus alone and recomputes to 0.
         // Rejecting at `<= 0` here would re-download a theme that was always fine.
         Assert.Null(ThemeMatch.RejectionReason(

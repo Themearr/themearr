@@ -143,7 +143,7 @@ public static class ThemeMatch
     ///
     /// So a null storedScore (a row written before this feature) takes a deliberately
     /// weaker test: reject only a NEGATIVE recomputed score. Negative means the title
-    /// carries active negative markers (ThemeMatch.cs:168-172); zero means the evidence
+    /// carries active negative markers (ThemeMatch.cs:221-225); zero means the evidence
     /// word simply carries no weight in Score, which says nothing about quality. Legacy
     /// rows under-flag rather than false-flag, which is the right direction of error for a
     /// feature whose promise is that it never churns a good theme.
