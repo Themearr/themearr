@@ -1108,8 +1108,29 @@ The first test is the one that matters:
         // ALREADY 'downloaded', so a failed replacement reads as success, no cooldown is
         // applied, and the item is retried every 30 seconds forever. Re-check items must
         // be judged by whether recheck_state is still 'queued'.
+        using var dir = new TempDir();
+        var db = NewDb(dir);
+        var id = SeedDownloadedMovie(db, dir, "Dune");
+        db.SetRecheck(id, "movie", "queued", "looks like a trailer, clip or promo");
+
+        var worker = Build(db);
+        worker.NoteStartedForTest(id, wasRecheck: true);   // stand-in for _lastStartedMovieId
+        worker.RollLastOutcomeForTest();                   // the block at :148-156
+
+        // The download never landed, so the flag is untouched — and THAT, not `status`,
+        // is what must drive the cooldown.
+        Assert.Single(db.GetRecheckQueued("movie"));
+        Assert.True(worker.IsCoolingDownForTest(id),
+            "a failed replacement must cool down; judging it by `status` reports success "
+            + "for an item that was already 'downloaded' and retries it every tick");
     }
 ```
+
+The three `…ForTest` members are `internal` seams you add in Step 3 — the outcome
+block is private and has no other entry point. Add
+`[assembly: InternalsVisibleTo("Themearr.API.Tests")]` if the project does not already
+have it. If you find a way to drive this through the public surface instead, prefer that
+and say so in your report.
 
 Then:
 
