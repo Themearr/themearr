@@ -1173,7 +1173,11 @@ Follow `ShowAutoDownloadServiceTests`' existing fixture style — `ReadyProvider
 In both workers:
 - After the existing pending-candidate selection finds nothing, fall through to `db.GetRecheckQueued(mediaType)`, applying the same `_cooldownUntil` filter.
 - Track whether the last-started item was a re-check (e.g. `_lastStartedWasRecheck`), and in the outcome block judge a re-check item by `recheck_state == "queued"` rather than by `status`.
-- On no confident match for a re-check item, `db.SetRecheck(id, mediaType, "review", "no better match found")` instead of applying `NoMatchCooldown`.
+- On no confident match for a re-check item, move it to review with the **compare-and-set** form — `db.TrySetRecheck(id, mediaType, "review", "no better match found", expectedState: "queued")` — never the unconditional `SetRecheck`, and never `NoMatchCooldown`.
+
+  The guard is not defensive padding; it protects the feature's central promise. Between the worker reading an item as `'queued'` and its search returning, the user can click "Keep this" and move that row to `'kept'`. An unconditional write then discards an explicit human decision about their own library. The same guard also stops a stale tick re-flagging an item whose replacement already landed and cleared the flag. `TrySetRecheck` returns `false` in both cases; treat that as "someone else resolved this item" and move on without logging an error.
+
+- **Do not mark a re-check item's own progress with `SetRecheck`.** A row stays `'queued'` for the whole download, and `DownloadService` clears it on success (`DownloadService.cs`, the `AddThemeHistory` success block). Re-entry during that window is already prevented by the existing one-download-at-a-time guard — but note that guard has a watchdog that stops counting a job as in-flight after `DownloadTimeout` plus grace (`DownloadService.cs:85-89`), so a pathologically long download can let a later tick see the row as `'queued'` again. `TrySetRecheck`'s guard is what makes that harmless rather than a lost update.
 - Pass `pickedBy: "auto"` and the best result's `score` to `Start`.
 - Add `recheckQueuedCount` to `GetDiagnostics()` so `/api/auto-download/debug` shows the new candidate set.
 
