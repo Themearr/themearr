@@ -42,6 +42,7 @@ public class StatsController(Database db, PosterUrlSigner posterSigner, LibraryS
             addedThisWeek = stats.AddedThisWeek,
             recentActivity = stats.RecentActivity,
             recentlyAdded  = stats.RecentlyAdded,
+            needsAttention = stats.NeedsAttention,
         });
     }
 
@@ -60,6 +61,7 @@ public class StatsController(Database db, PosterUrlSigner posterSigner, LibraryS
             pending    = s.Pending,
             ignored    = s.Ignored,
             coverage   = s.Coverage,
+            needsAttention = s.NeedsAttention,
         });
     }
 }

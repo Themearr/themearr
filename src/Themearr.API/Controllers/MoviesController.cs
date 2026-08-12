@@ -81,7 +81,17 @@ public class MoviesController(
         // it. Without this, a movie deleted while auto-download is on would keep its stale
         // 'downloaded' status and never be re-fetched once the worker stops disk-scanning
         // every movie every tick.
-        if (deleted) db.SetMovieStatus(movieId, "pending");
+        if (deleted)
+        {
+            db.SetMovieStatus(movieId, "pending");
+
+            // The 'kept' escape hatch depends on this: deleting the theme is the
+            // documented way back from a permanent 'kept' verdict, so leaving the flag in
+            // place would make that verdict un-undoable. It also stops the item being
+            // double-counted (pending in the queue AND still "needs attention") and stops
+            // recheck_reason describing a file that no longer exists.
+            db.ClearRecheck(movieId, "movie");
+        }
 
         return Ok(new { deleted });
     }
@@ -100,6 +110,30 @@ public class MoviesController(
         if (db.GetMovie(movieId) == null) return NotFound(new { detail = "Movie not found" });
         db.SetMovieIgnored(movieId, false);
         return Ok(new { ignored = false });
+    }
+
+    // The two re-check resolutions a human can make on a flagged movie. Both preserve the
+    // existing recheck_reason rather than clearing it: 'kept' rows never surface it again
+    // (GetFlaggedItems excludes 'kept'), but a 'queued' row still shows in the flagged
+    // list while the replacement search runs, and clearing the reason here would blank
+    // that text for no reason. There is no single-row recheck read to pull it from other
+    // than GetFlaggedItems itself — SetRecheck always writes state and reason together.
+    [HttpPost("movies/{movieId}/recheck/keep")]
+    public IActionResult RecheckKeep(string movieId)
+    {
+        if (db.GetMovie(movieId) == null) return NotFound(new { detail = "Movie not found" });
+        var reason = db.GetFlaggedItems().FirstOrDefault(i => i.MediaType == "movie" && i.Id == movieId)?.Reason;
+        db.SetRecheck(movieId, "movie", "kept", reason);
+        return Ok(new { state = "kept" });
+    }
+
+    [HttpPost("movies/{movieId}/recheck/replace")]
+    public IActionResult RecheckReplace(string movieId)
+    {
+        if (db.GetMovie(movieId) == null) return NotFound(new { detail = "Movie not found" });
+        var reason = db.GetFlaggedItems().FirstOrDefault(i => i.MediaType == "movie" && i.Id == movieId)?.Reason;
+        db.SetRecheck(movieId, "movie", "queued", reason);
+        return Ok(new { state = "queued" });
     }
 
     [HttpGet("movies/{movieId}/theme/audio")]
