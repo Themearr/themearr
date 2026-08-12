@@ -105,7 +105,7 @@ public class DownloadServiceTests
         using var movieDir = new TempDir();
         var (svc, _, movieId) = Build(movieDir.Path, new HangingProvider(), timeoutSeconds: 1);
 
-        Assert.True(svc.Start(movieId, YtUrl));
+        Assert.True(svc.Start(movieId, YtUrl, "movie", "auto"));
 
         // Pre-fix (no timeout, default token) the job stays InProgress forever, which
         // wedges the auto-download loop's IsAnyInProgress() gate until a restart.
@@ -124,7 +124,7 @@ public class DownloadServiceTests
         // 1s timeout + 1s grace = stale after ~2s, even if the provider ignores cancellation.
         var (svc, _, movieId) = Build(movieDir.Path, new StubbornProvider(), timeoutSeconds: 1, watchdogGraceSeconds: 1);
 
-        Assert.True(svc.Start(movieId, YtUrl));
+        Assert.True(svc.Start(movieId, YtUrl, "movie", "auto"));
         Assert.True(svc.IsAnyInProgress()); // blocks the loop right after starting
 
         // The watchdog must age the stuck job out so the auto-download loop is never
@@ -143,7 +143,7 @@ public class DownloadServiceTests
         var provider = new RecordingProvider();
         var (svc, db, movieId) = Build(movieDir.Path, provider, timeoutSeconds: 900);
 
-        Assert.True(svc.Start(movieId, YtUrl));
+        Assert.True(svc.Start(movieId, YtUrl, "movie", "auto"));
         var status = await WaitForFinish(svc, movieId, TimeSpan.FromSeconds(8));
 
         Assert.True((bool)Prop(status, "finished")!);
@@ -161,7 +161,7 @@ public class DownloadServiceTests
 
         Assert.Null(svc.DownloadBlockedReason(isProviderUrl: true)); // not cooling down yet
 
-        Assert.True(svc.Start(movieId, YtUrl));
+        Assert.True(svc.Start(movieId, YtUrl, "movie", "auto"));
         await WaitForFinish(svc, movieId, TimeSpan.FromSeconds(8));
 
         // After a 429, provider-bound downloads (manual AND auto) must be gated with a
@@ -184,7 +184,7 @@ public class DownloadServiceTests
         System.Diagnostics.Process.Start("chmod", $"555 {movieDir.Path}")!.WaitForExit();
         try
         {
-            Assert.True(svc.Start(movieId, YtUrl));
+            Assert.True(svc.Start(movieId, YtUrl, "movie", "auto"));
             var status = await WaitForFinish(svc, movieId, TimeSpan.FromSeconds(8));
 
             Assert.True((bool)Prop(status, "finished")!);
@@ -195,5 +195,53 @@ public class DownloadServiceTests
         {
             System.Diagnostics.Process.Start("chmod", $"755 {movieDir.Path}")!.WaitForExit();
         }
+    }
+
+    [Fact]
+    public async Task Start_recordsProvenanceOnTheHistoryRow()
+    {
+        // Whether a human or the matcher chose the video is the fact the re-check needs
+        // and nothing recorded before now — every path funnelled through one Start call.
+        using var movieDir = new TempDir();
+        var (svc, db, movieId) = Build(movieDir.Path, new RecordingProvider(), timeoutSeconds: 900);
+
+        Assert.True(svc.Start(movieId, YtUrl, "movie", "manual"));
+        var status = await WaitForFinish(svc, movieId, TimeSpan.FromSeconds(8));
+        Assert.Null((string?)Prop(status, "error"));
+
+        var p = db.GetLatestThemeProvenance(movieId, "movie");
+        Assert.Equal("manual", p!.PickedBy);
+    }
+
+    [Fact]
+    public async Task Start_onSuccess_clearsAnyRecheckFlag()
+    {
+        // The flag must not outlive the problem. Clearing here rather than in the worker
+        // means a manual replacement from the movies page clears it too, for free.
+        using var movieDir = new TempDir();
+        var (svc, db, movieId) = Build(movieDir.Path, new RecordingProvider(), timeoutSeconds: 900);
+        db.SetRecheck(movieId, "movie", "queued", "title changed since match");
+
+        Assert.True(svc.Start(movieId, YtUrl, "movie", "auto"));
+        var status = await WaitForFinish(svc, movieId, TimeSpan.FromSeconds(8));
+        Assert.Null((string?)Prop(status, "error"));
+
+        Assert.Empty(db.GetRecheckQueued("movie"));
+    }
+
+    [Fact]
+    public async Task Start_onFailure_leavesTheRecheckFlagInPlace()
+    {
+        // Combined with WriteAtomicAsync (ThemeFiles.cs:93), this is the promise that a
+        // failed replacement costs nothing: old theme still on disk, still flagged.
+        using var movieDir = new TempDir();
+        var (svc, db, movieId) = Build(movieDir.Path, new QuotaExhaustedProvider(), timeoutSeconds: 900);
+        db.SetRecheck(movieId, "movie", "queued", "title changed since match");
+
+        Assert.True(svc.Start(movieId, YtUrl, "movie", "auto"));
+        var status = await WaitForFinish(svc, movieId, TimeSpan.FromSeconds(8));
+        Assert.NotNull((string?)Prop(status, "error"));
+
+        Assert.Single(db.GetRecheckQueued("movie"));
     }
 }

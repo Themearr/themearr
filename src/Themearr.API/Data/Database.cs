@@ -1069,6 +1069,30 @@ public class Database(string dbPath)
     public void ClearRecheck(string id, string mediaType) => SetRecheck(id, mediaType, null, null);
 
     /// <summary>
+    /// Compare-and-set on recheck_state: writes only when the row still holds
+    /// <paramref name="expectedState"/>, and reports whether it did. Returns false when
+    /// another writer moved the row first — a user clicking "Keep this" while a worker
+    /// was mid-search, or a replacement that landed and cleared the flag. The plain
+    /// <see cref="SetRecheck"/> is last-writer-wins, which silently discards whichever
+    /// write lost; this exists for the one caller (the re-check worker's "no better match
+    /// found" write) where losing silently would mean overriding a user's explicit choice.
+    /// SQLite's `=` never matches NULL, so a null <paramref name="expectedState"/> (a row
+    /// that was never flagged, or was just cleared) needs `IS` instead of `=`.
+    /// </summary>
+    public bool TrySetRecheck(string id, string mediaType, string? newState, string? reason, string? expectedState)
+    {
+        using var conn = Open();
+        var table = TableFor(mediaType);
+        var changed = conn.ExecuteAffected(
+            $"UPDATE {table} SET recheck_state = @s, recheck_reason = @r WHERE id = @id AND recheck_state IS @expected",
+            ("@s", (object?)newState ?? DBNull.Value),
+            ("@r", (object?)reason ?? DBNull.Value),
+            ("@id", id),
+            ("@expected", (object?)expectedState ?? DBNull.Value));
+        return changed == 1;
+    }
+
+    /// <summary>
     /// 'queued' + 'review', matching <see cref="GetFlaggedItems"/>'s population — the
     /// dashboard's count and the queue page's list must agree, or "3 need attention" next
     /// to a 1-row list reads as a bug. 'kept' is excluded: it is resolved, not pending.
@@ -1171,6 +1195,18 @@ file static class SqliteExtensions
         foreach (var (name, value) in parameters)
             cmd.Parameters.AddWithValue(name, value ?? DBNull.Value);
         cmd.ExecuteNonQuery();
+    }
+
+    // Same as Execute, but surfaces the affected-row count instead of discarding it — for
+    // the rare caller (TrySetRecheck's compare-and-set) that needs to know whether its
+    // WHERE clause actually matched a row, not just that the statement ran.
+    public static int ExecuteAffected(this SqliteConnection conn, string sql, params (string name, object? value)[] parameters)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = sql; // nosemgrep: csharp-sqli — literal SQL only; all values bound via SqliteParameter
+        foreach (var (name, value) in parameters)
+            cmd.Parameters.AddWithValue(name, value ?? DBNull.Value);
+        return cmd.ExecuteNonQuery();
     }
 
     // Callback form: the command and reader are disposed here, so no SqliteCommand

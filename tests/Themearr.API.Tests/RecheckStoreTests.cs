@@ -156,4 +156,60 @@ public class RecheckStoreTests
         Assert.Null(p!.PickedBy);
         Assert.Null(p.MatchScore);
     }
+
+    [Fact]
+    public void TrySetRecheck_succeeds_whenExpectedStateMatches()
+    {
+        using var dir = new TempDir();
+        var db = NewDb(dir);
+        SeedMovie(db, dir, "p1", "Dune");
+        var id = db.GetAllMovies().Single()["id"]!.ToString()!;
+        db.SetRecheck(id, "movie", "queued", "looks like a trailer, clip or promo");
+
+        var ok = db.TrySetRecheck(id, "movie", "review", "no better match found", expectedState: "queued");
+
+        Assert.True(ok);
+        var row = db.GetRecheckCandidates("movie").Single();
+        Assert.Equal("review", row["recheckState"]);
+    }
+
+    [Fact]
+    public void TrySetRecheck_returnsFalse_andLeavesTheRowUnchanged_whenExpectedStateDoesNotMatch()
+    {
+        using var dir = new TempDir();
+        var db = NewDb(dir);
+        SeedMovie(db, dir, "p1", "Dune");
+        var id = db.GetAllMovies().Single()["id"]!.ToString()!;
+        db.SetRecheck(id, "movie", "queued", "looks like a trailer, clip or promo");
+
+        var ok = db.TrySetRecheck(id, "movie", "review", "no better match found", expectedState: "kept");
+
+        Assert.False(ok);
+        var row = db.GetRecheckCandidates("movie").Single();
+        Assert.Equal("queued", row["recheckState"]);
+    }
+
+    [Fact]
+    public void TrySetRecheck_refusesToOverwrite_aRowAUserHasAlreadyKept()
+    {
+        // The worker read the row as 'queued' and started searching. While it searched,
+        // the user clicked "Keep this", moving the row to 'kept'. The worker's write
+        // ('review', because its search found nothing better) must not land — the user's
+        // explicit choice is the whole reason TrySetRecheck exists instead of the
+        // last-writer-wins SetRecheck.
+        using var dir = new TempDir();
+        var db = NewDb(dir);
+        SeedMovie(db, dir, "p1", "Dune");
+        var id = db.GetAllMovies().Single()["id"]!.ToString()!;
+        db.SetRecheck(id, "movie", "queued", "looks like a trailer, clip or promo");
+
+        // The user's decision lands first, while the worker still believes it is 'queued'.
+        db.SetRecheck(id, "movie", "kept", null);
+
+        var ok = db.TrySetRecheck(id, "movie", "review", "no better match found", expectedState: "queued");
+
+        Assert.False(ok);
+        var row = db.GetRecheckCandidates("movie").Single();
+        Assert.Equal("kept", row["recheckState"]);
+    }
 }

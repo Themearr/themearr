@@ -227,7 +227,9 @@ public class AutoDownloadService(
         var url = $"https://www.youtube.com/watch?v={videoId}";
 
         log.LogInformation("AutoDownload: starting '{Title}' ({Year}) → {VideoId}", LogSanitizer.Clean(title), year, LogSanitizer.Clean(videoId));
-        if (!download.Start(movieId, url))
+        // The matcher picked this candidate, not a person — "auto" — carrying its score
+        // along so the re-check can weigh a later match against the one that shipped.
+        if (!download.Start(movieId, url, "movie", "auto", best["score"] as int?))
         {
             // Raced with another starter — try again next tick.
             _cooldownUntil[movieId] = DateTime.UtcNow + ErrorCooldown;

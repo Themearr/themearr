@@ -81,7 +81,8 @@ public class ShowsController(
             return UnprocessableEntity(new { detail = notReady });
         }
 
-        download.Start(showId, $"https://www.youtube.com/watch?v={req.VideoId}", "show");
+        // A human picked this specific video from the search results — "manual".
+        download.Start(showId, $"https://www.youtube.com/watch?v={req.VideoId}", "show", "manual");
         return Accepted(new { started = true, showId });
     }
 
@@ -108,7 +109,8 @@ public class ShowsController(
             return UnprocessableEntity(new { detail = notReady });
         }
 
-        download.Start(showId, req.Url, "show");
+        // A human pasted this URL directly — "manual".
+        download.Start(showId, req.Url, "show", "manual");
         return Accepted(new { started = true, showId });
     }
 

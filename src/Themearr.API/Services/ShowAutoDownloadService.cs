@@ -208,7 +208,9 @@ public class ShowAutoDownloadService(
 
         log.LogInformation("ShowAutoDownload: starting '{Title}' → {VideoId}",
             LogSanitizer.Clean(title), LogSanitizer.Clean(videoId));
-        if (!download.Start(showId, url, "show"))
+        // The matcher picked this candidate, not a person — "auto" — carrying its score
+        // along so the re-check can weigh a later match against the one that shipped.
+        if (!download.Start(showId, url, "show", "auto", best["score"] as int?))
         {
             // Raced with another starter — try again next tick.
             _cooldownUntil[showId] = DateTime.UtcNow + ErrorCooldown;

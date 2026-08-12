@@ -158,7 +158,9 @@ public class MoviesController(
 
         var videoId = best["videoId"]?.ToString() ?? "";
         var url     = $"https://www.youtube.com/watch?v={videoId}";
-        download.Start(movieId, url);
+        // A person clicked the button, but the matcher picked the video — "auto" is
+        // about who chose the result, not who triggered the request.
+        download.Start(movieId, url, "movie", "auto", best["score"] as int?);
 
         return Accepted(new { started = true, movieId, videoId, videoTitle = best["title"] });
     }
@@ -177,7 +179,8 @@ public class MoviesController(
         }
 
         var url = $"https://www.youtube.com/watch?v={req.VideoId}";
-        download.Start(req.MovieId, url);
+        // A human picked this specific video from the search results — "manual".
+        download.Start(req.MovieId, url, "movie", "manual");
         return Accepted(new { started = true, movieId = req.MovieId });
     }
 
@@ -206,7 +209,8 @@ public class MoviesController(
             return UnprocessableEntity(new { detail = notReady });
         }
 
-        download.Start(req.MovieId, req.Url);
+        // A human pasted this URL directly — "manual".
+        download.Start(req.MovieId, req.Url, "movie", "manual");
         return Accepted(new { started = true, movieId = req.MovieId });
     }
 
