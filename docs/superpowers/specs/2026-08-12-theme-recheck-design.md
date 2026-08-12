@@ -191,7 +191,7 @@ Each transition has exactly one owner:
 | `queued → review` | `AutoDownloadService`, `ShowAutoDownloadService` | no confident match |
 | `queued → NULL` | `DownloadService` | in the success block that already sets status and writes history (`DownloadService.cs:211-213`) |
 | `review → kept/queued` | `MoviesController`, `ShowsController` | the two user actions |
-| `any → NULL` | `DeleteTheme` | alongside the status reset it already does (`MoviesController.cs:84`) |
+| `any → NULL` | `DeleteTheme` | a change this feature must make: today it only resets status (`MoviesController.cs:84`), and `ClearRecheck` has a single caller (`DownloadService.cs:227`). Without it the `'kept'` escape hatch below does not exist, and a deleted theme leaves a stale flag that double-counts the item. |
 
 Putting clear-on-success in `DownloadService` rather than in the worker means a manual
 replacement from the movies page clears the flag too, for free — the flag cannot outlive

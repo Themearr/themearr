@@ -1212,6 +1212,14 @@ git commit -m "feat: let the auto-download workers replace flagged themes"
 | `POST /api/shows/{id}/recheck/keep`, `.../replace` | the show mirrors |
 | `POST /api/shows/auto-download/{showId}` | **new** — mirrors `MoviesController.AutoDownload` (`:127-164`) |
 
+**Also in this task: `DeleteTheme` must clear the re-check flag** — movies and shows both. It currently only resets status to `'pending'` (`MoviesController.cs:84`); `ClearRecheck` is called from exactly one place in the codebase, `DownloadService.cs:227`, so deleting a theme today leaves its flag behind. Three things break without this:
+
+- **The `'kept'` escape hatch stops existing.** The design says `'kept'` is permanent and deleting the theme is the way back. If the flag survives the delete, a user who clicks "Keep this" can never undo it.
+- **The item is counted twice** — `'pending'` in the queue because it has no theme, and "needs attention" because it is still flagged.
+- **`recheck_reason` describes a file that no longer exists.**
+
+Add it beside the existing status reset, and test it for both media types: flag an item, delete its theme, assert `recheck_state` is NULL — including from `'kept'`, which is the case that proves the escape hatch works.
+
 **Why the new show endpoint** (a scoped amendment to the spec): the shows adapter composes auto-download client-side out of search + the *manual* download endpoint (`media/adapter.ts`), so a show theme the matcher chose would be recorded `picked_by = 'manual'` and could never be auto-replaced. A server-side endpoint makes the provenance honest rather than trusting a client flag, and closes a movie/show parity gap that already existed.
 
 - [ ] **Step 1: Write the failing tests**
