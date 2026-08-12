@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -99,6 +99,33 @@ describe("a slow ignore's outcome cannot act on the item the user browsed to", (
     expect(screen.queryByText('server down')).toBeNull()
     // And nothing is wedged: the button is usable for the item actually shown.
     expect(screen.getByRole('button', { name: /^ignore$/i })).not.toBeDisabled()
+  })
+
+  it('an ignore resolving in the effect gap right after Skip cannot advance twice', async () => {
+    const user = userEvent.setup()
+    const ignore = deferredIgnore()
+    vi.mocked(api.moviesApi.ignoreMovie).mockReturnValue(ignore.promise as never)
+
+    renderPage()
+    await screen.findByText('3 movies left in queue')
+
+    // Ignore A (in flight), then Skip -- which advances to B immediately.
+    await user.click(screen.getByRole('button', { name: /^ignore$/i }))
+    const skip = screen.getByRole('button', { name: /^skip$/i })
+
+    // The ignore resolves in the same breath as the Skip click, before React's
+    // passive effects re-sync the on-screen key: its success check must not
+    // read the stale key, match, and advance a second time -- off B.
+    await act(async () => {
+      fireEvent.click(skip)
+      ignore.resolve({ ignored: true })
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(screen.queryByText('2 movies left in queue')).not.toBeNull()
+    expect(screen.queryByText('1 movie left in queue')).toBeNull()
   })
 
   it('an ignore success does not advance the queue past the movie now on screen', async () => {

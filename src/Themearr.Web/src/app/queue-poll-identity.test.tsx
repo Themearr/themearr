@@ -305,6 +305,116 @@ describe("the poll cannot act on the previous job's status before the start POST
   })
 })
 
+// The 3s auto-skip timer armed by a server-reported failure re-checks the
+// attempt and the media at fire time -- but auto mode itself can have been
+// turned OFF in those three seconds, which is the user explicitly taking
+// manual control of the failed item. No new attempt starts (the auto effect's
+// autoTriggeredFor guard holds), so the attempt gate alone cannot catch it.
+describe('the auto-mode skip timer respects auto mode being turned off', () => {
+  it('does not auto-skip an item the user took manual control of', async () => {
+    vi.mocked(api.settingsApi.get).mockResolvedValue({ autoDownload: true } as never)
+    vi.mocked(api.settingsApi.save).mockResolvedValue({} as never)
+    vi.mocked(api.moviesApi.autoDownload).mockResolvedValue({ started: true } as never)
+
+    renderPage()
+    await flush(50)
+    expect(api.moviesApi.autoDownload).toHaveBeenCalledWith('a')
+
+    // The server reports the download failed; the settle arms the auto-skip.
+    movieStatus = { inProgress: false, finished: true, error: 'A failed', logs: [] }
+    await flush(1100)
+    expect(screen.queryByText('A failed')).not.toBeNull()
+
+    // The user turns auto off to deal with A by hand. (The toggle's own
+    // setError('') clears the banner -- pre-existing design.)
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /auto/i })) })
+    await flush(50)
+
+    // The timer fires -- and must not move the queue out from under them.
+    await flush(3500)
+    expect(screen.queryByText('3 movies left in queue')).not.toBeNull()
+    expect(screen.queryByText('2 movies left in queue')).toBeNull()
+  })
+})
+
+// During the switch-back torn beat, `current` still comes from the OTHER
+// library's list while `media` is already back -- and movie/show ids come from
+// different tables, so they can collide (the backend namespaces its job keys
+// for exactly this, DownloadService.cs JobKey). The on-screen key must not
+// vouch for an item the page is not truthfully showing.
+describe('the torn beat cannot vouch for a colliding id', () => {
+  it('a finish landing in the switch-back beat cannot advance the re-based queue', async () => {
+    vi.mocked(api.moviesApi.list).mockResolvedValue([
+      item('h', 'Movie H', 2001),
+      item('b', 'Movie B', 2002),
+      item('c', 'Movie C', 2003),
+    ] as never)
+    // A show sharing the movie's id, at the head of the shows queue.
+    vi.mocked(api.showsApi.list).mockResolvedValue([item('h', 'Show H', 2004)] as never)
+
+    renderPage()
+    await flush(50)
+    await startDownload()
+    await flush(1100)
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^Shows$/ })) })
+    await flush(50)
+    expect(screen.queryByText('1 show left in queue')).not.toBeNull()
+
+    // Switching back: the movies refetch is held in flight, so the torn beat
+    // lasts while the poll keeps ticking.
+    let landMoviesRefetch!: (v: unknown) => void
+    vi.mocked(api.moviesApi.list).mockReturnValue(new Promise(res => { landMoviesRefetch = res }) as never)
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^Movies$/ })) })
+
+    // The download finishes during the beat. `current` is still Show H --
+    // same id, wrong library -- so nothing may treat it as Movie H on screen.
+    movieStatus = { inProgress: false, finished: true, error: null, logs: [] }
+    await flush(1100)
+
+    // The refetch lands, already excluding the downloaded H: the queue starts
+    // at B. An advance during the beat would have re-based onto index 1 --
+    // silently dropping B from triage.
+    landMoviesRefetch([item('b', 'Movie B', 2002), item('c', 'Movie C', 2003)])
+    await flush(50)
+    expect(screen.queryByText('2 movies left in queue')).not.toBeNull()
+    expect(screen.queryByText('1 movie left in queue')).toBeNull()
+  })
+})
+
+// The on-screen key syncs via a passive effect; a status tick resuming in the
+// commit-to-effect gap after an "Up next" click reads the PREVIOUS key -- which
+// matches its own forKey -- and its advance lands on the re-indexed list,
+// skipping the item the user just browsed to.
+describe('a settle resuming in the effect gap after browsing cannot advance', () => {
+  it("a finish tick in the gap does not skip the browsed-to movie", async () => {
+    let resolveStatus: ((v: unknown) => void) | null = null
+    vi.mocked(api.moviesApi.downloadStatus).mockImplementation((() =>
+      new Promise(res => { resolveStatus = res })) as never)
+
+    renderPage()
+    await flush(50)
+    await startDownload()
+    // Tick 1 issues its status request, which we hold open.
+    await flush(1100)
+    expect(resolveStatus).not.toBeNull()
+
+    // The user browses to Movie B, and the held status resolves "finished" in
+    // the same breath -- before React's passive effects re-sync the key.
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /movie b/i }))
+      resolveStatus!({ inProgress: false, finished: true, error: null, logs: [] })
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    // B is on the card and must still be: the finish belonged to A.
+    expect(screen.queryByText('2 movies left in queue')).not.toBeNull()
+    expect(screen.queryByText('1 movie left in queue')).toBeNull()
+  })
+})
+
 // advanceQueue clears the log tail on success, but a failure settle left it in
 // state -- and the panel renders whatever is there the moment the NEXT download
 // starts, until that download's first status tick overwrites it.

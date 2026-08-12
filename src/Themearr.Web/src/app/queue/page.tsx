@@ -138,6 +138,10 @@ export default function QueuePage() {
     setManualUrl('')
     searchedFor.current      = null
     autoTriggeredFor.current = null
+    // Synchronous for the same commit-to-effect-gap reason as mediaRef above:
+    // nothing is truthfully on screen until the new list lands, and a settle
+    // reading the old key in the gap could still act on the old item.
+    onScreenKeyRef.current   = null
     // Invalidates any in-flight search: its results belong to the library the
     // user just left, and the new library's search claims a fresh stamp.
     searchSeq.current++
@@ -155,8 +159,24 @@ export default function QueuePage() {
   // that outlive the render they were created in. Media-qualified because
   // movie and show ids come from different tables and can collide -- a bare id
   // can't tell movie 7 from show 7 across the toggle.
+  //
+  // Null during the switch's torn beat (listFor !== media): `current` is still
+  // the OTHER library's item then, and stamping it with the new media's prefix
+  // would vouch for a colliding id -- movie H's finish landing while show H
+  // sits behind the loading branch would read as "H is on screen" and advance
+  // a queue about to be re-based. Null is the truthful value: the page renders
+  // loading, so nothing is on screen, and every settle path fails closed.
+  //
+  // This passive sync is the CONVERGENCE path, not the only writer: the sites
+  // that change what's on screen (Up-next clicks, advanceQueue, switchMedia)
+  // also assign synchronously, because a settle resuming in the commit-to-
+  // effect gap would otherwise read the previous key -- which matches its own
+  // forKey -- and advance over the item the user just browsed to. Same window
+  // switchMedia already treats as real for mediaRef.
   const onScreenKeyRef = useRef<string | null>(null)
-  useEffect(() => { onScreenKeyRef.current = current ? `${media}:${current.id}` : null }, [current, media])
+  useEffect(() => {
+    onScreenKeyRef.current = current && listFor === media ? `${media}:${current.id}` : null
+  }, [current, media, listFor])
 
   // ── Load auto mode setting ──────────────────────────────────────────────────
   useEffect(() => {
@@ -246,6 +266,12 @@ export default function QueuePage() {
   // and always advances -- it acts on the user's immediate click. Ignore also
   // passes nothing, but only calls this after its own check that the ignored
   // item is still on screen (see skipForever).
+  // Callers whose advance can be followed by a settle reading onScreenKeyRef
+  // in the commit-to-effect gap must null the ref themselves first (see the
+  // Skip button and the auto-skip timer): the write can't live here because
+  // this function is referenced from the poll effect, and the compiler lint
+  // (react-hooks/immutability) forbids effect-reachable functions mutating a
+  // ref an effect also writes.
   function advanceQueue(forMovieId?: string) {
     if (forMovieId !== undefined && downloadingMovieId.current !== forMovieId) return
     setCurrentIdx((i: number) => i + 1)
@@ -281,6 +307,20 @@ export default function QueuePage() {
     // status tick overwrites it. (advanceQueue already clears it on success.)
     setDownloadLogs([])
     if (onScreenKeyRef.current === forKey) setError(message)
+  }
+
+  // The Skip button. Not advanceQueue directly: the ref is nulled first
+  // (synchronously, like mediaRef in switchMedia) so an in-flight ignore
+  // resolving in the commit-to-effect gap can't read the pre-advance key,
+  // match, and advance a second time -- skipping the item Skip just moved to.
+  // The disable is the same trade login/page.tsx:57 makes: the compiler lint
+  // can't see that this handler only runs on click, and every lint-legal home
+  // for the write (inside advanceQueue, an inline arrow) it rejects too --
+  // while accepting the identical writes in switchMedia.
+  function skipCurrent() {
+    // eslint-disable-next-line react-hooks/immutability
+    onScreenKeyRef.current = null
+    advanceQueue()
   }
 
   // The ignore round-trip has the same shape as a download request: the queue
@@ -414,11 +454,21 @@ export default function QueuePage() {
             setTimeout(() => {
               // Re-checked at fire time: three seconds is long enough for auto
               // mode to have started the next item's download (whose freshly
-              // shown error this would wipe) or for the user to be triaging
-              // the other library (whose queue this would advance).
+              // shown error this would wipe), for the user to be triaging
+              // the other library (whose queue this would advance) -- or for
+              // them to have turned auto OFF to handle this item by hand, in
+              // which case no new attempt bumps the stamp and only this check
+              // stops the queue being moved out from under them.
+              if (!autoModeRef.current) return
               if (downloadAttempt.current !== attempt) return
               if (mediaRef.current !== forMedia) return
               setError('')
+              // Nulled before the advance (advanceQueue can't do it -- see its
+              // comment): the user can have clicked Ignore on the failed item
+              // inside this timer's 3s window, and that ignore resolving in
+              // the commit-to-effect gap would read the pre-advance key,
+              // match, and advance a second time.
+              onScreenKeyRef.current = null
               advanceQueue()
             }, 3000)
           }
@@ -620,9 +670,7 @@ export default function QueuePage() {
           <Button variant="ghost" size="sm" onClick={skipForever} disabled={downloading || ignoring} title={`Never show this ${adapter.labels.singular} in the queue again`}>
             Ignore
           </Button>
-          {/* Wrapped, not passed directly: advanceQueue's first parameter is a
-              movie id, and handing it the click event would make it a no-op. */}
-          <Button variant="ghost" size="sm" onClick={() => advanceQueue()} disabled={downloading}>
+          <Button variant="ghost" size="sm" onClick={skipCurrent} disabled={downloading}>
             Skip
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
               <path d="M5 12h14M12 5l7 7-7 7" />
@@ -664,7 +712,15 @@ export default function QueuePage() {
               {pending.slice(currentIdx + 1, currentIdx + 11).map((movie: MediaItem, i: number) => (
                 <button
                   key={movie.id}
-                  onClick={() => setCurrentIdx(currentIdx + 1 + i)}
+                  onClick={() => {
+                    // Synchronous, like mediaRef in switchMedia: a status tick
+                    // resuming in the commit-to-effect gap would read the
+                    // PREVIOUS key, match its own forKey, and advance -- over
+                    // the item just clicked. Here the next key IS knowable:
+                    // it's this row's.
+                    onScreenKeyRef.current = `${media}:${movie.id}`
+                    setCurrentIdx(currentIdx + 1 + i)
+                  }}
                   className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-[#1D2939]/60 transition-colors text-left"
                 >
                   <span className="text-xs text-[#475467] w-4 flex-shrink-0">{i + 1}</span>
