@@ -10,7 +10,10 @@ namespace Themearr.API.Controllers;
 [Route("api")]
 public class MoviesController(
     Database db, YoutubeService youtube, DownloadService download, PosterUrlSigner posterSigner,
-    LibrarySourceResolver sources, ILogger<MoviesController> log) : ControllerBase
+    LibrarySourceResolver sources, ILogger<MoviesController> log,
+    // Optional so the existing test constructions keep compiling, and null-safe because
+    // the delete-side refresh is best-effort anyway — same pattern as DownloadService.
+    PlexService? plex = null) : ControllerBase
 {
     [HttpGet("movies")]
     public IActionResult ListMovies()
@@ -81,7 +84,19 @@ public class MoviesController(
         // it. Without this, a movie deleted while auto-download is on would keep its stale
         // 'downloaded' status and never be re-fetched once the worker stops disk-scanning
         // every movie every tick.
-        if (deleted) db.SetMovieStatus(movieId, "pending");
+        if (deleted)
+        {
+            db.SetMovieStatus(movieId, "pending");
+
+            // Plex keeps playing its cached theme until the item is refreshed — the same
+            // staleness issue #45 fixed for downloads, in the delete direction. Fire and
+            // forget: this action's signature is pinned synchronous, and a DELETE must
+            // not wait out PlexService.RefreshTimeout on a wedged server. The helper
+            // never faults, so discarding the task can't drop an exception.
+            _ = plex?.TryRefreshItemMetadataAsync(
+                movie.GetValueOrDefault("source")?.ToString(),
+                movie.GetValueOrDefault("sourceRef")?.ToString(), log, movieId);
+        }
 
         return Ok(new { deleted });
     }
