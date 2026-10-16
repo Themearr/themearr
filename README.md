@@ -234,7 +234,7 @@ Two caveats:
 ### Requirements
 
 - [.NET 10 SDK](https://dotnet.microsoft.com/download)
-- [Node.js 22+](https://nodejs.org/)
+- [Node.js 24 LTS](https://nodejs.org/) (version managers can read [`.node-version`](.node-version))
 - A [youtube-mp36 RapidAPI](https://rapidapi.com/ytjar/api/youtube-mp36) key + username (added in **Settings → RapidAPI**) — required for downloads
 
 ### Run
@@ -252,6 +252,10 @@ npm run dev   # proxies /api to the .NET backend on :5000
 Open `http://localhost:3000`. The frontend is a static SPA — in production it's built to `src/Themearr.Web/out/` and served by the .NET app from `wwwroot` (with an SPA fallback, so deep links like `/movies` work).
 
 ### Checks
+
+Type checking uses TypeScript 7. ESLint retains the TypeScript 6 compatibility API
+through npm aliases in [src/Themearr.Web/package.json:27](src/Themearr.Web/package.json#L27)
+and [src/Themearr.Web/package.json:35](src/Themearr.Web/package.json#L35).
 
 ```bash
 dotnet test                  # .NET test suite

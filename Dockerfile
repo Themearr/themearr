@@ -2,7 +2,7 @@
 # Pin build stages to the native BUILDPLATFORM: the outputs (static SPA bundle +
 # portable .NET IL) are architecture-independent, so multi-arch images build
 # fast without emulating npm/dotnet under QEMU for arm64.
-FROM --platform=$BUILDPLATFORM node:22-slim AS frontend-build
+FROM --platform=$BUILDPLATFORM node:24-slim AS frontend-build
 WORKDIR /frontend
 
 COPY src/Themearr.Web/package.json src/Themearr.Web/package-lock.json* ./
