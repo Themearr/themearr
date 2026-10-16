@@ -67,7 +67,16 @@ public class DownloadService(
     // otherwise share (and clobber) one job entry.
     private static string JobKey(string mediaType, string id) => $"{mediaType}:{id}";
 
-    public bool Start(string id, string youtubeUrl, string mediaType = "movie")
+    // pickedBy/matchScore are the re-check's provenance: "auto" means the matcher chose
+    // the video (both auto-download workers and MoviesController.AutoDownload — a human
+    // may have clicked the button, but did not pick the result), "manual" means a human
+    // picked it (the movies/shows page download and download-url endpoints). mediaType
+    // and pickedBy are deliberately NOT defaulted: pickedBy is the fact the re-check's
+    // whole safety property rests on, and a default of "auto" would let a forgotten call
+    // site compile and silently record the value that permits automatic replacement — the
+    // one value it must never get by accident. matchScore stays optional; "no score" is a
+    // legitimate state for a manual pick, not an oversight.
+    public bool Start(string id, string youtubeUrl, string mediaType, string pickedBy, int? matchScore = null)
     {
         var key = JobKey(mediaType, id);
         if (_jobs.TryGetValue(key, out var existing) && existing.InProgress)
@@ -78,7 +87,7 @@ public class DownloadService(
         while (logs.TryDequeue(out _)) { }   // clear previous run's logs
 
         _jobs[key] = new JobState(true, false, null, DateTime.UtcNow);
-        _ = Task.Run(() => RunAsync(id, url, mediaType));
+        _ = Task.Run(() => RunAsync(id, url, mediaType, pickedBy, matchScore));
         return true;
     }
 
@@ -142,7 +151,7 @@ public class DownloadService(
             logQueue.TryDequeue(out _);
     }
 
-    private async Task RunAsync(string id, string url, string mediaType)
+    private async Task RunAsync(string id, string url, string mediaType, string pickedBy, int? matchScore)
     {
         var key = JobKey(mediaType, id);
         try
@@ -251,7 +260,12 @@ public class DownloadService(
             var year  = item["year"] is int y ? y : (int?)null;
             if (mediaType == "show") db.SetShowStatus(id, "downloaded");
             else                     db.SetMovieStatus(id, "downloaded");
-            db.AddThemeHistory(id, title, year, themeTitle, url, mediaType);
+            db.AddThemeHistory(id, title, year, themeTitle, url, mediaType, pickedBy, matchScore);
+
+            // A replacement that lands clears the flag that asked for it. Doing this here
+            // rather than in the auto-download worker means a manual replacement from the
+            // movies page clears it too — the flag cannot outlive the problem.
+            db.ClearRecheck(id, mediaType);
 
             // Ask Plex to refresh this item so the theme starts playing without a manual
             // "Refresh Metadata" (issue #45) — partial scan catches movie folders on most

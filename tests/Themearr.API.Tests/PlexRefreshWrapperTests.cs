@@ -85,7 +85,7 @@ public class PlexRefreshWrapperTests
         var svc = new DownloadService(new WritingProvider(), db, new StubHttpClientFactory(), config,
             NullLogger<DownloadService>.Instance, plex);
 
-        Assert.True(svc.Start(movieId, YtUrl));
+        Assert.True(svc.Start(movieId, YtUrl, "movie", "manual"));
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(8);
         object status = svc.GetStatus(movieId, "movie");
         while (DateTime.UtcNow < deadline && !(bool)Prop(status, "finished")!)

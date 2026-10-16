@@ -29,6 +29,10 @@ public class ShowAutoDownloadService(
     private readonly ConcurrentDictionary<string, DateTime> _cooldownUntil = new();
     // Tracks the last show we kicked off so we can record its outcome on the next tick.
     private string? _lastStartedShowId;
+    // Whether that show was a re-check pickup rather than an ordinary pending one — the
+    // outcome block needs this to know which signal (recheck_state vs status) to judge it
+    // by. See RollLastOutcome; mirrors AutoDownloadService's movie-side field exactly.
+    private bool _lastStartedWasRecheck;
 
     private sealed record TickState(DateTime? At, string Result);
 
@@ -77,6 +81,7 @@ public class ShowAutoDownloadService(
             ticksCompleted     = _ticksCompleted,
             downloadsStarted   = _downloadsStarted,
             pendingCount       = db.GetAllShows().Count(s => (s["status"]?.ToString() ?? "") == "pending"),
+            recheckQueuedCount = db.GetRecheckQueued("show").Count,
             cooldowns          = _cooldownUntil
                                    .OrderBy(kv => kv.Value)
                                    .ToDictionary(kv => kv.Key, kv => kv.Value),
@@ -141,42 +146,17 @@ public class ShowAutoDownloadService(
         if (download.IsAnyInProgress())
             return "skipped: a download is in progress";
 
-        // Roll the last-started show into the cooldown map based on its final state.
-        if (_lastStartedShowId != null)
-        {
-            var final = db.GetShow(_lastStartedShowId);
-            if (final?["status"]?.ToString() != "downloaded")
-                _cooldownUntil[_lastStartedShowId] = DateTime.UtcNow + ErrorCooldown;
-            _lastStartedShowId = null;
-        }
+        RollLastOutcome(db);
 
         ExpireCooldowns();
 
-        // Cheap pre-filter on the stored status column — no per-show disk scan.
-        var storedPending = db.GetPendingShows();
-
-        // Disk-verify only this candidate set. A stored-pending show whose theme appeared
-        // out-of-band is reconciled to 'downloaded' so it leaves the cheap set next tick.
-        var pending = new List<Dictionary<string, object?>>();
-        foreach (var s in storedPending)
-        {
-            var folder = s["folderName"]?.ToString() ?? "";
-            if (string.IsNullOrEmpty(folder) || !Directory.Exists(folder)) continue;
-            if (ThemeFiles.HasUsableThemeInExistingFolder(folder))
-            {
-                db.SetShowStatus(s["id"]?.ToString() ?? "", "downloaded");
-                continue;
-            }
-            pending.Add(s);
-        }
-
-        var candidate = pending.FirstOrDefault(s =>
-            !_cooldownUntil.ContainsKey(s["id"]?.ToString() ?? ""));
+        var pending = GetVerifiedPending(db);
+        var (candidate, isRecheck, recheckQueued) = SelectCandidate(db, pending);
 
         if (candidate == null)
-            return pending.Count == 0
+            return pending.Count == 0 && recheckQueued.Count == 0
                 ? "skipped: no pending shows"
-                : $"skipped: all {pending.Count} pending shows are in cooldown";
+                : $"skipped: {pending.Count} pending shows and {recheckQueued.Count} queued re-checks are in cooldown";
 
         var showId = candidate["id"]?.ToString() ?? "";
         var title  = candidate["title"]?.ToString() ?? "";
@@ -196,19 +176,16 @@ public class ShowAutoDownloadService(
 
         var best = results.FirstOrDefault(r => r.GetValueOrDefault("bestMatch") is true);
         if (best == null)
-        {
-            log.LogInformation("ShowAutoDownload: no confident match for '{Title}' — backing off {Hrs}h",
-                LogSanitizer.Clean(title), NoMatchCooldown.TotalHours);
-            _cooldownUntil[showId] = DateTime.UtcNow + NoMatchCooldown;
-            return $"no confident match for '{title}'; cooldown {NoMatchCooldown.TotalHours}h";
-        }
+            return HandleNoMatch(db, showId, title, isRecheck);
 
         var videoId = best["videoId"]?.ToString() ?? "";
         var url = $"https://www.youtube.com/watch?v={videoId}";
 
         log.LogInformation("ShowAutoDownload: starting '{Title}' → {VideoId}",
             LogSanitizer.Clean(title), LogSanitizer.Clean(videoId));
-        if (!download.Start(showId, url, "show"))
+        // The matcher picked this candidate, not a person — "auto" — carrying its score
+        // along so the re-check can weigh a later match against the one that shipped.
+        if (!download.Start(showId, url, "show", "auto", best["score"] as int?))
         {
             // Raced with another starter — try again next tick.
             _cooldownUntil[showId] = DateTime.UtcNow + ErrorCooldown;
@@ -216,8 +193,104 @@ public class ShowAutoDownloadService(
         }
 
         _lastStartedShowId = showId;
+        _lastStartedWasRecheck = isRecheck;
         _downloadsStarted++;
         return $"started '{title}' → {videoId}";
+    }
+
+    /// <summary>
+    /// Rolls the previously-started show into the cooldown map based on whether it
+    /// actually worked, then clears the tracking fields for the next tick. Mirrors
+    /// AutoDownloadService.RollLastOutcome exactly — see its doc comment for THE HAZARD
+    /// this exists to avoid: a re-check show is already 'downloaded' before the worker
+    /// touches it, so `status` alone cannot tell a failed replacement from a successful
+    /// one. `recheck_state` can: DownloadService clears it to null only on success
+    /// (DownloadService.cs:227, the AddThemeHistory success block), so a show still
+    /// present in GetRecheckQueued after the tick means the replacement did not land.
+    /// </summary>
+    private void RollLastOutcome(Database db)
+    {
+        if (_lastStartedShowId == null) return;
+
+        var failed = _lastStartedWasRecheck
+            ? db.GetRecheckQueued("show").Any(s => s["id"]?.ToString() == _lastStartedShowId)
+            : db.GetShow(_lastStartedShowId)?["status"]?.ToString() != "downloaded";
+
+        if (failed)
+            _cooldownUntil[_lastStartedShowId] = DateTime.UtcNow + ErrorCooldown;
+
+        _lastStartedShowId = null;
+        _lastStartedWasRecheck = false;
+    }
+
+    /// <summary>
+    /// Cheap pre-filter on the stored status column, disk-verified. A stored-pending show
+    /// whose theme appeared out-of-band is reconciled to 'downloaded' so it leaves the
+    /// cheap set on the next tick — the show-side twin of AutoDownloadService's
+    /// GetVerifiedPending.
+    /// </summary>
+    private List<Dictionary<string, object?>> GetVerifiedPending(Database db)
+    {
+        var storedPending = db.GetPendingShows();
+        var pending = new List<Dictionary<string, object?>>();
+        foreach (var s in storedPending)
+        {
+            var folder = s["folderName"]?.ToString() ?? "";
+            if (string.IsNullOrEmpty(folder) || !Directory.Exists(folder)) continue;
+            if (ThemeFiles.HasUsableThemeInExistingFolder(folder))
+            {
+                db.SetShowStatus(s["id"]?.ToString() ?? "", "downloaded");
+                continue;
+            }
+            pending.Add(s);
+        }
+        return pending;
+    }
+
+    /// <summary>
+    /// Picks the next candidate. Pending shows (no theme at all) always win — a missing
+    /// theme is a worse gap than a wrong one — so the re-check queue is only consulted
+    /// once the pending selection comes up empty, whether because the queue is genuinely
+    /// dry or because every pending show is presently in cooldown. Mirrors
+    /// AutoDownloadService.SelectCandidate exactly.
+    /// </summary>
+    private (Dictionary<string, object?>? candidate, bool isRecheck, List<Dictionary<string, object?>> recheckQueued)
+        SelectCandidate(Database db, List<Dictionary<string, object?>> pending)
+    {
+        var pendingCandidate = pending.FirstOrDefault(s => !_cooldownUntil.ContainsKey(s["id"]?.ToString() ?? ""));
+        if (pendingCandidate != null)
+            return (pendingCandidate, false, []);
+
+        var recheckQueued = db.GetRecheckQueued("show");
+        var recheckCandidate = recheckQueued.FirstOrDefault(s => !_cooldownUntil.ContainsKey(s["id"]?.ToString() ?? ""));
+        return (recheckCandidate, recheckCandidate != null, recheckQueued);
+    }
+
+    /// <summary>
+    /// What happens when a search comes back with no confident match. A pending show
+    /// still has no theme either way, so cooling down and retrying next tick is unchanged.
+    /// A re-check show already has a theme, so a repeated search rarely turning up
+    /// something new means retrying on NoMatchCooldown would burn RapidAPI quota forever
+    /// chasing an answer that will not change — it goes straight to 'review' instead, via
+    /// the compare-and-set TrySetRecheck (never the unconditional SetRecheck). See
+    /// Database.cs:1071-1082 for the race TrySetRecheck closes: a "Keep this" click
+    /// landing mid-search must never be overwritten by this write. A false return means
+    /// someone else already resolved the row — nothing to log, just move on.
+    /// </summary>
+    private string HandleNoMatch(Database db, string id, string title, bool isRecheck)
+    {
+        if (isRecheck)
+        {
+            var moved = db.TrySetRecheck(id, "show", "review", "no better match found", expectedState: "queued");
+            return moved
+                ? $"no better match found for '{title}' — moved to review"
+                : $"no better match found for '{title}' — row was already resolved, left alone";
+        }
+
+        log.LogInformation("ShowAutoDownload: no confident match for '{Title}' — backing off {Hrs}h",
+            LogSanitizer.Clean(title), NoMatchCooldown.TotalHours);
+        _cooldownUntil[id] = DateTime.UtcNow + NoMatchCooldown;
+        return $"no confident match for '{title}'; cooldown {NoMatchCooldown.TotalHours}h";
     }
 
     private void ExpireCooldowns()
@@ -225,5 +298,39 @@ public class ShowAutoDownloadService(
         var now = DateTime.UtcNow;
         foreach (var kv in _cooldownUntil)
             if (kv.Value < now) _cooldownUntil.TryRemove(kv.Key, out _);
+    }
+
+    // ── Test seams ─────────────────────────────────────────────────────────────
+    // Same rationale as AutoDownloadService's: the candidate/outcome/no-match logic is
+    // private, and YoutubeService has no interface so a live search can't be faked from a
+    // test. Internal: visible only to Themearr.API.Tests via that file's
+    // InternalsVisibleTo (one assembly attribute suffices for the whole assembly).
+
+    internal void NoteStartedForTest(string id, bool wasRecheck)
+    {
+        _lastStartedShowId = id;
+        _lastStartedWasRecheck = wasRecheck;
+    }
+
+    internal void RollLastOutcomeForTest()
+    {
+        using var scope = services.CreateScope();
+        RollLastOutcome(scope.ServiceProvider.GetRequiredService<Database>());
+    }
+
+    internal bool IsCoolingDownForTest(string id) => _cooldownUntil.ContainsKey(id);
+
+    internal (Dictionary<string, object?>? candidate, bool isRecheck) SelectCandidateForTest()
+    {
+        using var scope = services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<Database>();
+        var (candidate, isRecheck, _) = SelectCandidate(db, GetVerifiedPending(db));
+        return (candidate, isRecheck);
+    }
+
+    internal string HandleNoMatchForTest(string id, string title, bool isRecheck)
+    {
+        using var scope = services.CreateScope();
+        return HandleNoMatch(scope.ServiceProvider.GetRequiredService<Database>(), id, title, isRecheck);
     }
 }

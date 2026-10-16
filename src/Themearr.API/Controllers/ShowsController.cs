@@ -84,7 +84,8 @@ public class ShowsController(
             return UnprocessableEntity(new { detail = notReady });
         }
 
-        download.Start(showId, $"https://www.youtube.com/watch?v={req.VideoId}", "show");
+        // A human picked this specific video from the search results — "manual".
+        download.Start(showId, $"https://www.youtube.com/watch?v={req.VideoId}", "show", "manual");
         return Accepted(new { started = true, showId });
     }
 
@@ -111,7 +112,8 @@ public class ShowsController(
             return UnprocessableEntity(new { detail = notReady });
         }
 
-        download.Start(showId, req.Url, "show");
+        // A human pasted this URL directly — "manual".
+        download.Start(showId, req.Url, "show", "manual");
         return Accepted(new { started = true, showId });
     }
 
@@ -132,6 +134,75 @@ public class ShowsController(
         if (db.GetShow(showId) == null) return NotFound(new { detail = "Show not found" });
         db.SetShowIgnored(showId, false);
         return Ok(new { ignored = false });
+    }
+
+    // The two re-check resolutions a human can make on a flagged show — mirrors
+    // MoviesController.RecheckKeep/RecheckReplace, including why the existing reason is
+    // preserved rather than cleared (see that comment).
+    [HttpPost("{showId}/recheck/keep")]
+    public IActionResult RecheckKeep(string showId)
+    {
+        if (db.GetShow(showId) == null) return NotFound(new { detail = "Show not found" });
+        var reason = db.GetFlaggedItems().FirstOrDefault(i => i.MediaType == "show" && i.Id == showId)?.Reason;
+        db.SetRecheck(showId, "show", "kept", reason);
+        return Ok(new { state = "kept" });
+    }
+
+    [HttpPost("{showId}/recheck/replace")]
+    public IActionResult RecheckReplace(string showId)
+    {
+        if (db.GetShow(showId) == null) return NotFound(new { detail = "Show not found" });
+        var reason = db.GetFlaggedItems().FirstOrDefault(i => i.MediaType == "show" && i.Id == showId)?.Reason;
+        db.SetRecheck(showId, "show", "queued", reason);
+        return Ok(new { state = "queued" });
+    }
+
+    // New in the re-check feature (a scoped amendment to the spec, not scope creep): the
+    // shows adapter today composes auto-download client-side out of search + the manual
+    // download endpoint, so a matcher-chosen show theme would be recorded picked_by =
+    // 'manual' and could never be auto-replaced by a later re-check. Recording provenance
+    // here instead of trusting a client-supplied flag is the only way to make it honest,
+    // and it closes a movie/show parity gap that predates this feature — mirrors
+    // MoviesController.AutoDownload (MoviesController.cs:127-166).
+    [HttpPost("auto-download/{showId}")]
+    public async Task<IActionResult> AutoDownload(string showId)
+    {
+        var show = db.GetShow(showId);
+        if (show == null) return NotFound(new { detail = "Show not found" });
+
+        var title = show["title"]?.ToString() ?? "";
+        // Year-free, same as the manual search above (ShowsController.cs:55) — a show
+        // spans years, so including one biases the search toward a single season.
+        var query = ShowAutoDownloadService.BuildQuery(title);
+
+        List<Dictionary<string, object?>> results;
+        try
+        {
+            results = await youtube.SearchAsync(query, maxResults: 8, title: title);
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(502, new { detail = $"YouTube search error: {ex.Message}" });
+        }
+
+        var best = results.FirstOrDefault(r => r.GetValueOrDefault("bestMatch") is true);
+        if (best == null)
+            return UnprocessableEntity(new { detail = "No suitable match found — please select manually." });
+
+        if (download.DownloadBlockedReason(isProviderUrl: true) is { } notReady)
+        {
+            log.LogWarning("Show auto-download for {ShowId} blocked: {Reason}", LogSanitizer.Clean(showId), notReady);
+            return UnprocessableEntity(new { detail = notReady });
+        }
+
+        var videoId = best["videoId"]?.ToString() ?? "";
+        var url     = $"https://www.youtube.com/watch?v={videoId}";
+        // A person clicked the button, but the matcher picked the video — "auto" is
+        // about who chose the result, not who triggered the request (mirrors
+        // MoviesController.AutoDownload's identical comment, MoviesController.cs:161-163).
+        download.Start(showId, url, "show", "auto", best["score"] as int?);
+
+        return Accepted(new { started = true, showId, videoId, videoTitle = best["title"] });
     }
 
     [HttpDelete("{showId}/theme")]
@@ -155,6 +226,11 @@ public class ShowsController(
         if (deleted)
         {
             db.SetShowStatus(showId, "pending");
+
+            // Same fix as the movie endpoint: without this, the 'kept' escape hatch has no
+            // way back, the show is double-counted, and recheck_reason describes a file
+            // that no longer exists.
+            db.ClearRecheck(showId, "show");
 
             // Plex keeps playing its cached theme until the item is refreshed — the same
             // staleness issue #45 fixed for downloads, in the delete direction. Fire and

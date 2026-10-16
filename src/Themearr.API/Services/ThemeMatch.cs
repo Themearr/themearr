@@ -199,6 +199,59 @@ public static class ThemeMatch
         => BestMatchIndex(
             ranked.Select(r => (r.VideoTitle, r.Score, (TimeSpan?)null)).ToList(), mediaTitle);
 
+    /// <summary>
+    /// Bumped whenever the rules above change. <c>AutoRecheckService</c> compares this
+    /// against the stored <c>match_rules_version</c> setting and runs one re-check when the
+    /// code is newer, so a release that improves matching revisits themes chosen under the
+    /// old rules instead of only helping future downloads.
+    ///
+    /// <c>RejectionReasonFingerprintTests</c> hashes this method's verdicts over a fixed
+    /// corpus and pins the hash beside this number, so changing the rules without changing
+    /// this is a build failure rather than a silent no-op.
+    /// </summary>
+    public const int RulesVersion = 1;
+
+    /// <summary>
+    /// Whether a theme ALREADY on disk still passes today's rules. Null means keep it;
+    /// otherwise the string is the reason, stored in <c>recheck_reason</c> and shown in the
+    /// queue. Distinct from <see cref="IsConfident"/>, which chooses among a ranked field —
+    /// here there is one stored pick and no field to rank it against.
+    ///
+    /// <paramref name="storedScore"/> is the score recorded when the pick was made, and it
+    /// cannot be recomputed faithfully: <see cref="Score"/> reads channel and duration,
+    /// neither of which is persisted, and six of the nine <see cref="MusicPhrases"/> plus
+    /// both <see cref="MusicWords"/> contribute nothing to it. "Opening Credits [OST]"
+    /// therefore scores 15 at download time on its duration bonus and 0 on review — and
+    /// rejecting at `<= 0` would re-download a theme that was always fine.
+    ///
+    /// So a null storedScore (a row written before this feature) takes a deliberately
+    /// weaker test: reject only a NEGATIVE recomputed score. Negative means the title
+    /// carries active negative markers (ThemeMatch.cs:221-225); zero means the evidence
+    /// word simply carries no weight in Score, which says nothing about quality. Legacy
+    /// rows under-flag rather than false-flag, which is the right direction of error for a
+    /// feature whose promise is that it never churns a good theme.
+    /// </summary>
+    public static string? RejectionReason(
+        string videoTitle, string? mediaTitle, int? year, int? storedScore)
+    {
+        var vt = videoTitle.ToLowerInvariant();
+
+        // Ordered before the evidence check for the same reason IsConfident vetoes outright:
+        // a promo's title can legitimately carry a music word when the work itself is called
+        // "The Score", and evidence alone would launder it through.
+        if (PromoMarkers.Any(m => vt.Contains(m, StringComparison.Ordinal)))
+            return "looks like a trailer, clip or promo";
+
+        if (!HasMusicEvidence(videoTitle))
+            return "nothing in the title says it is the work's music";
+
+        if (storedScore is { } score)
+            return score > 0 ? null : "ranked below the confidence floor";
+
+        var recomputed = Score(videoTitle, channel: "", duration: null, mediaTitle, year);
+        return recomputed < 0 ? "the title carries negative match signals" : null;
+    }
+
     /// <param name="year">Accepted for caller symmetry; the weights do not use it today.</param>
     public static int Score(string videoTitle, string channel, TimeSpan? duration,
         string? title, int? year)

@@ -94,10 +94,10 @@ public class DownloadServiceFolderGateTests
         var svc = new DownloadService(provider, db, new StubHttpClientFactory(), config,
             NullLogger<DownloadService>.Instance);
 
-        Assert.True(svc.Start(id, UrlA));              // movie job A
+        Assert.True(svc.Start(id, UrlA, "movie", "manual")); // movie job A
         await provider.AStarted.Task;                  // A holds the folder gate, mid-download
 
-        Assert.True(svc.Start(id, UrlB, "show"));      // show job B, same folder
+        Assert.True(svc.Start(id, UrlB, "show", "manual")); // show job B, same folder
 
         // With the gate, B parks BEFORE its provider runs and nothing can release it
         // until A finishes, so BStarted CANNOT complete yet — the bounded wait expires
@@ -149,11 +149,11 @@ public class DownloadServiceFolderGateTests
         var svc = new DownloadService(provider, db, new StubHttpClientFactory(), config,
             NullLogger<DownloadService>.Instance);
 
-        Assert.True(svc.Start(id, UrlB, "show"));      // show lands theme.m4a
+        Assert.True(svc.Start(id, UrlB, "show", "manual")); // show lands theme.m4a
         Assert.Null((string?)Prop(await WaitForFinish(svc, id, "show"), "error"));
         Assert.True(File.Exists(dir.File("theme.m4a")));
 
-        Assert.True(svc.Start(id, UrlA));              // movie lands theme.mp3 over it
+        Assert.True(svc.Start(id, UrlA, "movie", "manual")); // movie lands theme.mp3 over it
         Assert.Null((string?)Prop(await WaitForFinish(svc, id, "movie"), "error"));
 
         Assert.Equal([dir.File("theme.mp3")], Directory.GetFiles(dir.Path, "theme.*"));

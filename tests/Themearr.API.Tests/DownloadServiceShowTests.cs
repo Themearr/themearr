@@ -20,6 +20,15 @@ public class DownloadServiceShowTests
         }
     }
 
+    /// <summary>Always fails, like the movie tests' QuotaExhaustedProvider — models a
+    /// download that never lands, so a re-check flag must survive it untouched.</summary>
+    private sealed class QuotaExhaustedProvider : IThemeAudioProvider
+    {
+        public string? CheckConfiguration() => null;
+        public Task<string?> DownloadAsync(string videoId, string outputPath, Action<string> progress, CancellationToken ct)
+            => throw new QuotaExceededException("RapidAPI quota exceeded (HTTP 429)");
+    }
+
     private sealed class StubHttpClientFactory : IHttpClientFactory { public HttpClient CreateClient(string name) => new(); }
 
     private static object? Prop(object o, string n) => o.GetType().GetProperty(n)!.GetValue(o);
@@ -62,7 +71,7 @@ public class DownloadServiceShowTests
 
         var svc = NewService(db, new RecordingProvider());
 
-        Assert.True(svc.Start(showId, YtUrl, "show"));
+        Assert.True(svc.Start(showId, YtUrl, "show", "auto"));
         var status = await WaitForFinishAsync(svc, showId, "show");
 
         Assert.True((bool)Prop(status, "finished")!);
@@ -96,7 +105,7 @@ public class DownloadServiceShowTests
         db.UpsertMovies([new MovieRecord(dir.Path, "srv1", "rk1", "Shared Folder", 2010, "/plex/Shared/x.mkv")]);
 
         var svc = NewService(db, new RecordingProvider());
-        Assert.True(svc.Start(showId, YtUrl, "show"));
+        Assert.True(svc.Start(showId, YtUrl, "show", "auto"));
         await WaitForFinishAsync(svc, showId, "show");
 
         Assert.Empty(db.GetPendingShows());
@@ -119,8 +128,65 @@ public class DownloadServiceShowTests
 
         var svc = NewService(db, new RecordingProvider());
 
-        Assert.True(svc.Start(id, YtUrl, "show"));
+        Assert.True(svc.Start(id, YtUrl, "show", "auto"));
         // Same id, different media type — must be accepted as its own job, not deduped.
-        Assert.True(svc.Start(id, YtUrl));
+        Assert.True(svc.Start(id, YtUrl, "movie", "auto"));
+    }
+
+    [Fact]
+    public async Task Start_recordsProvenanceOnTheHistoryRow()
+    {
+        // Whether a human or the matcher chose the video is the fact the re-check needs
+        // and nothing recorded before now — every path funnelled through one Start call.
+        using var showDir = new TempDir();
+        var db = NewDb();
+        var showId = MediaFolderId.For(showDir.Path);
+        db.UpsertShows([new ShowRecord(showDir.Path, "plex", "srv1:45", "Test Show", 2010, "/plex/Test Show", false)]);
+        var svc = NewService(db, new RecordingProvider());
+
+        Assert.True(svc.Start(showId, YtUrl, "show", "manual"));
+        var status = await WaitForFinishAsync(svc, showId, "show");
+        Assert.Null((string?)Prop(status, "error"));
+
+        var p = db.GetLatestThemeProvenance(showId, "show");
+        Assert.Equal("manual", p!.PickedBy);
+    }
+
+    [Fact]
+    public async Task Start_onSuccess_clearsAnyRecheckFlag()
+    {
+        // The flag must not outlive the problem. Clearing here rather than in the worker
+        // means a manual replacement from the shows page clears it too, for free.
+        using var showDir = new TempDir();
+        var db = NewDb();
+        var showId = MediaFolderId.For(showDir.Path);
+        db.UpsertShows([new ShowRecord(showDir.Path, "plex", "srv1:45", "Test Show", 2010, "/plex/Test Show", false)]);
+        db.SetRecheck(showId, "show", "queued", "title changed since match");
+        var svc = NewService(db, new RecordingProvider());
+
+        Assert.True(svc.Start(showId, YtUrl, "show", "auto"));
+        var status = await WaitForFinishAsync(svc, showId, "show");
+        Assert.Null((string?)Prop(status, "error"));
+
+        Assert.Empty(db.GetRecheckQueued("show"));
+    }
+
+    [Fact]
+    public async Task Start_onFailure_leavesTheRecheckFlagInPlace()
+    {
+        // Combined with WriteAtomicAsync (ThemeFiles.cs:93), this is the promise that a
+        // failed replacement costs nothing: old theme still on disk, still flagged.
+        using var showDir = new TempDir();
+        var db = NewDb();
+        var showId = MediaFolderId.For(showDir.Path);
+        db.UpsertShows([new ShowRecord(showDir.Path, "plex", "srv1:45", "Test Show", 2010, "/plex/Test Show", false)]);
+        db.SetRecheck(showId, "show", "queued", "title changed since match");
+        var svc = NewService(db, new QuotaExhaustedProvider());
+
+        Assert.True(svc.Start(showId, YtUrl, "show", "auto"));
+        var status = await WaitForFinishAsync(svc, showId, "show");
+        Assert.NotNull((string?)Prop(status, "error"));
+
+        Assert.Single(db.GetRecheckQueued("show"));
     }
 }

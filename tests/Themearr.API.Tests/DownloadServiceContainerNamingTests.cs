@@ -74,7 +74,7 @@ public class DownloadServiceContainerNamingTests
         using var movieDir = new TempDir();
         var (svc, db, movieId) = Build(movieDir.Path, Mp4Bytes);
 
-        Assert.True(svc.Start(movieId, YtUrl));
+        Assert.True(svc.Start(movieId, YtUrl, "movie", "manual"));
         var status = await WaitForFinish(svc, movieId);
 
         Assert.True((bool)Prop(status, "finished")!);
@@ -95,7 +95,7 @@ public class DownloadServiceContainerNamingTests
         using var movieDir = new TempDir();
         var (svc, _, movieId) = Build(movieDir.Path, Mp3Bytes);
 
-        Assert.True(svc.Start(movieId, YtUrl));
+        Assert.True(svc.Start(movieId, YtUrl, "movie", "manual"));
         var status = await WaitForFinish(svc, movieId);
 
         Assert.Null((string?)Prop(status, "error"));
@@ -113,7 +113,7 @@ public class DownloadServiceContainerNamingTests
         movieDir.Write("theme.mp3", Mp3Bytes);
         var (svc, _, movieId) = Build(movieDir.Path, Mp4Bytes);
 
-        Assert.True(svc.Start(movieId, YtUrl));
+        Assert.True(svc.Start(movieId, YtUrl, "movie", "manual"));
         var status = await WaitForFinish(svc, movieId);
 
         Assert.Null((string?)Prop(status, "error"));
@@ -131,7 +131,7 @@ public class DownloadServiceContainerNamingTests
         movieDir.Write("theme.m4a", Mp4Bytes);
         var (svc, _, movieId) = Build(movieDir.Path, Mp3Bytes);
 
-        Assert.True(svc.Start(movieId, YtUrl));
+        Assert.True(svc.Start(movieId, YtUrl, "movie", "manual"));
         var status = await WaitForFinish(svc, movieId);
 
         Assert.Null((string?)Prop(status, "error"));

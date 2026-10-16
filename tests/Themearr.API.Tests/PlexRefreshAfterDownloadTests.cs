@@ -114,7 +114,7 @@ public class PlexRefreshAfterDownloadTests
         var handler = new RecordingHandler();
         var svc = Build(db, handler);
 
-        Assert.True(svc.Start(movieId, YtUrl));
+        Assert.True(svc.Start(movieId, YtUrl, "movie", "manual"));
         var status = await WaitForFinish(svc, movieId, "movie");
 
         Assert.Null((string?)Prop(status, "error"));
@@ -144,7 +144,7 @@ public class PlexRefreshAfterDownloadTests
         var handler = new RecordingHandler();
         var svc = Build(db, handler);
 
-        Assert.True(svc.Start(showId, YtUrl, "show"));
+        Assert.True(svc.Start(showId, YtUrl, "show", "manual"));
         var status = await WaitForFinish(svc, showId, "show");
 
         Assert.Null((string?)Prop(status, "error"));
@@ -170,7 +170,7 @@ public class PlexRefreshAfterDownloadTests
         var handler = new RecordingHandler();
         var svc = Build(db, handler);
 
-        Assert.True(svc.Start(movieId, YtUrl));
+        Assert.True(svc.Start(movieId, YtUrl, "movie", "manual"));
         var status = await WaitForFinish(svc, movieId, "movie");
 
         Assert.Null((string?)Prop(status, "error"));
@@ -195,7 +195,7 @@ public class PlexRefreshAfterDownloadTests
             : new ThrowingHandler();
         var svc = Build(db, handler);
 
-        Assert.True(svc.Start(movieId, YtUrl));
+        Assert.True(svc.Start(movieId, YtUrl, "movie", "manual"));
         var status = await WaitForFinish(svc, movieId, "movie");
 
         // The theme is already on disk: the refresh outcome must never turn a successful

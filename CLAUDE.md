@@ -15,6 +15,17 @@ users run it via Docker/GHCR, `install.sh`, or a Proxmox script.
 Two extension seams: `ILibrarySource` (Plex, Radarr) and `IThemeAudioProvider` (RapidAPI).
 Add a source/provider by implementing the interface, not by branching in callers.
 
+**Movies and shows are parallel code paths, not a shared one — and the seam does not
+span them.** `ILibrarySource.FetchAsync` returns `IReadOnlyList<MovieRecord>`
+(`Services/Sources/ILibrarySource.cs:21`), so it is movie-only; shows come from
+`PlexService` directly (`ShowSyncService.cs:18`). Four pairs run in deliberate parallel —
+`MoviesController`/`ShowsController`, `SyncService`/`ShowSyncService`,
+`AutoSyncService`/`ShowAutoSyncService`, `AutoDownloadService`/`ShowAutoDownloadService`,
+plus `app/movies`/`app/shows` in the SPA. A movie-side change is therefore never
+automatically a show-side one. Shows were added second, so the recurring miss is a change
+landing on the movie half alone; `change-review.sh` asks about it, but only for files
+that already pair up.
+
 ## Commands
 
 Frontend commands run from `src/Themearr.Web`.
@@ -93,6 +104,51 @@ tests exist because of real regressions.
   omitting it can't wipe stored values.
 - Use the LSP tools (`csharp-ls`, TypeScript) for find-references and rename rather than
   grep — both language servers are configured.
+
+## Agent tooling
+
+Four hooks in `.claude/settings.json` run whether or not anyone remembers they exist.
+That is the point: a description is advisory, a hook is not.
+
+| When | What | On a finding |
+|---|---|---|
+| PreToolUse `Edit`/`Write` | `test-edit-guard.sh` — an assertion being removed or rewritten in a test | Blocks |
+| PostToolUse `Edit`/`Write` | `web-check.sh` — `tsc --noEmit` + eslint against the 0/3 baseline | Blocks |
+| Stop | `test-gate.sh` — vitest / `dotnet test` / E2E, each scoped to what changed | Blocks |
+| Stop | `change-review.sh` — citation drift, movie/show parity, capability propagation, reviewers the change set calls for | Asks once |
+
+**Capability propagation is the one that matters.** A feature is not finished when its
+own page works. Themearr surfaces the same facts in several places — the dashboard counts
+them, the queue acts on them, history records them, settings configures them, the system
+tab reports their health — and a capability that lands without those being *considered* is
+invisible everywhere but where it was built. It is rarely a broken build, which is exactly
+why it survives review: TV shows shipped in `727ab9e` (#31) and the dashboard and history
+caught up in `26ce683` (#38) and `5c6969c` (#32), two and three PRs later. So when a
+change adds an endpoint, a table or column, or a new controller/service/page,
+`change-review.sh` lists the untouched surfaces and asks which should have heard about it.
+"None of them" is a fine answer — an omission is not.
+
+The movie/show pair check is the narrow, mechanical case of the same idea; see the
+Layout note on why the seam does not span the two.
+
+`change-review.sh` reports each distinct finding **once** — a Stop hook that blocked on a
+condition it could not clear would loop. Deliberately leaving a finding is allowed; say
+why in one line.
+
+The two reviewers below still cannot be *invoked* automatically — a hook is a shell
+command and cannot spawn a subagent. What `change-review.sh` does instead is name them at
+Stop when the change set touches files they cover, which makes skipping one a stated
+choice rather than an oversight. Run them when it asks, or say in one line why not:
+
+- **`security-invariant-reviewer`** — a change touching any of the five invariants above,
+  or that fetches a user-supplied URL, writes/deletes a theme file, or logs a
+  user-controlled value.
+- **`concurrency-reviewer`** — a change touching a background service, anything that
+  polls, or React state driven by an async fetch.
+
+**`/check-citations`** resolves every `file:line` in a doc and prints the line it points
+at. Run it on any spec or plan before opening a PR. It is the mechanical half of "cite,
+don't restate": the script proves the line exists, reading it is what proves the claim.
 
 ## Release model
 

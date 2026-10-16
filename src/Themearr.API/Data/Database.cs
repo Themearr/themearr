@@ -14,6 +14,18 @@ public class Database(string dbPath)
         return conn;
     }
 
+    /// <summary>
+    /// Maps a media type to its table. A whitelist rather than interpolation because a
+    /// table name cannot be bound as a parameter, so this is the only thing standing
+    /// between a caller-supplied string and the SQL text.
+    /// </summary>
+    private static string TableFor(string mediaType) => mediaType switch
+    {
+        "movie" => "movies",
+        "show"  => "shows",
+        _       => throw new ArgumentException($"Unknown media type: {mediaType}", nameof(mediaType)),
+    };
+
     public void Init()
     {
         using var conn = Open();
@@ -69,6 +81,8 @@ public class Database(string dbPath)
         MigrateMoviesTableV2(conn);
         MigrateMoviesTableV3(conn);
         MigrateMoviesTableV4(conn);
+        MigrateHistoryTableV3(conn);
+        MigrateRecheckColumns(conn);
         PruneDeadSettings(conn);
     }
 
@@ -233,6 +247,51 @@ public class Database(string dbPath)
 
         conn.Execute("DROP TABLE movies_v4_old");
         tx.Commit();
+    }
+
+    /// <summary>
+    /// Provenance for the re-check: which mechanism chose this theme, and the score
+    /// behind the pick. Both are null on rows written before the re-check shipped —
+    /// ThemeRecheckService resolves those from source_url instead, and takes a weaker
+    /// score test (see ThemeMatch.RejectionReason).
+    /// </summary>
+    private static void MigrateHistoryTableV3(SqliteConnection conn)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "PRAGMA table_info(theme_history)";
+        var columns = new HashSet<string>();
+        using (var r = cmd.ExecuteReader())
+            while (r.Read()) columns.Add(r.GetString(1));
+
+        if (!columns.Contains("picked_by"))
+            conn.Execute("ALTER TABLE theme_history ADD COLUMN picked_by TEXT");
+        if (!columns.Contains("match_score"))
+            conn.Execute("ALTER TABLE theme_history ADD COLUMN match_score INTEGER");
+    }
+
+    /// <summary>
+    /// "Is the theme any good" is orthogonal to "do I have a theme", so it gets its own
+    /// column rather than a new `status` value. Packing them together produces a
+    /// specific bug: the auto-download worker reconciles any 'pending' row that has a
+    /// theme file on disk straight back to 'downloaded' (AutoDownloadService.cs:176-180),
+    /// so a flagged item would leave the queue on the very next tick.
+    /// </summary>
+    private static void MigrateRecheckColumns(SqliteConnection conn)
+    {
+        foreach (var table in new[] { "movies", "shows" })
+        {
+            using var cmd = conn.CreateCommand();
+            // nosemgrep: csharp-sqli — `table` comes from the literal array above, never a caller
+            cmd.CommandText = $"PRAGMA table_info({table})";
+            var columns = new HashSet<string>();
+            using (var r = cmd.ExecuteReader())
+                while (r.Read()) columns.Add(r.GetString(1));
+
+            if (!columns.Contains("recheck_state"))
+                conn.Execute($"ALTER TABLE {table} ADD COLUMN recheck_state TEXT");   // nosemgrep: csharp-sqli
+            if (!columns.Contains("recheck_reason"))
+                conn.Execute($"ALTER TABLE {table} ADD COLUMN recheck_reason TEXT");  // nosemgrep: csharp-sqli
+        }
     }
 
     private static void MigrateMoviesTable(SqliteConnection conn)
@@ -779,7 +838,8 @@ public class Database(string dbPath)
             }
         });
 
-        return new StatsResult(total, downloaded, pending, ignored, coverage, addedThisWeek, recentActivity, recentlyAdded);
+        return new StatsResult(total, downloaded, pending, ignored, coverage, addedThisWeek, recentActivity,
+            recentlyAdded, CountNeedsAttention("movie"));
     }
 
     /// <summary>
@@ -799,7 +859,8 @@ public class Database(string dbPath)
         var total    = all.Count;
         var coverage = total > 0 ? Math.Round((downloaded + plexTheme) * 100.0 / total, 1) : 0.0;
 
-        return new ShowStatsResult(total, downloaded, plexTheme, pending, ignored, coverage);
+        return new ShowStatsResult(total, downloaded, plexTheme, pending, ignored, coverage,
+            CountNeedsAttention("show"));
     }
 
     // ── History ───────────────────────────────────────────────────────────────
@@ -808,19 +869,50 @@ public class Database(string dbPath)
     /// Records a downloaded theme. The <c>movie_*</c> column names are historical — the
     /// table now carries shows too, discriminated by <paramref name="mediaType"/>
     /// ("movie" | "show"), which defaults to "movie" so every existing caller is unchanged.
+    /// <paramref name="pickedBy"/>/<paramref name="matchScore"/> are the re-check's
+    /// provenance (who chose the theme and how well it scored); both default to null so
+    /// every pre-existing call site is unchanged.
     /// </summary>
     public void AddThemeHistory(string movieId, string movieTitle, int? movieYear,
-        string? themeTitle, string? sourceUrl, string mediaType = "movie")
+        string? themeTitle, string? sourceUrl, string mediaType = "movie",
+        string? pickedBy = null, int? matchScore = null)
     {
         using var conn = Open();
         conn.Execute(
-            "INSERT INTO theme_history (movie_id, movie_title, movie_year, theme_title, source_url, downloaded_at, media_type) VALUES (@mid, @t, @y, @tt, @url, @dt, @mt)",
+            "INSERT INTO theme_history (movie_id, movie_title, movie_year, theme_title, source_url, downloaded_at, media_type, picked_by, match_score) VALUES (@mid, @t, @y, @tt, @url, @dt, @mt, @pb, @ms)",
             ("@mid", movieId), ("@t", movieTitle),
             ("@y",   (object?)movieYear  ?? DBNull.Value),
             ("@tt",  (object?)themeTitle ?? DBNull.Value),
             ("@url", (object?)sourceUrl  ?? DBNull.Value),
             ("@dt",  DateTime.UtcNow.ToString("o")),
-            ("@mt",  mediaType));
+            ("@mt",  mediaType),
+            ("@pb",  (object?)pickedBy    ?? DBNull.Value),
+            ("@ms",  (object?)matchScore  ?? DBNull.Value));
+    }
+
+    /// <summary>
+    /// The most recent theme_history row for one piece of media, scoped by
+    /// <paramref name="mediaType"/> because movie and show ids share the same
+    /// MediaFolderId hash space and can collide (see MediaFolderId.For). "Most recent"
+    /// is <c>id DESC</c>, not download time, so it stays correct even if two downloads
+    /// land in the same instant.
+    /// </summary>
+    public ThemeProvenance? GetLatestThemeProvenance(string mediaId, string mediaType)
+    {
+        using var conn = Open();
+        ThemeProvenance? result = null;
+        conn.Query(
+            "SELECT theme_title, source_url, picked_by, match_score FROM theme_history WHERE movie_id = @id AND media_type = @mt ORDER BY id DESC LIMIT 1",
+            r =>
+            {
+                if (r.Read())
+                    result = new ThemeProvenance(
+                        r.IsDBNull(0) ? null : r.GetString(0),
+                        r.IsDBNull(1) ? null : r.GetString(1),
+                        r.IsDBNull(2) ? null : r.GetString(2),
+                        r.IsDBNull(3) ? null : r.GetInt32(3));
+            }, ("@id", mediaId), ("@mt", mediaType));
+        return result;
     }
 
     public List<Dictionary<string, object?>> GetThemeHistory(int limit = 200)
@@ -846,6 +938,173 @@ public class Database(string dbPath)
                     });
             }, ("@lim", limit));
         return result;
+    }
+
+    // ── Re-check ─────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Rows the re-check scan should judge: a theme exists (status = 'downloaded') and
+    /// the row is not one the user opted out of (ignored = 0). Includes recheckState so
+    /// the scan can skip a row already 'kept' without a second query — 'kept' is the
+    /// user's permanent answer and must survive a scan even if the title still fails.
+    /// </summary>
+    public List<Dictionary<string, object?>> GetRecheckCandidates(string mediaType)
+    {
+        using var conn = Open();
+        var table = TableFor(mediaType);
+        var result = new List<Dictionary<string, object?>>();
+        conn.Query($"""
+            SELECT id, folderName, source, source_ref, title, year, sourcePath, recheck_state
+            FROM {table}
+            WHERE status = 'downloaded' AND ignored = 0
+            ORDER BY title
+            """,
+            r =>
+            {
+                while (r.Read())
+                    result.Add(new Dictionary<string, object?>
+                    {
+                        ["id"]           = r.GetString(0),
+                        ["folderName"]   = r.IsDBNull(1) ? "" : r.GetString(1),
+                        ["source"]       = r.GetString(2),
+                        ["sourceRef"]    = r.IsDBNull(3) ? null : r.GetString(3),
+                        ["title"]        = r.GetString(4),
+                        ["year"]         = r.IsDBNull(5) ? null : r.GetInt32(5),
+                        ["sourcePath"]   = r.IsDBNull(6) ? null : r.GetString(6),
+                        ["recheckState"] = r.IsDBNull(7) ? null : r.GetString(7),
+                    });
+            });
+        return result;
+    }
+
+    /// <summary>
+    /// Rows flagged 'queued' — the auto-download workers' second candidate source, tried
+    /// only once the normal pending queue is dry (see AutoDownloadService). Same column
+    /// shape as <see cref="GetPendingMovies"/> so a worker can treat both lists the same way.
+    /// </summary>
+    public List<Dictionary<string, object?>> GetRecheckQueued(string mediaType)
+    {
+        using var conn = Open();
+        var table = TableFor(mediaType);
+        var result = new List<Dictionary<string, object?>>();
+        conn.Query($"""
+            SELECT id, folderName, source, source_ref, title, year, sourcePath
+            FROM {table}
+            WHERE recheck_state = 'queued'
+            ORDER BY title
+            """,
+            r =>
+            {
+                while (r.Read())
+                    result.Add(new Dictionary<string, object?>
+                    {
+                        ["id"]         = r.GetString(0),
+                        ["folderName"] = r.IsDBNull(1) ? "" : r.GetString(1),
+                        ["source"]     = r.GetString(2),
+                        ["sourceRef"]  = r.IsDBNull(3) ? null : r.GetString(3),
+                        ["title"]      = r.GetString(4),
+                        ["year"]       = r.IsDBNull(5) ? null : r.GetInt32(5),
+                        ["sourcePath"] = r.IsDBNull(6) ? null : r.GetString(6),
+                    });
+            });
+        return result;
+    }
+
+    /// <summary>
+    /// Everything a human might need to act on: 'queued' (already being retried
+    /// automatically, but still visible so the count on the dashboard matches what the
+    /// queue page shows) and 'review' (the worker gave up or the pick was manual, so only
+    /// a person can resolve it). 'kept' is excluded — it is the resolved state, not a
+    /// pending one. One query per table (movies, shows), each call stamping its own
+    /// MediaType on every row it returns. theme_title is pulled via a correlated
+    /// subquery mirroring GetLatestThemeProvenance's "id DESC LIMIT 1" rule, so this
+    /// stays one query per table rather than one extra round-trip per flagged row.
+    /// </summary>
+    public List<RecheckItem> GetFlaggedItems()
+    {
+        using var conn = Open();
+        var result = new List<RecheckItem>();
+        foreach (var mediaType in new[] { "movie", "show" })
+        {
+            var table = TableFor(mediaType);
+            conn.Query($"""
+                SELECT m.id, m.title, m.year, m.recheck_state, m.recheck_reason,
+                       (SELECT theme_title FROM theme_history
+                        WHERE movie_id = m.id AND media_type = @mt
+                        ORDER BY id DESC LIMIT 1) AS theme_title
+                FROM {table} m
+                WHERE m.recheck_state IN ('queued', 'review')
+                ORDER BY m.title
+                """,
+                r =>
+                {
+                    while (r.Read())
+                        result.Add(new RecheckItem(
+                            r.GetString(0), mediaType, r.GetString(1),
+                            r.IsDBNull(2) ? null : r.GetInt32(2),
+                            r.IsDBNull(5) ? null : r.GetString(5),
+                            r.IsDBNull(3) ? null : r.GetString(3),
+                            r.IsDBNull(4) ? null : r.GetString(4)));
+                }, ("@mt", mediaType));
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Sets or clears (state/reason both null) the re-check flag on one row. A caller-supplied
+    /// mediaType only ever reaches SQL through <see cref="TableFor"/>, never interpolated
+    /// directly.
+    /// </summary>
+    public void SetRecheck(string id, string mediaType, string? state, string? reason)
+    {
+        using var conn = Open();
+        var table = TableFor(mediaType);
+        conn.Execute($"UPDATE {table} SET recheck_state = @s, recheck_reason = @r WHERE id = @id",
+            ("@s", (object?)state ?? DBNull.Value), ("@r", (object?)reason ?? DBNull.Value), ("@id", id));
+    }
+
+    // A replacement landing, or an in-app delete, both mean the flag's problem is gone —
+    // expressed as SetRecheck(null, null) rather than a second UPDATE statement so there is
+    // exactly one place that writes these two columns.
+    public void ClearRecheck(string id, string mediaType) => SetRecheck(id, mediaType, null, null);
+
+    /// <summary>
+    /// Compare-and-set on recheck_state: writes only when the row still holds
+    /// <paramref name="expectedState"/>, and reports whether it did. Returns false when
+    /// another writer moved the row first — a user clicking "Keep this" while a worker
+    /// was mid-search, or a replacement that landed and cleared the flag. The plain
+    /// <see cref="SetRecheck"/> is last-writer-wins, which silently discards whichever
+    /// write lost; this exists for the one caller (the re-check worker's "no better match
+    /// found" write) where losing silently would mean overriding a user's explicit choice.
+    /// SQLite's `=` never matches NULL, so a null <paramref name="expectedState"/> (a row
+    /// that was never flagged, or was just cleared) needs `IS` instead of `=`.
+    /// </summary>
+    public bool TrySetRecheck(string id, string mediaType, string? newState, string? reason, string? expectedState)
+    {
+        using var conn = Open();
+        var table = TableFor(mediaType);
+        var changed = conn.ExecuteAffected(
+            $"UPDATE {table} SET recheck_state = @s, recheck_reason = @r WHERE id = @id AND recheck_state IS @expected",
+            ("@s", (object?)newState ?? DBNull.Value),
+            ("@r", (object?)reason ?? DBNull.Value),
+            ("@id", id),
+            ("@expected", (object?)expectedState ?? DBNull.Value));
+        return changed == 1;
+    }
+
+    /// <summary>
+    /// 'queued' + 'review', matching <see cref="GetFlaggedItems"/>'s population — the
+    /// dashboard's count and the queue page's list must agree, or "3 need attention" next
+    /// to a 1-row list reads as a bug. 'kept' is excluded: it is resolved, not pending.
+    /// </summary>
+    public int CountNeedsAttention(string mediaType)
+    {
+        using var conn = Open();
+        var table = TableFor(mediaType);
+        var count = 0;
+        conn.Query($"SELECT COUNT(*) FROM {table} WHERE recheck_state IN ('queued', 'review')",
+            r => { if (r.Read()) count = (int)r.GetInt64(0); });
+        return count;
     }
 
     /// <summary>
@@ -938,6 +1197,18 @@ file static class SqliteExtensions
         cmd.ExecuteNonQuery();
     }
 
+    // Same as Execute, but surfaces the affected-row count instead of discarding it — for
+    // the rare caller (TrySetRecheck's compare-and-set) that needs to know whether its
+    // WHERE clause actually matched a row, not just that the statement ran.
+    public static int ExecuteAffected(this SqliteConnection conn, string sql, params (string name, object? value)[] parameters)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = sql; // nosemgrep: csharp-sqli — literal SQL only; all values bound via SqliteParameter
+        foreach (var (name, value) in parameters)
+            cmd.Parameters.AddWithValue(name, value ?? DBNull.Value);
+        return cmd.ExecuteNonQuery();
+    }
+
     // Callback form: the command and reader are disposed here, so no SqliteCommand
     // is leaked to the caller (the reader can't outlive its command anyway).
     public static void Query(
@@ -958,7 +1229,8 @@ file static class SqliteExtensions
 /// <summary>Show equivalent of <see cref="StatsResult"/>. Separate because shows carry a
 /// state movies do not (plexTheme) and have no "recently added" poster feed of their own.</summary>
 public record ShowStatsResult(
-    int Total, int Downloaded, int PlexTheme, int Pending, int Ignored, double Coverage);
+    int Total, int Downloaded, int PlexTheme, int Pending, int Ignored, double Coverage,
+    int NeedsAttention);
 
 public record StatsResult(
     int Total,
@@ -968,7 +1240,21 @@ public record StatsResult(
     double Coverage,
     int AddedThisWeek,
     List<Dictionary<string, object?>> RecentActivity,
-    List<Dictionary<string, object?>> RecentlyAdded);
+    List<Dictionary<string, object?>> RecentlyAdded,
+    int NeedsAttention);
+
+/// <summary>
+/// Who chose the current theme and how well it scored, as of the latest theme_history
+/// row. Both PickedBy and MatchScore are null for rows written before the re-check
+/// shipped — see AddThemeHistory and ThemeRecheckService.ResolveProvenance for how a
+/// null PickedBy is inferred from SourceUrl instead.
+/// </summary>
+public record ThemeProvenance(string? ThemeTitle, string? SourceUrl, string? PickedBy, int? MatchScore);
+
+/// <summary>One row of the re-check "needs attention" list — a movie or show whose
+/// current theme was flagged, with enough to render and to act on it.</summary>
+public record RecheckItem(string Id, string MediaType, string Title, int? Year,
+                          string? ThemeTitle, string? State, string? Reason);
 
 /// <summary>
 /// A movie as reported by a library source. There is no id: identity is the resolved

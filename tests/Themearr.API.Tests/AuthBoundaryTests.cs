@@ -18,6 +18,12 @@ public class AuthBoundaryTests
     [InlineData("/api/stats/shows")]
     [InlineData("/api/movies")]
     [InlineData("/api/settings")]
+    [InlineData("/api/themes/recheck")]
+    [InlineData("/api/themes/recheck/status")]
+    [InlineData("/api/themes/recheck/flagged")]
+    [InlineData("/api/movies/abc123/recheck/keep")]
+    [InlineData("/api/shows/abc123/recheck/replace")]
+    [InlineData("/api/shows/auto-download/abc123")]
     public void Protected_routes_require_auth(string path) =>
         Assert.True(ApiAuthMiddleware.RequiresAuth(new PathString(path)));
 
