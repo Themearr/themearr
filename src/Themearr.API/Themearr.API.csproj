@@ -9,11 +9,13 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.*" />
+    <!-- Keep the managed/native SQLite pair aligned: a floating parent can require a
+         newer bundle than the security pin below, breaking clean restores (NU1605). -->
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.13" />
     <PackageReference Include="YoutubeExplode" Version="6.*" />
     <!-- Pinned transitive deps: patch known advisories pulled in via the packages above.
          SQLitePCLRaw <= 2.1.11 (GHSA-2m69-gcr7-jv3q, high) and AngleSharp < 1.5.0 (GHSA-pgww-w46g-26qg). -->
-    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.12" />
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.13" />
     <PackageReference Include="AngleSharp" Version="1.5.0" />
   </ItemGroup>
 
