@@ -89,21 +89,88 @@ public static class ThemeMatch
     }
 
     /// <summary>
-    /// Whether a ranked result may be acted on with no human looking at it: it must
-    /// out-rank the field, say it is music, and not itself be a trailer/promo/clip. The
-    /// score alone was never a quality bar — it exists to order candidates against each
-    /// other, so "best of a bad pool" and "good" were the same answer, and low-profile
-    /// films got trailers. The promo check is not redundant with the music-evidence check:
-    /// a promo's title can legitimately contain a music word (the film IS called "The
-    /// Score") without the video itself being the film's music, so evidence alone is not
-    /// enough — a marker in <see cref="PromoMarkers"/> vetoes the result outright.
+    /// The words a media title can be recognised by: split on spaces, keep those longer
+    /// than three letters — "the", "of", "up" carry no identity on their own. One
+    /// definition shared between <see cref="Score"/>'s partial-match branch and the
+    /// identity check in <see cref="IsConfident"/>, the same move
+    /// <see cref="PromoMarkers"/> makes for the penalty block and the veto, so the
+    /// scorer and the floor can never disagree about which words count.
     /// </summary>
-    public static bool IsConfident(int score, string videoTitle)
+    private static string[] SignificantWords(string lowerMediaTitle)
+        => lowerMediaTitle.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                          .Where(w => w.Length > 3)
+                          .ToArray();
+
+    /// <summary>
+    /// True when the video title establishes that the music is for THIS work rather than
+    /// another one sharing a word with it. A full-title match always establishes it —
+    /// judged by the same plain Contains as <see cref="Score"/>'s +30 branch, so the two
+    /// can never disagree about what "full" means, and deliberately not word-bounded:
+    /// two-letter titles like "Up" rely on the loose form. Without a full match,
+    /// identity rests on the title's significant words, and a title with at most one of
+    /// them has nothing left to be identified by — its single generic word appears in
+    /// thousands of unrelated uploads, which is how The Endless was assigned "Endless
+    /// Space 2 Original Soundtrack" and The Menu got Stray's "Main Menu Theme" (issue
+    /// #42): genuinely music, so the music-evidence floor is blind to the mistake by
+    /// design; just music for a video game, not the film. Titles with two or more
+    /// significant words keep the pre-#42 behavior untouched — both measured failures
+    /// share the one-word shape, and the #39 accept baseline (mainstream 11/12, shows
+    /// 9/12) cannot be re-measured against a broader rule. A null media title skips the
+    /// check, mirroring <see cref="Score"/>, which makes no title contribution when the
+    /// caller supplies none.
+    /// </summary>
+    private static bool TitleIdentityHolds(string vt, string? mediaTitle)
+    {
+        if (string.IsNullOrEmpty(mediaTitle)) return true;
+        var mt = mediaTitle.ToLowerInvariant();
+        if (vt.Contains(mt)) return true;
+        return SignificantWords(mt).Length >= 2;
+    }
+
+    /// <summary>
+    /// Hard ceiling on a result's runtime for the unattended path (issue #47). 15 minutes
+    /// because that is the boundary the scorer already calls pathological — its −20 band
+    /// starts at <c>mins &gt; 15.0</c> below — so acceptance binds exactly where ranking
+    /// already judged, with 2.5× margin over the longest measured legitimate theme
+    /// (3–6 min) and far under any "complete score" upload (the measured worst case:
+    /// 3h33m). A soft penalty can only rank; it cannot refuse — a full soundtrack of the
+    /// CORRECT work is genuinely music (#39's floor passes it) for genuinely this work
+    /// (#42's rule passes it) and absorbs −20 easily, which is how every prior guard was
+    /// blind to "is this a theme, or hours of one?". Not redundant with the 100 MB byte
+    /// cap: two hours at ~100 kbps is ~90 MB and clears it.
+    /// </summary>
+    public static readonly TimeSpan MaxConfidentDuration = TimeSpan.FromMinutes(15);
+
+    /// <summary>
+    /// Whether a ranked result may be acted on with no human looking at it: it must
+    /// out-rank the field, say it is music, not itself be a trailer/promo/clip, be no
+    /// longer than <see cref="MaxConfidentDuration"/> when the caller supplies a runtime,
+    /// and — when the caller supplies the media title — identify THIS work
+    /// (<see cref="TitleIdentityHolds"/>). The score alone was never a quality bar — it
+    /// exists to order candidates against each other, so "best of a bad pool" and "good"
+    /// were the same answer, and low-profile films got trailers. The promo check is not
+    /// redundant with the music-evidence check: a promo's title can legitimately contain
+    /// a music word (the film IS called "The Score") without the video itself being the
+    /// film's music, so evidence alone is not enough — a marker in
+    /// <see cref="PromoMarkers"/> vetoes the result outright. The identity check is not
+    /// redundant with either: "Endless Space 2 Original Soundtrack" is real music with
+    /// no promo marker, and still the wrong work (issue #42). And the ceiling is not
+    /// redundant with any of them — the failure it exists for passes all three. A null
+    /// duration skips the ceiling, mirroring <see cref="Score"/>'s HasValue skip and the
+    /// null media title: the #39 accept baseline was measured without a ceiling and
+    /// cannot be re-measured, so absence of the input must not change the answer.
+    /// Manual downloads and pasted URLs never consult this floor — declining here only
+    /// stops the unattended path.
+    /// </summary>
+    public static bool IsConfident(int score, string videoTitle, string? mediaTitle = null,
+        TimeSpan? duration = null)
     {
         var vt = videoTitle.ToLowerInvariant();
         return score > 0
             && !PromoMarkers.Any(m => vt.Contains(m, StringComparison.Ordinal))
-            && HasMusicEvidence(videoTitle);
+            && HasMusicEvidence(videoTitle)
+            && TitleIdentityHolds(vt, mediaTitle)
+            && (duration is null || duration <= MaxConfidentDuration);
     }
 
     /// <summary>
@@ -111,10 +178,26 @@ public static class ThemeMatch
     /// a lower-ranked result is never promoted just because it clears the floor, because
     /// the ranking already judged it the weaker candidate. Declining is a supported
     /// outcome everywhere — both auto-download workers back off 6h and the movie
-    /// endpoint returns 422.
+    /// endpoint returns 422. The media title rides along for the identity half of the
+    /// floor (issue #42) and the duration for the ceiling (issue #47); null keeps the
+    /// pre-#42/pre-#47 floor respectively, like <see cref="IsConfident"/>.
     /// </summary>
-    public static int BestMatchIndex(IReadOnlyList<(string VideoTitle, int Score)> ranked)
-        => ranked.Count > 0 && IsConfident(ranked[0].Score, ranked[0].VideoTitle) ? 0 : -1;
+    public static int BestMatchIndex(
+        IReadOnlyList<(string VideoTitle, int Score, TimeSpan? Duration)> ranked,
+        string? mediaTitle = null)
+        => ranked.Count > 0
+           && IsConfident(ranked[0].Score, ranked[0].VideoTitle, mediaTitle, ranked[0].Duration)
+            ? 0 : -1;
+
+    /// <summary>
+    /// Duration-less shape, kept for callers with no runtime in hand. Delegates so the
+    /// row-0-or-nothing rule and the floor live in exactly one place and the two shapes
+    /// can never drift.
+    /// </summary>
+    public static int BestMatchIndex(IReadOnlyList<(string VideoTitle, int Score)> ranked,
+        string? mediaTitle = null)
+        => BestMatchIndex(
+            ranked.Select(r => (r.VideoTitle, r.Score, (TimeSpan?)null)).ToList(), mediaTitle);
 
     /// <summary>
     /// Bumped whenever the rules above change. <c>AutoRecheckService</c> compares this
@@ -185,10 +268,11 @@ public static class ThemeMatch
                 score += 30;
             else
             {
-                // Partial: count significant words that appear in the video title
-                var words = mt.Split(' ', StringSplitOptions.RemoveEmptyEntries)
-                              .Where(w => w.Length > 3);
-                score += words.Count(w => vt.Contains(w)) * 8;
+                // Partial: count significant words that appear in the video title. For
+                // ranking only — a single matched word is worth +8 here and nothing to
+                // the confidence floor, which is what stops one generic word ("menu")
+                // certifying another work's music as this one's (issue #42).
+                score += SignificantWords(mt).Count(w => vt.Contains(w)) * 8;
             }
         }
 

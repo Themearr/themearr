@@ -105,4 +105,58 @@ public class YoutubeServiceRankAndMarkTests
         Assert.Equal(50, results[1]["score"]);
         Assert.Equal(10, results[2]["score"]);
     }
+
+    [Fact]
+    public void RankAndMark_wrongWorkMusicOnTop_titleSupplied_nothingIsMarked()
+    {
+        // Issue #42: "The Endless" reduces to one significant word, and the top row only
+        // matches that word partially — real music, wrong work (a video game's OST). The
+        // media title must flow from here through BestMatchIndex into the floor for that
+        // to be caught, and this fixture goes red if the plumbing is severed while every
+        // ThemeMatch-bound test stays green — the exact blind spot #39 hit when nothing
+        // bound the floor's *use*.
+        var raw = new List<(Dictionary<string, object?> result, int score, string videoTitle)>
+        {
+            Row("Endless Space 2 Original Soundtrack", 40),
+            Row("The Endless (2017) - Official Trailer", 20),
+        };
+
+        var results = YoutubeService.RankAndMark(raw, "The Endless");
+
+        Assert.All(results, r => Assert.False((bool)r["bestMatch"]!));
+    }
+
+    [Fact]
+    public void RankAndMark_wrongWorkMenuThemeOnTop_titleSupplied_nothingIsMarked()
+    {
+        // The second measured #42 failure: Stray's (a video game) menu theme for the
+        // film "The Menu". "menu" is the title's only significant word.
+        var raw = new List<(Dictionary<string, object?> result, int score, string videoTitle)>
+        {
+            Row("Stray - Main Menu Theme", 38),
+            Row("The Menu | Official Trailer HD", 20),
+        };
+
+        var results = YoutubeService.RankAndMark(raw, "The Menu");
+
+        Assert.All(results, r => Assert.False((bool)r["bestMatch"]!));
+    }
+
+    [Fact]
+    public void RankAndMark_fullTitleMatchOnTop_titleSupplied_isStillMarked()
+    {
+        // The positive half of the wiring pin: a supplied title must not over-reject.
+        // "Dune" is a single significant word too, but the full title appears in the
+        // video title, so identity holds and row 0 keeps its mark.
+        var raw = new List<(Dictionary<string, object?> result, int score, string videoTitle)>
+        {
+            Row("Dune Official Soundtrack | Main Theme - Hans Zimmer", 95),
+            Row("Dune (2021) - Official Trailer", 30),
+        };
+
+        var results = YoutubeService.RankAndMark(raw, "Dune");
+
+        Assert.True((bool)results[0]["bestMatch"]!);
+        Assert.False((bool)results[1]["bestMatch"]!);
+    }
 }

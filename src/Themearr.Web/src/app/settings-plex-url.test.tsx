@@ -127,4 +127,73 @@ describe('Plex Connection manual URL', () => {
     // Vault's unsaved edit must survive Tower's save.
     expect(vaultInput).toHaveValue('http://192.168.1.60:32400')
   })
+
+  // #26: the transient feedback (test result box, "Saved ✓") must be keyed by
+  // serverId like plexUrls already is. A single shared value renders one
+  // server's feedback under *every* card as soon as a second server exists.
+  it("renders test/save feedback only under the acted-on server's own card", async () => {
+    vi.mocked(api.settingsApi.get).mockResolvedValue({
+      selectedServers: [
+        { id: 'srv1', name: 'Tower', url: 'https://old.plex.direct:32400' },
+        { id: 'srv2', name: 'Vault', url: 'https://vault.plex.direct:32400' },
+      ],
+      selectedLibraries: {},
+      pathMappings: [],
+      libraryPaths: [],
+      advanced: { maxSearchDirs: 20000, searchDepth: 4 },
+      autoDownload: false,
+      autoSync: false,
+      lastAutoSyncAt: '',
+    } as never)
+    // Echo both servers back: savePlexUrl() replaces settings.selectedServers
+    // with this response, and the beforeEach single-server mock would unmount
+    // Vault's card entirely -- hiding exactly the bleed this test pins.
+    vi.mocked(api.plexApi.saveUrl).mockImplementation(async (serverId: string, url: string) => ({
+      selectedServers: [
+        { id: 'srv1', name: 'Tower', url: serverId === 'srv1' ? url : 'https://old.plex.direct:32400' },
+        { id: 'srv2', name: 'Vault', url: serverId === 'srv2' ? url : 'https://vault.plex.direct:32400' },
+      ],
+    }) as never)
+
+    const { default: SettingsPage } = await import('@/app/settings/page')
+    renderPage(<SettingsPage />)
+
+    await screen.findByDisplayValue('https://vault.plex.direct:32400')
+    const towerCard = screen.getByText('Tower').closest('div') as HTMLElement
+    const vaultCard = screen.getByText('Vault').closest('div') as HTMLElement
+
+    await userEvent.click(within(towerCard).getByRole('button', { name: /test/i }))
+    await within(towerCard).findByText(/unreachable/i)
+    // The result box belongs to Tower's test alone.
+    expect(within(vaultCard).queryByText(/unreachable/i)).toBeNull()
+
+    await userEvent.click(within(towerCard).getByRole('button', { name: /^save$/i }))
+    await within(towerCard).findByRole('button', { name: /saved/i })
+    // Vault's Save button must not claim Tower's "Saved ✓".
+    expect(within(vaultCard).queryByRole('button', { name: /saved/i })).toBeNull()
+  })
+
+  // #26, minor half: onChange cleared plexTest but not plexError/plexSaved,
+  // so a stale error or "Saved ✓" lingered after the user started editing.
+  it("clears a server's stale error and Saved flag when its URL is edited", async () => {
+    vi.mocked(api.plexApi.test).mockRejectedValueOnce(new Error('Connection refused'))
+
+    const { default: SettingsPage } = await import('@/app/settings/page')
+    renderPage(<SettingsPage />)
+
+    const input = await screen.findByDisplayValue('https://old.plex.direct:32400')
+    const card = screen.getByText('Tower').closest('div') as HTMLElement
+
+    await userEvent.click(within(card).getByRole('button', { name: /test/i }))
+    await within(card).findByText('Connection refused')
+
+    await userEvent.type(input, 'x')
+    expect(within(card).queryByText('Connection refused')).toBeNull()
+
+    await userEvent.click(within(card).getByRole('button', { name: /^save$/i }))
+    await within(card).findByRole('button', { name: /saved/i })
+
+    await userEvent.type(input, 'y')
+    expect(within(card).queryByRole('button', { name: /saved/i })).toBeNull()
+  })
 })

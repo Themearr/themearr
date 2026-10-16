@@ -490,6 +490,88 @@ public class PlexService(HttpClient http, Database db, LocalFolderResolver folde
         return shows;
     }
 
+    // ── Item metadata refresh ─────────────────────────────────────────────────
+
+    // Bounds the refresh PUT well under the client's default 100s: it runs on the tail
+    // of a download job before the job is marked finished, and IsAnyInProgress gates the
+    // auto-download loop — a wedged Plex server must not hold that gate for minutes.
+    private static readonly TimeSpan RefreshTimeout = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// Best-effort "Refresh Metadata" for one item after its theme lands (issue #45).
+    /// Plex's partial-scan setting usually notices a movie folder changing, but a show's
+    /// new theme stays invisible until the show itself is refreshed — this is the same
+    /// item-scoped PUT Plex's own "Refresh Metadata" action sends, so it covers both.
+    ///
+    /// Returns false without any HTTP when the item has no resolvable Plex identity:
+    /// a non-Plex source (Radarr's source_ref is Radarr's own movie id — nothing to
+    /// refresh with), a source_ref that isn't "{serverId}:{ratingKey}", or a server
+    /// removed since the sync. Network failures and non-2xx answers also return false —
+    /// the theme is already on disk, so the caller treats this as cosmetic, never fatal.
+    /// </summary>
+    public async Task<bool> RefreshItemMetadataAsync(string? source, string? sourceRef, Action<string>? logFn = null)
+    {
+        if (source != "plex") return false;
+
+        // Same parse the poster path uses: source_ref carries "{serverId}:{ratingKey}".
+        var parts = (sourceRef ?? "").Split(':', 2);
+        if (parts.Length != 2 || parts.Any(string.IsNullOrEmpty)) return false;
+        if (!db.GetPlexServersDict().TryGetValue(parts[0], out var srv))
+        {
+            logFn?.Invoke("[themearr] Skipping the Plex metadata refresh — this item's Plex server is no longer configured.");
+            return false;
+        }
+
+        var url = $"{srv.Url.TrimEnd('/')}/library/metadata/{Uri.EscapeDataString(parts[1])}/refresh";
+        try
+        {
+            using var cts = new CancellationTokenSource(RefreshTimeout);
+            var req = new HttpRequestMessage(HttpMethod.Put, url);
+            // Token in the header only, never the URI — a refresh URL can end up in a
+            // proxy's access log.
+            foreach (var (k, v) in ClientHeaders(GetClientIdentifier(), srv.Token))
+                req.Headers.TryAddWithoutValidation(k, v);
+
+            using var resp = await http.SendAsync(req, cts.Token);
+            if (!resp.IsSuccessStatusCode)
+            {
+                logFn?.Invoke($"[themearr] Plex refused the metadata refresh (HTTP {(int)resp.StatusCode}).");
+                return false;
+            }
+            return true;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException)
+        {
+            logFn?.Invoke("[themearr] Could not reach the Plex server to refresh metadata — refresh the item in Plex manually if the theme doesn't play.");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Never-throws wrapper over <see cref="RefreshItemMetadataAsync"/> for the theme
+    /// delete endpoints — the sequel to issue #45: after a delete, Plex keeps playing its
+    /// cached theme until the item is refreshed, the same staleness the download path
+    /// fixed in the other direction. Those actions are synchronous (their signatures are
+    /// pinned by existing tests), so callers fire-and-forget the returned task; it must
+    /// therefore never fault — an unobserved faulted task is exactly the failure mode
+    /// this wrapper exists to prevent. A refresh failure is cosmetic here: the theme is
+    /// already gone from disk, so nothing is retried or surfaced to the caller.
+    /// </summary>
+    public async Task TryRefreshItemMetadataAsync(string? source, string? sourceRef, ILogger log, string itemId)
+    {
+        try
+        {
+            // The skip/failure messages are fixed strings (no user data), safe to log.
+            await RefreshItemMetadataAsync(source, sourceRef, msg => log.LogInformation("{Message}", msg));
+        }
+        catch (Exception ex)
+        {
+            // itemId comes from the route, so it is user-influenced (CWE-117).
+            log.LogWarning(ex, "Plex metadata refresh after theme delete failed for {ItemId}",
+                LogSanitizer.Clean(itemId));
+        }
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private static string BuildAuthUrl(string code, string clientId, string forwardUrl)
