@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { serverAttemptId, lostDownloadAttempt, LOST_DOWNLOAD_TRACKING } from '@/lib/downloadAttempt'
 import { settingsApi } from '@/lib/api'
 import { ThemeRecheck } from '@/components/queue/ThemeRecheck'
 import type { MediaItem, YoutubeResult } from '@/lib/types'
@@ -89,7 +90,7 @@ export default function QueuePage() {
   // Start() only writes the fresh JobState right before returning
   // (DownloadService.cs:70) -- so the poll must not read status yet, or a
   // retry of a failed item is instantly re-settled by the failure it retries.
-  const downloadBinding    = useRef<{ adapter: MediaAdapter; media: 'movies' | 'shows'; attempt: number; key: string; startSettled: boolean } | null>(null)
+  const downloadBinding    = useRef<{ adapter: MediaAdapter; media: 'movies' | 'shows'; attempt: number; key: string; startSettled: boolean; serverAttemptId?: string } | null>(null)
   const searchedFor        = useRef<string | null>(null)
   // Tracks whether we've already triggered auto-download for the current movie
   const autoTriggeredFor   = useRef<string | null>(null)
@@ -366,12 +367,12 @@ export default function QueuePage() {
     const attempt = ++downloadAttempt.current
     autoTriggeredFor.current = forId
     downloadingMovieId.current = forId
-    const binding = { adapter, media, attempt, key: forKey, startSettled: false }
+    const binding = { adapter, media, attempt, key: forKey, startSettled: false, serverAttemptId: undefined as string | undefined }
     downloadBinding.current = binding
     setDownloading(true)
     setError('')
     adapter.autoDownload(forId)
-      .then(() => { binding.startSettled = true })
+      .then(result => { binding.serverAttemptId = serverAttemptId(result); binding.startSettled = true })
       .catch((e: Error) => {
         settleDownloadFailure(attempt, forKey, e.message)
         // Deliberately NOT resetting autoTriggeredFor here. `downloading` flipping back
@@ -438,7 +439,12 @@ export default function QueuePage() {
       const timeoutId = setTimeout(() => controller.abort(), STATUS_TIMEOUT_MS)
 
       try {
-        const st = await boundAdapter.downloadStatus(movieId, { signal: controller.signal })
+        const st = await boundAdapter.downloadStatus(movieId, { signal: controller.signal }, binding.serverAttemptId)
+        if (lostDownloadAttempt(binding.serverAttemptId, st)) {
+          clearInterval(id)
+          settleDownloadFailure(attempt, forKey, LOST_DOWNLOAD_TRACKING)
+          return
+        }
         failures = 0 // a status came back -- we're still in contact with the server
         // Ownership-gated like every settle below: a stale tick surviving a
         // handback must not paint the old attempt's logs under a newer one.
@@ -527,12 +533,13 @@ export default function QueuePage() {
     const forKey  = `${media}:${forId}`
     const attempt = ++downloadAttempt.current
     downloadingMovieId.current = forId
-    const binding = { adapter, media, attempt, key: forKey, startSettled: false }
+    const binding = { adapter, media, attempt, key: forKey, startSettled: false, serverAttemptId: undefined as string | undefined }
     downloadBinding.current = binding
     setDownloading(true)
     setError('')
     try {
-      await adapter.download(forId, videoId)
+      const result = await adapter.download(forId, videoId)
+      binding.serverAttemptId = serverAttemptId(result)
       binding.startSettled = true
     } catch (e) {
       settleDownloadFailure(attempt, forKey, (e as Error).message)
@@ -546,12 +553,13 @@ export default function QueuePage() {
     const forKey  = `${media}:${forId}`
     const attempt = ++downloadAttempt.current
     downloadingMovieId.current = forId
-    const binding = { adapter, media, attempt, key: forKey, startSettled: false }
+    const binding = { adapter, media, attempt, key: forKey, startSettled: false, serverAttemptId: undefined as string | undefined }
     downloadBinding.current = binding
     setDownloading(true)
     setError('')
     try {
-      await adapter.downloadUrl(forId, manualUrl.trim())
+      const result = await adapter.downloadUrl(forId, manualUrl.trim())
+      binding.serverAttemptId = serverAttemptId(result)
       binding.startSettled = true
     } catch (e) {
       settleDownloadFailure(attempt, forKey, (e as Error).message)
@@ -565,12 +573,13 @@ export default function QueuePage() {
     const forKey  = `${media}:${forId}`
     const attempt = ++downloadAttempt.current
     downloadingMovieId.current = forId
-    const binding = { adapter, media, attempt, key: forKey, startSettled: false }
+    const binding = { adapter, media, attempt, key: forKey, startSettled: false, serverAttemptId: undefined as string | undefined }
     downloadBinding.current = binding
     setDownloading(true)
     setError('')
     try {
-      await adapter.autoDownload(forId)
+      const result = await adapter.autoDownload(forId)
+      binding.serverAttemptId = serverAttemptId(result)
       binding.startSettled = true
     } catch (e) {
       settleDownloadFailure(attempt, forKey, (e as Error).message)
