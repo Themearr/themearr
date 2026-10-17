@@ -48,7 +48,7 @@ Processing is **disabled by default** ([defaults](src/Themearr.API/Services/Audi
 
 Docker images include ffmpeg and ffprobe for both supported architectures. For native and Proxmox installations, install them before enabling processing (`apt-get install ffmpeg` on Debian/Ubuntu). Unprocessed downloads remain available without them. System health reports missing tools when processing is enabled. Custom executable locations can be set with `Themearr__FfmpegPath` and `Themearr__FfprobePath`.
 
-Normalization measures the selected segment, then encodes at -16 LUFS, -1.5 dBTP and LRA 11, using 44.1 kHz stereo ([processor settings](src/Themearr.API/Services/FfmpegThemeAudioProcessor.cs#L61)). Processing failure preserves an existing theme and reports a download error.
+Normalization measures the selected segment, then encodes at -16 LUFS, -1.5 dBTP and LRA 11, using 44.1 kHz stereo ([processor settings](src/Themearr.API/Services/FfmpegThemeAudioProcessor.cs#L62)). Processing failure preserves an existing theme and reports a download error.
 
 ## Install
 

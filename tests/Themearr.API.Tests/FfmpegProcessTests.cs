@@ -113,7 +113,8 @@ public class FfmpegProcessTests
             elif '-af' in a and 'print_format=json' in a[a.index('-af')+1]:
                 if mode=='badjson':sys.stderr.write('invalid measurement')
                 else:sys.stderr.write(json.dumps({'input_i':'NaN','input_tp':'-5','input_lra':'1','input_thresh':'-30','target_offset':'0'}))
-            elif a[-1]!='-':
+            elif a[-1]=='-':sys.stderr.write('Peak level dB: -3.0')
+            else:
                 with open(a[-1],'wb') as f:
                     if mode=='oversize':f.truncate(104857601)
                     else:f.write(b'ID3test')
@@ -135,6 +136,14 @@ public class FfmpegProcessTests
         var second = processor.ProcessAsync(dir.File("input.wav"),dir.File("second.mp3"),new(true,5),_ => secondEntered.TrySetResult(),CancellationToken.None);
         try { Assert.NotSame(secondEntered.Task,await Task.WhenAny(secondEntered.Task,Task.Delay(300))); }
         finally { release.Set(); await Task.WhenAll(first,second); }
+    }
+
+    [Fact]
+    public async Task Silent_audio_without_normalization_is_rejected_before_publication()
+    {
+        using var dir = new TempDir(); var input = dir.File("silent.wav"); Wave(input,5,true);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Processor().ProcessAsync(input,dir.File("out.mp3"),new(true,5,false),_ => {},CancellationToken.None));
+        Assert.False(File.Exists(dir.File("out.mp3"))); Assert.True(File.Exists(input));
     }
 
 }

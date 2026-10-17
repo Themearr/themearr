@@ -1,3 +1,4 @@
+import { withoutAudioProcessing } from '@/lib/settingsWrite'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { serverAttemptId, lostDownloadAttempt, LOST_DOWNLOAD_TRACKING } from '@/lib/downloadAttempt'
 import { settingsApi } from '@/lib/api'
@@ -212,7 +213,7 @@ export default function QueuePage() {
     setError('')
     try {
       const s = await settingsApi.get()
-      await settingsApi.save({ ...s, autoDownload: next })
+      await settingsApi.save(withoutAudioProcessing({ ...s, autoDownload: next }))
       setAutoMode(next)
     } catch (e) {
       setError(`Couldn't turn auto mode ${next ? 'on' : 'off'}: ${(e as Error)?.message || 'unknown error'}`)

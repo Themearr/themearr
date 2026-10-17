@@ -1,3 +1,4 @@
+import { withoutAudioProcessing } from '@/lib/settingsWrite'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiKeyApi, plexApi, radarrApi, rapidApiApi, settingsApi, setupApi, syncApi, systemApi, versionApi } from '@/lib/api'
 import type { AudioProcessingOptions, PlexLibrary, Settings, VersionInfo } from '@/lib/types'
@@ -284,7 +285,7 @@ export default function SettingsPage() {
     setMovieLibsError('')
     try {
       const next = { ...settings, selectedLibraries: movieLibs }
-      await settingsApi.save(next)
+      await settingsApi.save(withoutAudioProcessing(next))
       // Record what was persisted by merging just that field: `next` is the
       // pre-await snapshot, and writing it back wholesale would revert any
       // other edit (a queue toggle, a path mapping) made while the POST was in
@@ -324,7 +325,7 @@ export default function SettingsPage() {
     setShowLibsError('')
     try {
       const next = { ...settings, selectedShowLibraries: showLibs }
-      await settingsApi.save(next)
+      await settingsApi.save(withoutAudioProcessing(next))
       // Merge, don't replace -- see saveMovieLibraries for why both halves.
       setSettings(s => s ? { ...s, selectedShowLibraries: next.selectedShowLibraries } : s)
       if (seq !== libsSeq.current.shows) return // a toggle superseded this save

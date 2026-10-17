@@ -1,3 +1,4 @@
+import { withoutAudioProcessing } from '@/lib/settingsWrite'
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { radarrApi, setupApi, settingsApi } from '@/lib/api'
@@ -155,7 +156,7 @@ export function SetupWizard() {
         // existing Plex server/library selection and reset auto-download,
         // auto-sync and the advanced search settings.
         const current = await settingsApi.get()
-        await settingsApi.save({ ...current, libraryPaths: paths })
+        await settingsApi.save(withoutAudioProcessing({ ...current, libraryPaths: paths }))
         await setupApi.complete()
       } else {
         // pathMappings is deliberately not sent. /setup is reachable at any time by an

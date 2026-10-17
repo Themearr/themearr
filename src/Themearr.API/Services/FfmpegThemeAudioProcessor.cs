@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text.Json;
@@ -71,7 +72,10 @@ public sealed class FfmpegThemeAudioProcessor(IConfiguration config) : IThemeAud
             var expected = Math.Min(source.Duration, options.TrimSeconds ?? source.Duration);
             if (result.Codec != "mp3" || result.SampleRate != 44100 || result.Channels != 2 || Math.Abs(result.Duration - expected) > 0.2)
                 throw new InvalidOperationException("Processed audio failed format or duration validation.");
-            await RunAsync(Ffmpeg, ["-hide_banner", "-nostdin", "-v", "error", "-xerror", ..LocalInput, "-i", output, "-map", "0:a:0", "-f", "null", "-"], deadline.Token);
+            var decoded = await RunAsync(Ffmpeg, ["-hide_banner", "-nostdin", "-v", "info", "-xerror", ..LocalInput, "-i", output, "-map", "0:a:0", "-af", "astats=metadata=0:reset=0", "-f", "null", "-"], deadline.Token);
+            var peaks = Regex.Matches(decoded.Stderr, @"Peak level dB:\s*(\S+)");
+            if (peaks.Count == 0 || !double.TryParse(peaks[^1].Groups[1].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var peak) || !double.IsFinite(peak))
+                throw new InvalidOperationException("Processed theme contains no audible audio.");
             using var stream = File.OpenRead(output);
             return new(bytes, result.Duration, Convert.ToHexString(await SHA256.HashDataAsync(stream, deadline.Token)));
         }
