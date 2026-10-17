@@ -54,23 +54,9 @@ export default function MoviesPage() {
     }
   }, [])
 
-  // The Retry buttons on a failed refresh, wrapping `loadMovies` so repeated
-  // clicks can't put several `GET /api/movies` in flight at once -- there's no
-  // staleness protection on those responses, so a slower earlier one would
-  // overwrite a newer one. Deliberately a wrapper rather than a guard inside
-  // `loadMovies` itself: the sync-status poll's own post-sync refresh must
-  // still run on its own terms, since skipping it in favour of a retry started
-  // *before* the sync finished would show a list that predates the import.
-  //
-  // That argument only rules out a *guard* (something that drops a call
-  // outright) -- it leaves a residual race between this Retry and the poll's
-  // own `loadMovies` call, since neither response is stamped, so a slower one
-  // can still overwrite a newer one. The right fix for that residual, if it's
-  // ever worth closing, is a monotonic sequence stamp -- the same `latest`-ref
-  // pattern `useResource` (src/lib/useResource.ts) already uses -- which
-  // discards a response older than the newest *issued* rather than skipping a
-  // call outright, so it isn't subject to the objection above. Not done here:
-  // it would mean touching the poll path, which is out of scope for this fix.
+  // Retry stays single-flight to show useful busy feedback. loadMovies stamps every
+  // request independently, so a post-sync refresh can still supersede a retry that
+  // started before the sync imported its new items.
   const [retrying, setRetrying] = useState(false)
   async function retryLoadMovies() {
     if (retrying) return
