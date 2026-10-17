@@ -1,5 +1,5 @@
 import { moviesApi, showsApi } from '@/lib/api'
-import type { MediaItem, MediaStatus, YoutubeResult } from '@/lib/types'
+import type { DownloadStatus, MediaItem, MediaStatus, YoutubeResult } from '@/lib/types'
 
 /**
  * What MediaGrid and SearchModal need from a media type. Injecting this — rather than
@@ -12,8 +12,7 @@ export interface MediaAdapter {
   search(id: string, q?: string): Promise<{ results: YoutubeResult[] }>
   download(id: string, videoId: string): Promise<unknown>
   downloadUrl(id: string, url: string): Promise<unknown>
-  downloadStatus(id: string, init?: RequestInit):
-    Promise<{ inProgress: boolean; finished: boolean; error: string | null; logs: string[] }>
+  downloadStatus(id: string, init?: RequestInit, attemptId?: string): Promise<DownloadStatus>
   /**
    * Search, pick the best match and start it. Movies have a server endpoint for this;
    * shows compose it from search + download client-side, which reaches the same place —
@@ -42,7 +41,7 @@ export const moviesAdapter: MediaAdapter = {
   search:              (id, q) => moviesApi.search(id, q),
   download:            (id, videoId) => moviesApi.download(id, videoId),
   downloadUrl:         (id, url) => moviesApi.downloadUrl(id, url),
-  downloadStatus:      (id, init) => moviesApi.downloadStatus(id, init),
+  downloadStatus:      (id, init, attemptId) => moviesApi.downloadStatus(id, init, attemptId),
   autoDownload:        id => moviesApi.autoDownload(id),
   ignore:              id => moviesApi.ignoreMovie(id),
   unignore:            id => moviesApi.unignoreMovie(id),
@@ -58,7 +57,7 @@ export const showsAdapter: MediaAdapter = {
   search:              (id, q) => showsApi.search(id, q),
   download:            (id, videoId) => showsApi.download(id, videoId),
   downloadUrl:         (id, url) => showsApi.downloadUrl(id, url),
-  downloadStatus:      (id, init) => showsApi.downloadStatus(id, init),
+  downloadStatus:      (id, init, attemptId) => showsApi.downloadStatus(id, init, attemptId),
 
   // Composed client-side: there is no show auto-download endpoint, and the pick is the
   // same rule the movie endpoint applies server-side (first bestMatch, else give up and

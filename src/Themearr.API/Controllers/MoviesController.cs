@@ -200,10 +200,11 @@ public class MoviesController(
         var url     = $"https://www.youtube.com/watch?v={videoId}";
         // A person clicked the button, but the matcher picked the video — "auto" is
         // about who chose the result, not who triggered the request.
-        if (!download.Start(movieId, url, "movie", "auto", best["score"] as int?))
+        var start = download.StartAttempt(movieId, url, "movie", "auto", best["score"] as int?);
+        if (!start.Started)
             return Conflict(new { detail = "A download is already running for this item. Wait for it to finish before starting another." });
 
-        return Accepted(new { started = true, movieId, videoId, videoTitle = best["title"] });
+        return Accepted(new { started = true, attemptId = start.AttemptId, movieId, videoId, videoTitle = best["title"] });
     }
 
     [HttpPost("download")]
@@ -221,9 +222,10 @@ public class MoviesController(
 
         var url = $"https://www.youtube.com/watch?v={req.VideoId}";
         // A human picked this specific video from the search results — "manual".
-        if (!download.Start(req.MovieId, url, "movie", "manual"))
+        var start = download.StartAttempt(req.MovieId, url, "movie", "manual");
+        if (!start.Started)
             return Conflict(new { detail = "A download is already running for this item. Wait for it to finish before starting another." });
-        return Accepted(new { started = true, movieId = req.MovieId });
+        return Accepted(new { started = true, attemptId = start.AttemptId, movieId = req.MovieId });
     }
 
     [HttpPost("download-url")]
@@ -252,15 +254,18 @@ public class MoviesController(
         }
 
         // A human pasted this URL directly — "manual".
-        if (!download.Start(req.MovieId, req.Url, "movie", "manual"))
+        var start = download.StartAttempt(req.MovieId, req.Url, "movie", "manual");
+        if (!start.Started)
             return Conflict(new { detail = "A download is already running for this item. Wait for it to finish before starting another." });
-        return Accepted(new { started = true, movieId = req.MovieId });
+        return Accepted(new { started = true, attemptId = start.AttemptId, movieId = req.MovieId });
     }
 
     [HttpGet("download/status/{movieId}")]
-    public IActionResult DownloadStatus(string movieId)
+    public IActionResult DownloadStatus(string movieId, [FromQuery] string? attemptId = null)
     {
-        return Ok(download.GetStatus(movieId));
+        if (attemptId == null) return Ok(download.GetStatus(movieId));
+        if (!Guid.TryParse(attemptId, out var requested)) return BadRequest(new { detail = "Invalid download attempt ID." });
+        return Ok(download.GetAttemptStatus(movieId, "movie", requested));
     }
 
     // Diagnostic view of the server-side auto-download loop. Use this to verify

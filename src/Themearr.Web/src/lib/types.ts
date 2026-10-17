@@ -205,3 +205,23 @@ export interface RecheckStatus {
   flagged: number
   error: string
 }
+
+export interface DownloadStartResponse {
+  started: boolean
+  attemptId?: string
+  movieId?: string
+  showId?: string
+  videoId?: string
+  videoTitle?: string
+}
+
+export interface DownloadStatus {
+  inProgress: boolean
+  finished: boolean
+  error: string | null
+  logs: string[]
+  attemptId?: string | null
+  known?: boolean
+  state?: 'unknown' | 'pending' | 'running' | 'succeeded' | 'failed' | 'superseded'
+  currentAttemptId?: string | null
+}

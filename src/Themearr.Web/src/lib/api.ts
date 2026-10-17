@@ -1,5 +1,5 @@
 import type {
-  Movie, YoutubeResult, PlexServer, PlexLibrary,
+  DownloadStartResponse, DownloadStatus, Movie, YoutubeResult, PlexServer, PlexLibrary,
   SetupStatus, Settings, SyncStatus, VersionInfo, HistoryEntry, DashboardStats,
   HealthResponse, SystemTask, RadarrSettings, ApiKey, Show, ShowStats, RecheckItem, RecheckMediaType, RecheckStatus,
 } from './types'
@@ -137,13 +137,13 @@ export const moviesApi = {
     ),
 
   download: (movieId: string, videoId: string) =>
-    request<{ started: boolean; movieId: string }>('/api/download', {
+    request<DownloadStartResponse>('/api/download', {
       method: 'POST',
       body: JSON.stringify({ movieId, videoId }),
     }),
 
   downloadUrl: (movieId: string, url: string) =>
-    request<{ started: boolean; movieId: string }>('/api/download-url', {
+    request<DownloadStartResponse>('/api/download-url', {
       method: 'POST',
       body: JSON.stringify({ movieId, url }),
     }),
@@ -151,11 +151,11 @@ export const moviesApi = {
   // `init` lets a caller pass an AbortSignal (e.g. the queue's polled status
   // check bounds it with a timeout so a hung request can't wedge the poll's
   // in-flight guard forever). Every other call site omits it and behaves as before.
-  downloadStatus: (movieId: string, init?: RequestInit) =>
-    request<{ inProgress: boolean; finished: boolean; error: string | null; logs: string[] }>(`/api/download/status/${encodeURIComponent(movieId)}`, init),
+  downloadStatus: (movieId: string, init?: RequestInit, attemptId?: string) =>
+    request<DownloadStatus>(`/api/download/status/${encodeURIComponent(movieId)}${attemptId ? `?attemptId=${encodeURIComponent(attemptId)}` : ''}`, init),
 
   autoDownload: (movieId: string) =>
-    request<{ started: boolean; movieId: string; videoId: string; videoTitle: string }>(`/api/auto-download/${encodeURIComponent(movieId)}`, { method: 'POST' }),
+    request<DownloadStartResponse>(`/api/auto-download/${encodeURIComponent(movieId)}`, { method: 'POST' }),
 
   deleteTheme: (movieId: string) =>
     request<{ deleted: boolean }>(`/api/movies/${encodeURIComponent(movieId)}/theme`, { method: 'DELETE' }),
@@ -199,20 +199,20 @@ export const showsApi = {
     ),
 
   download: (showId: string, videoId: string) =>
-    request<{ started: boolean; showId: string }>(`/api/shows/${encodeURIComponent(showId)}/download`, {
+    request<DownloadStartResponse>(`/api/shows/${encodeURIComponent(showId)}/download`, {
       method: 'POST',
       body: JSON.stringify({ videoId }),
     }),
 
   downloadUrl: (showId: string, url: string) =>
-    request<{ started: boolean; showId: string }>(`/api/shows/${encodeURIComponent(showId)}/download-url`, {
+    request<DownloadStartResponse>(`/api/shows/${encodeURIComponent(showId)}/download-url`, {
       method: 'POST',
       body: JSON.stringify({ url }),
     }),
 
-  downloadStatus: (showId: string, init?: RequestInit) =>
-    request<{ inProgress: boolean; finished: boolean; error: string | null; logs: string[] }>(
-      `/api/shows/${encodeURIComponent(showId)}/download/status`, init),
+  downloadStatus: (showId: string, init?: RequestInit, attemptId?: string) =>
+    request<DownloadStatus>(
+      `/api/shows/${encodeURIComponent(showId)}/download/status${attemptId ? `?attemptId=${encodeURIComponent(attemptId)}` : ''}`, init),
 
   deleteTheme: (showId: string) =>
     request<{ deleted: boolean }>(`/api/shows/${encodeURIComponent(showId)}/theme`, { method: 'DELETE' }),
