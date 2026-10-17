@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Http;
 using Themearr.API.Data;
@@ -74,6 +75,7 @@ public class SettingsController(
         autoDownload = db.GetSetting("auto_download", "false") == "true",
         autoSync     = db.GetSetting("auto_sync",     "false") == "true",
         lastAutoSyncAt = db.GetSetting("last_auto_sync_at", ""),
+        audioProcessing = db.GetAudioProcessingOptions(),
     });
 
     // [Consumes] forces a JSON content-type (and thus a CORS preflight), which — on top
@@ -82,6 +84,19 @@ public class SettingsController(
     [Consumes("application/json")]
     public IActionResult Save([FromBody] SettingsPayload req)
     {
+        AudioProcessingOptions? processing = null;
+        if (req.AudioProcessing is { } raw)
+        {
+            try
+            {
+                processing = raw.Deserialize<AudioProcessingOptions>(AudioProcessingOptions.Json);
+                if (processing == null || processing.ValidationError() is { })
+                    return BadRequest(new { detail = processing?.ValidationError() ?? "Invalid audio processing options." });
+            }
+            catch (JsonException) { return BadRequest(new { detail = "Invalid audio processing options." }); }
+        }
+        if (processing != null) db.SetAudioProcessingOptions(processing);
+
         // Merge so a save that omits the redacted token keeps the stored one.
         db.SetPlexServersMergingTokens(req.SelectedServers);
         db.SetSelectedLibraries(req.SelectedLibraries);
@@ -335,6 +350,7 @@ public record RapidApiKeyPayload(string Key, string Username);
 
 public class SettingsPayload
 {
+    public JsonElement? AudioProcessing { get; set; }
     public List<Dictionary<string, object?>> SelectedServers    { get; set; } = [];
     public Dictionary<string, List<string>>  SelectedLibraries  { get; set; } = [];
 

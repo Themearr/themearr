@@ -19,6 +19,7 @@ public static class HealthDto
     {
         ["libraryPaths"] = "library-paths--path-mappings",
         ["rapidapi"]     = "downloads-require-a-rapidapi-key",
+        ["audioProcessing"] = "optional-audio-processing",
     };
 
     public static string? WikiUrlFor(string source, IConfiguration config) =>

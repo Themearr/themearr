@@ -85,7 +85,15 @@ export interface SetupStatus {
   libraryPaths: string[]
 }
 
+export interface AudioProcessingOptions {
+  enabled: boolean
+  trimSeconds: number | null
+  normalize: boolean
+  bitrateKbps: 128 | 192 | 256 | 320
+}
+
 export interface Settings {
+  audioProcessing?: AudioProcessingOptions
   selectedServers: PlexServer[]
   selectedLibraries: Record<string, string[]>
   /** Optional: absent on a response from a server older than 1d. */
@@ -204,4 +212,42 @@ export interface RecheckStatus {
   scanned: number
   flagged: number
   error: string
+}
+
+export interface DownloadStartResponse {
+  started: boolean
+  attemptId?: string
+  movieId?: string
+  showId?: string
+  videoId?: string
+  videoTitle?: string
+}
+
+export interface DownloadStatus {
+  inProgress: boolean
+  finished: boolean
+  error: string | null
+  logs: string[]
+  attemptId?: string | null
+  known?: boolean
+  state?: 'unknown' | 'pending' | 'running' | 'succeeded' | 'failed' | 'superseded'
+  currentAttemptId?: string | null
+}
+
+export interface AudioRepairAlias { mediaType: 'movie' | 'show'; id: string; title: string }
+export interface AudioRepairPreviewItem {
+  id: string; title: string; aliases: AudioRepairAlias[]; beforeBytes: number
+  estimatedAfterBytes: number | null; inputFingerprint: string; requiresExplicitSelection: boolean
+}
+export interface AudioRepairPreview {
+  previewId: string; expiresAt: string; options: AudioProcessingOptions; optionsFingerprint: string
+  items: AudioRepairPreviewItem[]; exclusions: { aliases: AudioRepairAlias[]; reason: string }[]
+  beforeBytes: number; estimatedAfterBytes: number | null
+}
+export interface AudioRepairStatus {
+  runId: string | null; state: string; encoderAvailable: boolean; total: number; processed: number
+  succeeded: number; failed: number; stale: number; cancelled: number
+  beforeBytes: number; afterBytes: number; backupBytes: number; sourceBytesSaved: number; error?: string | null
+  items: { id: string; title: string; aliases: AudioRepairAlias[]; state: string; beforeBytes: number
+    afterBytes: number | null; backupBytes: number; error: string | null; warnings: string[] }[]
 }

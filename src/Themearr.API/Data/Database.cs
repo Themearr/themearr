@@ -4,7 +4,7 @@ using Themearr.API.Services;
 
 namespace Themearr.API.Data;
 
-public class Database(string dbPath)
+public partial class Database(string dbPath)
 {
     private SqliteConnection Open()
     {
@@ -84,6 +84,7 @@ public class Database(string dbPath)
         MigrateHistoryTableV3(conn);
         MigrateRecheckColumns(conn);
         PruneDeadSettings(conn);
+        InitAudioRepairTables(conn);
     }
 
     // These keys were written on every server save but read by nothing -- the live
@@ -353,6 +354,22 @@ public class Database(string dbPath)
         conn.Query("SELECT value FROM settings WHERE key = @k",
             r => { if (r.Read()) result = r.GetString(0); }, ("@k", key));
         return result;
+    }
+
+    public AudioProcessingOptions GetAudioProcessingOptions()
+    {
+        var raw = GetSetting("audio_processing");
+        if (string.IsNullOrEmpty(raw)) return AudioProcessingOptions.Default;
+        var options = JsonSerializer.Deserialize<AudioProcessingOptions>(raw, AudioProcessingOptions.Json)
+            ?? throw new InvalidOperationException("Invalid stored audio processing settings.");
+        if (options.ValidationError() is { } error) throw new InvalidOperationException(error);
+        return options;
+    }
+
+    public void SetAudioProcessingOptions(AudioProcessingOptions options)
+    {
+        if (options.ValidationError() is { } error) throw new ArgumentException(error);
+        SetSetting("audio_processing", JsonSerializer.Serialize(options, AudioProcessingOptions.Json));
     }
 
     public void SetSetting(string key, string value)
@@ -1145,6 +1162,80 @@ public class Database(string dbPath)
         return true;
     }
 
+    public string? GetThemeFolder(string id, string mediaType)
+    {
+        using var conn = Open();
+        string? folder = null;
+        conn.Query($"SELECT folderName FROM {TableFor(mediaType)} WHERE id = @id",
+            reader => { if (reader.Read()) folder = reader.GetString(0); }, ("@id", id));
+        return folder;
+    }
+
+    public void CommitDownloadedTheme(string id, string mediaType, string title, int? year,
+        string? themeTitle, string url, string pickedBy, int? matchScore, Action publishFiles)
+    {
+        using var conn = Open();
+        using var transaction = conn.BeginTransaction(deferred: false);
+        publishFiles();
+        conn.Execute($"UPDATE {TableFor(mediaType)} SET status = 'downloaded', recheck_state = NULL, recheck_reason = NULL WHERE id = @id", ("@id", id));
+        AddThemeHistory(conn, id, title, year, themeTitle, url, mediaType, pickedBy, matchScore);
+        transaction.Commit();
+    }
+
+    public bool DeleteThemesInFolder(string folder, Func<bool> deleteFiles)
+    {
+        using var conn = Open();
+        using var transaction = conn.BeginTransaction(deferred: false);
+        var deleted = deleteFiles();
+        UpdateFolderThemeStatus(conn, folder, false);
+        transaction.Commit();
+        return deleted;
+    }
+
+    public bool ReconcileThemeStatus(string id, string mediaType, Func<bool> hasTheme)
+    {
+        using var conn = Open();
+        using var transaction = conn.BeginTransaction(deferred: false);
+        var usable = hasTheme();
+        if (usable) conn.Execute($"UPDATE {TableFor(mediaType)} SET status = 'downloaded' WHERE id = @id", ("@id", id));
+        transaction.Commit();
+        return usable;
+    }
+
+    public void ReconcileThemeFolder(string folder, Func<bool> hasTheme)
+    {
+        using var conn = Open();
+        using var transaction = conn.BeginTransaction(deferred: false);
+        UpdateFolderThemeStatus(conn, folder, hasTheme());
+        transaction.Commit();
+    }
+
+    private static void UpdateFolderThemeStatus(SqliteConnection conn, string folder, bool usable)
+    {
+        foreach (var table in new[] { "movies", "shows" })
+        {
+            var matchingIds = new List<string>();
+            conn.Query($"SELECT id, folderName FROM {table}", reader =>
+            {
+                while (reader.Read())
+                {
+                    var candidate = reader.GetString(1);
+                    // An unrelated legacy row must not abort a valid folder's deletion
+                    // after its files have already been removed.
+                    try
+                    {
+                        if (ThemeFiles.CanonicalFolder(candidate) == folder) matchingIds.Add(reader.GetString(0));
+                    }
+                    catch (ArgumentException) { }
+                    catch (NotSupportedException) { }
+                }
+            });
+            foreach (var id in matchingIds)
+                conn.Execute($"UPDATE {table} SET status = @status, recheck_state = CASE WHEN @usable = 0 THEN NULL ELSE recheck_state END, recheck_reason = CASE WHEN @usable = 0 THEN NULL ELSE recheck_reason END WHERE id = @id",
+                    ("@status", usable ? "downloaded" : "pending"), ("@usable", usable ? 1 : 0), ("@id", id));
+        }
+    }
+
     // Deletion must reserve the same writer before touching the filesystem; otherwise
     // it can delete the old file, wait on a replacement's transaction, then leave the
     // newly promoted theme behind despite reporting a successful delete.
@@ -1271,7 +1362,7 @@ public class Database(string dbPath)
 
 // ── Extension helpers ─────────────────────────────────────────────────────────
 
-file static class SqliteExtensions
+internal static class SqliteExtensions
 {
     public static void Execute(this SqliteConnection conn, string sql, params (string name, object? value)[] parameters)
     {

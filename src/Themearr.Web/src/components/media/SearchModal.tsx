@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { serverAttemptId, lostDownloadAttempt, LOST_DOWNLOAD_TRACKING } from '@/lib/downloadAttempt'
 import { boundedRequest } from '@/lib/boundedRequest'
 import type { MediaItem, YoutubeResult } from '@/lib/types'
 import type { MediaAdapter } from '@/lib/media/adapter'
@@ -20,7 +21,7 @@ export function SearchModal({ item, adapter, onClose, onDownloaded }: SearchModa
   const [error, setError] = useState('')
   const [searched, setSearched] = useState(false)
 
-  const binding = useRef<{ ready: boolean } | null>(null)
+  const binding = useRef<{ ready: boolean; serverAttemptId?: string } | null>(null)
   const mounted = useRef(true)
   useEffect(() => {
     mounted.current = true
@@ -38,9 +39,17 @@ export function SearchModal({ item, adapter, onClose, onDownloaded }: SearchModa
       if (!active?.ready || stale || inFlight || binding.current !== active) return
       inFlight = true
       try {
-        const st = await boundedRequest(signal => adapter.downloadStatus(item.id, { signal }))
+        const st = await boundedRequest(signal => adapter.downloadStatus(item.id, { signal }, active.serverAttemptId))
         if (stale || binding.current !== active) return
         failures = 0
+        if (lostDownloadAttempt(active.serverAttemptId, st)) {
+          clearInterval(id)
+          binding.current = null
+          setDownloading(null)
+          setDownloadLogs([])
+          setError(LOST_DOWNLOAD_TRACKING)
+          return
+        }
         if (st.logs?.length) setDownloadLogs(st.logs)
         if (!st.finished) return
         clearInterval(id)
@@ -67,14 +76,17 @@ export function SearchModal({ item, adapter, onClose, onDownloaded }: SearchModa
 
   async function beginDownload(choice: string, start: () => Promise<unknown>) {
     if (binding.current) return
-    const active = { ready: false }
+    const active: { ready: boolean; serverAttemptId?: string } = { ready: false }
     binding.current = active
     setDownloading(choice)
     setDownloadLogs([])
     setError('')
     try {
-      await boundedRequest(start, 30000)
-      if (mounted.current && binding.current === active) active.ready = true
+      const result = await boundedRequest(start, 30000)
+      if (mounted.current && binding.current === active) {
+        active.serverAttemptId = serverAttemptId(result)
+        active.ready = true
+      }
     } catch (e) {
       if (!mounted.current || binding.current !== active) return
       binding.current = null

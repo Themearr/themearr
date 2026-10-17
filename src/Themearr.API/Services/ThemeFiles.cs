@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+
 namespace Themearr.API.Services;
 
 /// <summary>
@@ -8,6 +10,27 @@ namespace Themearr.API.Services;
 /// </summary>
 public static class ThemeFiles
 {
+    // The landing gate, deletion revision and database reconciliation must identify
+    // aliases of the same resolved local folder with one key.
+    public static string CanonicalFolder(string folder) =>
+        Path.TrimEndingDirectorySeparator(Path.GetFullPath(folder));
+
+    internal static IReadOnlyList<string> FinalThemeFiles(string folder) =>
+        Directory.EnumerateFiles(folder, "theme.*").Where(f => !IsNonTheme(f) && (ThemeStat(f)?.Length ?? 0) > 0).ToArray();
+
+    internal static string Fingerprint(string path, CancellationToken ct = default)
+    {
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        using var stream = File.OpenRead(path); var buffer = new byte[65536]; long total = 0; int count;
+        while ((count = stream.Read(buffer)) > 0)
+        {
+            ct.ThrowIfCancellationRequested(); total += count;
+            if (total > StreamLimits.MaxThemeBytes) throw new InvalidOperationException("Audio exceeds the repair size limit.");
+            hash.AppendData(buffer, 0, count);
+        }
+        return Convert.ToHexString(hash.GetHashAndReset());
+    }
+
     // Working extensions that are NOT a finished theme: in-flight download (.part)
     // and yt-dlp's sidecar (.ytdl). Mirrors the read-time status filter.
     private static readonly string[] NonThemeExtensions = [".part", ".ytdl"];
@@ -240,7 +263,7 @@ public static class ThemeFiles
         var deleted = false;
         foreach (var f in Directory.EnumerateFiles(folder, "theme.*"))
         {
-            if (IsNonTheme(f)) continue;
+            if (IsNonTheme(f) || !File.Exists(f)) continue;
             File.Delete(f);
             deleted = true;
         }

@@ -2,7 +2,7 @@
 # Themearr fresh-install script
 # Called by the ProxmoxVE install script after system deps are in place.
 # Also suitable for any fresh Linux install where the .NET runtime is available.
-# (Theme downloads use the youtube-mp36 RapidAPI — no ffmpeg/yt-dlp needed.)
+# (Unprocessed downloads need no encoder; optional processing requires ffmpeg.)
 #
 # Usage: bash install.sh [version]  (defaults to latest GitHub release)
 #
@@ -89,8 +89,13 @@ SHA_URL=$(echo "$RELEASE_JSON" \
 info "Installing Themearr $TAG ($ARCH_SUFFIX)"
 
 # ── System dependencies ───────────────────────────────────────────────────────
-# None required: theme audio is fetched over HTTP from the youtube-mp36 RapidAPI
-# (configured in-app under Settings → RapidAPI), so yt-dlp/ffmpeg are not needed.
+# Keep existing installs dependency-free unless processing is explicitly enabled.
+if command -v ffmpeg >/dev/null 2>&1 && command -v ffprobe >/dev/null 2>&1; then
+  info "Optional audio processing tools are available."
+else
+  info "Optional audio processing needs ffmpeg and ffprobe. On Debian/Ubuntu: apt-get install ffmpeg"
+  info "Leave audio processing disabled until both tools are installed."
+fi
 
 # ── Download and extract ──────────────────────────────────────────────────────
 

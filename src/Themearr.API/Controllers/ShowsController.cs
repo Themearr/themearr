@@ -85,9 +85,10 @@ public class ShowsController(
         }
 
         // A human picked this specific video from the search results — "manual".
-        if (!download.Start(showId, $"https://www.youtube.com/watch?v={req.VideoId}", "show", "manual"))
+        var start = download.StartAttempt(showId, $"https://www.youtube.com/watch?v={req.VideoId}", "show", "manual");
+        if (!start.Started)
             return Conflict(new { detail = "A download is already running for this item. Wait for it to finish before starting another." });
-        return Accepted(new { started = true, showId });
+        return Accepted(new { started = true, attemptId = start.AttemptId, showId });
     }
 
     [HttpPost("{showId}/download-url")]
@@ -114,13 +115,19 @@ public class ShowsController(
         }
 
         // A human pasted this URL directly — "manual".
-        if (!download.Start(showId, req.Url, "show", "manual"))
+        var start = download.StartAttempt(showId, req.Url, "show", "manual");
+        if (!start.Started)
             return Conflict(new { detail = "A download is already running for this item. Wait for it to finish before starting another." });
-        return Accepted(new { started = true, showId });
+        return Accepted(new { started = true, attemptId = start.AttemptId, showId });
     }
 
     [HttpGet("{showId}/download/status")]
-    public IActionResult DownloadStatus(string showId) => Ok(download.GetStatus(showId, "show"));
+    public IActionResult DownloadStatus(string showId, [FromQuery] string? attemptId = null)
+    {
+        if (attemptId == null) return Ok(download.GetStatus(showId, "show"));
+        if (!Guid.TryParse(attemptId, out var requested)) return BadRequest(new { detail = "Invalid download attempt ID." });
+        return Ok(download.GetAttemptStatus(showId, "show", requested));
+    }
 
     [HttpPost("{showId}/ignore")]
     public IActionResult IgnoreShow(string showId)
@@ -202,10 +209,11 @@ public class ShowsController(
         // A person clicked the button, but the matcher picked the video — "auto" is
         // about who chose the result, not who triggered the request (mirrors
         // MoviesController.AutoDownload's identical comment, MoviesController.cs:161-163).
-        if (!download.Start(showId, url, "show", "auto", best["score"] as int?))
+        var start = download.StartAttempt(showId, url, "show", "auto", best["score"] as int?);
+        if (!start.Started)
             return Conflict(new { detail = "A download is already running for this item. Wait for it to finish before starting another." });
 
-        return Accepted(new { started = true, showId, videoId, videoTitle = best["title"] });
+        return Accepted(new { started = true, attemptId = start.AttemptId, showId, videoId, videoTitle = best["title"] });
     }
 
     [HttpDelete("{showId}/theme")]
@@ -222,7 +230,9 @@ public class ShowsController(
         if (roots.Count > 0 && !ThemeFiles.IsWithinRoots(folder, roots))
             return BadRequest(new { detail = "Refusing to delete outside the configured library roots." });
 
-        var deleted = db.DeleteThemeAndReset(showId, "show", () => ThemeFiles.DeleteThemes(folder));
+        bool deleted;
+        try { deleted = download.DeleteTheme(showId, "show"); }
+        catch (UnauthorizedAccessException ex) { return BadRequest(new { detail = ex.Message }); }
 
         // The transaction resets pending/re-check state with deletion so a concurrent
         // automatic replacement cannot recreate a theme after this action completes.

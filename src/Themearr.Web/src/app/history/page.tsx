@@ -1,4 +1,5 @@
 import { useCallback, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { historyApi } from '@/lib/api'
 import { AppShell } from '@/components/layout/AppShell'
 import { Button, EmptyState, ErrorIcon, ShowBadge, Spinner } from '@/components/ui'
@@ -44,6 +45,7 @@ export default function HistoryPage() {
         Refresh
       </Button>
     }>
+      <p className="mb-4 text-sm text-[#98A2B3]">Audio repairs preserve download history. <Link className="text-[#E07777] underline" to="/system#audio-repair">View audio repair report</Link></p>
       {entries === null && error ? (
         <EmptyState
           icon={<ErrorIcon />}

@@ -232,15 +232,16 @@ public class ShowAutoDownloadService(
     /// </summary>
     private List<Dictionary<string, object?>> GetVerifiedPending(Database db)
     {
+        download.ReconcileDirtyFolders();
         var storedPending = db.GetPendingShows();
         var pending = new List<Dictionary<string, object?>>();
         foreach (var s in storedPending)
         {
             var folder = s["folderName"]?.ToString() ?? "";
             if (string.IsNullOrEmpty(folder) || !Directory.Exists(folder)) continue;
-            if (ThemeFiles.HasUsableThemeInExistingFolder(folder))
+            if (download.ReconcileTheme(s["id"]?.ToString() ?? "", "show"))
             {
-                db.SetShowStatus(s["id"]?.ToString() ?? "", "downloaded");
+                log.LogDebug("Existing theme found for {ItemId}", LogSanitizer.Clean(s["id"]?.ToString() ?? ""));
                 continue;
             }
             pending.Add(s);

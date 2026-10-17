@@ -1,5 +1,5 @@
 import type {
-  Movie, YoutubeResult, PlexServer, PlexLibrary,
+  DownloadStartResponse, DownloadStatus, Movie, YoutubeResult, PlexServer, PlexLibrary,
   SetupStatus, Settings, SyncStatus, VersionInfo, HistoryEntry, DashboardStats,
   HealthResponse, SystemTask, RadarrSettings, ApiKey, Show, ShowStats, RecheckItem, RecheckMediaType, RecheckStatus,
 } from './types'
@@ -23,6 +23,12 @@ export function clearAuthToken() {
   localStorage.removeItem(TOKEN_KEY)
 }
 
+class ApiRequestError extends Error {
+  constructor(message: string, readonly outcomeUncertain: boolean, options?: ErrorOptions) {
+    super(message, options)
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const token = getAuthToken()
   const headers: Record<string, string> = {
@@ -42,7 +48,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     // offline, CORS). The raw message -- "Failed to fetch", or Safari's "Load
     // failed" -- is meaningless to a user, so translate it to something honest
     // and actionable. Call sites interpolate this after their own static prefix.
-    throw new Error('Could not reach the server', { cause: e })
+    throw new ApiRequestError('Could not reach the server', true, { cause: e })
   }
 
   if (res.status === 401 && !path.startsWith('/api/auth/')) {
@@ -55,7 +61,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({ detail: res.statusText }))
-    throw new Error(body.detail ?? res.statusText)
+    throw new ApiRequestError(body.detail ?? res.statusText, res.status >= 500)
   }
 
   try {
@@ -63,7 +69,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   } catch (e) {
     // A 2xx whose body isn't JSON -- e.g. a reverse proxy that answers 200 with
     // an HTML error/login page -- would otherwise surface a raw SyntaxError.
-    throw new Error('Invalid response from the server', { cause: e })
+    throw new ApiRequestError('Invalid response from the server', true, { cause: e })
   }
 }
 
@@ -137,13 +143,13 @@ export const moviesApi = {
     ),
 
   download: (movieId: string, videoId: string) =>
-    request<{ started: boolean; movieId: string }>('/api/download', {
+    request<DownloadStartResponse>('/api/download', {
       method: 'POST',
       body: JSON.stringify({ movieId, videoId }),
     }),
 
   downloadUrl: (movieId: string, url: string) =>
-    request<{ started: boolean; movieId: string }>('/api/download-url', {
+    request<DownloadStartResponse>('/api/download-url', {
       method: 'POST',
       body: JSON.stringify({ movieId, url }),
     }),
@@ -151,11 +157,11 @@ export const moviesApi = {
   // `init` lets a caller pass an AbortSignal (e.g. the queue's polled status
   // check bounds it with a timeout so a hung request can't wedge the poll's
   // in-flight guard forever). Every other call site omits it and behaves as before.
-  downloadStatus: (movieId: string, init?: RequestInit) =>
-    request<{ inProgress: boolean; finished: boolean; error: string | null; logs: string[] }>(`/api/download/status/${encodeURIComponent(movieId)}`, init),
+  downloadStatus: (movieId: string, init?: RequestInit, attemptId?: string) =>
+    request<DownloadStatus>(`/api/download/status/${encodeURIComponent(movieId)}${attemptId ? `?attemptId=${encodeURIComponent(attemptId)}` : ''}`, init),
 
   autoDownload: (movieId: string) =>
-    request<{ started: boolean; movieId: string; videoId: string; videoTitle: string }>(`/api/auto-download/${encodeURIComponent(movieId)}`, { method: 'POST' }),
+    request<DownloadStartResponse>(`/api/auto-download/${encodeURIComponent(movieId)}`, { method: 'POST' }),
 
   deleteTheme: (movieId: string) =>
     request<{ deleted: boolean }>(`/api/movies/${encodeURIComponent(movieId)}/theme`, { method: 'DELETE' }),
@@ -199,20 +205,20 @@ export const showsApi = {
     ),
 
   download: (showId: string, videoId: string) =>
-    request<{ started: boolean; showId: string }>(`/api/shows/${encodeURIComponent(showId)}/download`, {
+    request<DownloadStartResponse>(`/api/shows/${encodeURIComponent(showId)}/download`, {
       method: 'POST',
       body: JSON.stringify({ videoId }),
     }),
 
   downloadUrl: (showId: string, url: string) =>
-    request<{ started: boolean; showId: string }>(`/api/shows/${encodeURIComponent(showId)}/download-url`, {
+    request<DownloadStartResponse>(`/api/shows/${encodeURIComponent(showId)}/download-url`, {
       method: 'POST',
       body: JSON.stringify({ url }),
     }),
 
-  downloadStatus: (showId: string, init?: RequestInit) =>
-    request<{ inProgress: boolean; finished: boolean; error: string | null; logs: string[] }>(
-      `/api/shows/${encodeURIComponent(showId)}/download/status`, init),
+  downloadStatus: (showId: string, init?: RequestInit, attemptId?: string) =>
+    request<DownloadStatus>(
+      `/api/shows/${encodeURIComponent(showId)}/download/status${attemptId ? `?attemptId=${encodeURIComponent(attemptId)}` : ''}`, init),
 
   deleteTheme: (showId: string) =>
     request<{ deleted: boolean }>(`/api/shows/${encodeURIComponent(showId)}/theme`, { method: 'DELETE' }),
@@ -278,7 +284,7 @@ export const historyApi = {
 // ── RapidAPI key ──────────────────────────────────────────────────────────────
 
 export const rapidApiApi = {
-  status: () => request<{ configured: boolean }>('/api/settings/rapidapi'),
+  status: (init?: RequestInit) => request<{ configured: boolean }>('/api/settings/rapidapi', init),
 
   save: (key: string, username: string) =>
     request<{ configured: boolean }>('/api/settings/rapidapi', {
@@ -361,4 +367,15 @@ export const recheckApi = {
   flagged: (init?: RequestInit) => request<RecheckItem[]>('/api/themes/recheck/flagged', init),
   keep: (id: string, media: RecheckMediaType) => request<{ state: string }>(`/api/${media === 'show' ? 'shows' : 'movies'}/${encodeURIComponent(id)}/recheck/keep`, { method: 'POST' }),
   replace: (id: string, media: RecheckMediaType) => request<{ state: string }>(`/api/${media === 'show' ? 'shows' : 'movies'}/${encodeURIComponent(id)}/recheck/replace`, { method: 'POST' }),
+}
+
+export const audioRepairApi = {
+  preview: (body: { mediaType: 'movie' | 'show' | 'all'; options: import('./types').AudioProcessingOptions; includeIgnored: boolean }, signal?: AbortSignal) =>
+    request<import('./types').AudioRepairPreview>('/api/audio-repair/preview', { method: 'POST', body: JSON.stringify(body), signal }),
+  apply: (previewId: string, itemIds: string[], signal?: AbortSignal) =>
+    request<{ started: boolean; runId: string }>('/api/audio-repair/apply', { method: 'POST', body: JSON.stringify({ previewId, itemIds }), signal }),
+  status: (runId?: string, signal?: AbortSignal) =>
+    request<import('./types').AudioRepairStatus>(`/api/audio-repair/status${runId ? `?runId=${encodeURIComponent(runId)}` : ''}`, { signal }),
+  cancel: (runId: string, signal?: AbortSignal) =>
+    request<{ cancelled: boolean }>('/api/audio-repair/cancel', { method: 'POST', body: JSON.stringify({ runId }), signal }),
 }

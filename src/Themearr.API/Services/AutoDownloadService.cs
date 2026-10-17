@@ -262,15 +262,16 @@ public class AutoDownloadService(
     /// </summary>
     private List<Dictionary<string, object?>> GetVerifiedPending(Database db)
     {
+        download.ReconcileDirtyFolders();
         var storedPending = db.GetPendingMovies();
         var pending = new List<Dictionary<string, object?>>();
         foreach (var m in storedPending)
         {
             var folder = m["folderName"]?.ToString() ?? "";
             if (string.IsNullOrEmpty(folder) || !Directory.Exists(folder)) continue;
-            if (ThemeFiles.HasUsableThemeInExistingFolder(folder))
+            if (download.ReconcileTheme(m["id"]?.ToString() ?? "", "movie"))
             {
-                db.SetMovieStatus(m["id"]?.ToString() ?? "", "downloaded");
+                log.LogDebug("Existing theme found for {ItemId}", LogSanitizer.Clean(m["id"]?.ToString() ?? ""));
                 continue;
             }
             pending.Add(m);
