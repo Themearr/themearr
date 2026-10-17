@@ -154,3 +154,46 @@ it('a late Retry response cannot outvote a mutation', async () => {
   await remove(); await act(async () => { read.resolve({ configured: true }) })
   expect(rapid().queryByText('API key configured')).not.toBeInTheDocument()
 })
+
+it('does not confirm an old snapshot after a lost write response while the server can still commit', async () => {
+  const responseLost = Object.assign(new Error('Could not reach the server'), { outcomeUncertain: true })
+  open(); await tick()
+  vi.mocked(api.rapidApiApi.save).mockRejectedValueOnce(responseLost)
+  vi.mocked(api.rapidApiApi.status).mockResolvedValue({ configured: false })
+  await replace(); await tick(250)
+  expect(rapid().getByText(/configuration is unconfirmed/i)).toBeInTheDocument()
+  vi.mocked(api.rapidApiApi.status).mockResolvedValue({ configured: true })
+  await tick(1000)
+  expect(rapid().getByText('API key configured')).toBeInTheDocument()
+  expect(rapid().getByText(/configuration is unconfirmed/i)).toBeInTheDocument()
+})
+
+it('keeps uncertainty if an already timed-out write later loses its response', async () => {
+  const save = deferred<object>(); vi.mocked(api.rapidApiApi.save).mockReturnValue(save.promise as never)
+  open(); await tick(); await replace(); await tick(30000)
+  vi.mocked(api.rapidApiApi.status).mockResolvedValue({ configured: false })
+  await act(async () => { save.reject(Object.assign(new Error('connection lost'), { outcomeUncertain: true })) })
+  await tick(250)
+  expect(rapid().getByText(/configuration is unconfirmed/i)).toBeInTheDocument()
+  vi.mocked(api.rapidApiApi.status).mockResolvedValue({ configured: true }); await tick(1000)
+  expect(rapid().getByText('API key configured')).toBeInTheDocument()
+  expect(rapid().getByText(/configuration is unconfirmed/i)).toBeInTheDocument()
+})
+
+it('clears its removal timeout error when that same write later succeeds', async () => {
+  const del = deferred<object>(); vi.mocked(api.rapidApiApi.remove).mockReturnValue(del.promise as never)
+  open(); await tick(); await remove(); await tick(30000)
+  expect(rapid().getByText(/couldn't remove/i)).toBeInTheDocument()
+  vi.mocked(api.rapidApiApi.status).mockResolvedValue({ configured: false })
+  await act(async () => { del.resolve({}) }); await tick(250)
+  expect(rapid().queryByText(/couldn't remove/i)).not.toBeInTheDocument()
+  expect(rapid().queryByText('API key configured')).not.toBeInTheDocument()
+})
+
+it('a late successful removal cannot erase a newer mutation error', async () => {
+  const del = deferred<object>(); vi.mocked(api.rapidApiApi.remove).mockReturnValue(del.promise as never)
+  open(); await tick(); await remove(); await tick(30000)
+  vi.mocked(api.rapidApiApi.save).mockRejectedValueOnce(new Error('newer replacement failed'))
+  await replace(); await act(async () => { del.resolve({}) }); await tick(250)
+  expect(rapid().getByText('newer replacement failed')).toBeInTheDocument()
+})

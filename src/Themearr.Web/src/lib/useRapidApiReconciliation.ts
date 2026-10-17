@@ -2,6 +2,11 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { rapidApiApi } from './api'
 import { boundedRequest } from './boundedRequest'
 
+function ambiguousOutcome(error: unknown): boolean {
+  return error !== null && typeof error === 'object'
+    && 'outcomeUncertain' in error && error.outcomeUncertain === true
+}
+
 export function useRapidApiReconciliation() {
   const [rapidApiOk, setRapidApiOk] = useState<boolean | null>(null)
   const [rapidApiCheckError, setRapidApiCheckError] = useState('')
@@ -69,24 +74,28 @@ export function useRapidApiReconciliation() {
     scheduleRapidReconciliation()
   }
 
-  async function waitRapidMutation<T>(revision: number, request: () => Promise<T>): Promise<T> {
+  async function waitRapidMutation<T>(revision: number, request: () => Promise<T>, onLateSuccess?: () => void): Promise<T> {
     let settled = false
     let timedOut = false
-    function observedSettlement() {
+    function observedSettlement(ambiguous = false) {
       settled = true
       if (!timedOut) return
-      uncertain.current.delete(revision)
+      if (ambiguous) followUntil.current = Date.now() + 30000
+      else uncertain.current.delete(revision)
       // A late transport result can follow an apparently authoritative read.
       activity.current++; reads.current++
       scheduleRapidReconciliation()
     }
     const transport = Promise.resolve().then(request)
-    void transport.then(observedSettlement, observedSettlement)
+    void transport.then(() => {
+      observedSettlement()
+      if (timedOut && mounted.current) onLateSuccess?.()
+    }, error => observedSettlement(ambiguousOutcome(error)))
     try {
       return await boundedRequest(() => transport, 30000)
     } catch (e) {
-      if (!settled) {
-        timedOut = true
+      if (!settled || ambiguousOutcome(e)) {
+        timedOut = !settled
         uncertain.current.add(revision)
         followUntil.current = Date.now() + 30000
         if (mounted.current) setRapidPhase('unconfirmed')

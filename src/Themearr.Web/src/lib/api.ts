@@ -23,6 +23,12 @@ export function clearAuthToken() {
   localStorage.removeItem(TOKEN_KEY)
 }
 
+class ApiRequestError extends Error {
+  constructor(message: string, readonly outcomeUncertain: boolean, options?: ErrorOptions) {
+    super(message, options)
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const token = getAuthToken()
   const headers: Record<string, string> = {
@@ -42,7 +48,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     // offline, CORS). The raw message -- "Failed to fetch", or Safari's "Load
     // failed" -- is meaningless to a user, so translate it to something honest
     // and actionable. Call sites interpolate this after their own static prefix.
-    throw new Error('Could not reach the server', { cause: e })
+    throw new ApiRequestError('Could not reach the server', true, { cause: e })
   }
 
   if (res.status === 401 && !path.startsWith('/api/auth/')) {
@@ -55,7 +61,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({ detail: res.statusText }))
-    throw new Error(body.detail ?? res.statusText)
+    throw new ApiRequestError(body.detail ?? res.statusText, res.status >= 500)
   }
 
   try {
@@ -63,7 +69,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   } catch (e) {
     // A 2xx whose body isn't JSON -- e.g. a reverse proxy that answers 200 with
     // an HTML error/login page -- would otherwise surface a raw SyntaxError.
-    throw new Error('Invalid response from the server', { cause: e })
+    throw new ApiRequestError('Invalid response from the server', true, { cause: e })
   }
 }
 

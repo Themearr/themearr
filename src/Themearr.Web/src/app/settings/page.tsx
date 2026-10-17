@@ -432,7 +432,9 @@ export default function SettingsPage() {
     setRapidApiSaving(true)
     setRapidApiError('')
     try {
-      await waitRapidMutation(mut, () => rapidApiApi.save(rapidApiKey.trim(), rapidApiUsername.trim()))
+      await waitRapidMutation(mut, () => rapidApiApi.save(rapidApiKey.trim(), rapidApiUsername.trim()), () => {
+        if (mut === rapidMutSeq.current && edit === rapidEditSeq.current) setRapidApiError('')
+      })
       // The panel's state belongs to the newest *mutation* only -- a keystroke
       // must not stop this landing: the key IS stored now.
       if (mut === rapidMutSeq.current) setRapidApiOk(true)
@@ -459,7 +461,9 @@ export default function SettingsPage() {
     setRapidApiRemoving(true)
     setRapidApiError('')
     try {
-      await waitRapidMutation(mut, () => rapidApiApi.remove())
+      await waitRapidMutation(mut, () => rapidApiApi.remove(), () => {
+        if (mut === rapidMutSeq.current && edit === rapidEditSeq.current) setRapidApiError('')
+      })
       // Mirror of saveRapidApiKey: the server deleted the key, and a keystroke
       // typed while the DELETE was in flight may not keep the panel claiming
       // "configured" for a key that is gone.
