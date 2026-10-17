@@ -1203,7 +1203,14 @@ public class Database(string dbPath)
                 while (reader.Read())
                 {
                     var candidate = reader.GetString(1);
-                    if (ThemeFiles.CanonicalFolder(candidate) == folder) matchingIds.Add(reader.GetString(0));
+                    // An unrelated legacy row must not abort a valid folder's deletion
+                    // after its files have already been removed.
+                    try
+                    {
+                        if (ThemeFiles.CanonicalFolder(candidate) == folder) matchingIds.Add(reader.GetString(0));
+                    }
+                    catch (ArgumentException) { }
+                    catch (NotSupportedException) { }
                 }
             });
             foreach (var id in matchingIds)

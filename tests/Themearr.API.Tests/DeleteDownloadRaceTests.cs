@@ -144,4 +144,33 @@ public class DeleteDownloadRaceTests
         Assert.False(ThemeFiles.HasUsableTheme(f.Folder));
         Assert.Equal(0L, f.Scalar("SELECT COUNT(*) FROM theme_history"));
     }
+    [Theory]
+    [InlineData("movie")]
+    [InlineData("show")]
+    public async Task Publication_rechecks_roots_changed_while_provider_was_waiting(string media)
+    {
+        using var f = new Fixture(media, true);
+        Assert.True(f.Download.Start(f.Id, Url, media, "manual"));
+        await f.Provider.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        f.Db.SetLibraryPaths([f.Dir.File("DifferentRoot")]);
+        f.Provider.Release.TrySetResult();
+        var status = await f.Finish(media);
+        Assert.NotNull(Prop(status, "error"));
+        Assert.True(File.Exists(Path.Combine(f.Folder, "theme.mp3")));
+        Assert.False(File.Exists(Path.Combine(f.Folder, "theme.m4a")));
+        Assert.Equal(0L, f.Scalar("SELECT COUNT(*) FROM theme_history"));
+    }
+
+    [Theory]
+    [InlineData("movie")]
+    [InlineData("show")]
+    public void Coordinator_refuses_deletion_outside_current_roots(string media)
+    {
+        using var f = new Fixture(media, true);
+        f.Db.SetLibraryPaths([f.Dir.File("DifferentRoot")]);
+        Assert.Throws<UnauthorizedAccessException>(() => f.Download.DeleteTheme(f.Id, media));
+        Assert.True(File.Exists(Path.Combine(f.Folder, "theme.mp3")));
+        Assert.Equal("downloaded", f.Scalar($"SELECT status FROM {(media == "movie" ? "movies" : "shows")} LIMIT 1"));
+    }
+
 }

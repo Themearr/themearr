@@ -140,7 +140,6 @@ public class DownloadService(
             var rawFolder = db.GetThemeFolder(id, mediaType);
             if (string.IsNullOrEmpty(rawFolder)) return false;
             var folder = ThemeFiles.CanonicalFolder(rawFolder);
-            ValidateFolderRoots(folder);
             return db.ReconcileThemeStatus(id, mediaType, () => ThemeFiles.HasUsableTheme(folder));
         }
     }
