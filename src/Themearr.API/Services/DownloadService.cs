@@ -11,7 +11,7 @@ public class DownloadService(
     // PlexService (registered in Program.cs) without a registration change.
     PlexService? plex = null) : Health.IQuotaStatus
 {
-    private sealed record JobState(bool InProgress, bool Finished, string? Error, DateTime StartedAtUtc = default, Guid Generation = default, string? Folder = null, long FolderRevision = 0);
+    private sealed record JobState(bool InProgress, bool Finished, string? Error, DateTime StartedAtUtc = default, Guid Generation = default, string? Folder = null, long FolderRevision = 0, string Phase = "pending");
     private readonly ConcurrentDictionary<string, JobState>          _jobs    = new();
     private readonly ConcurrentDictionary<string, ConcurrentQueue<string>> _jobLogs = new();
 
@@ -80,6 +80,9 @@ public class DownloadService(
     // one value it must never get by accident. matchScore stays optional; "no score" is a
     // legitimate state for a manual pick, not an oversight.
     public bool Start(string id, string youtubeUrl, string mediaType, string pickedBy, int? matchScore = null, RecheckDownloadExpectation? recheck = null)
+        => StartAttempt(id, youtubeUrl, mediaType, pickedBy, matchScore, recheck).Started;
+
+    public DownloadStartResult StartAttempt(string id, string youtubeUrl, string mediaType, string pickedBy, int? matchScore = null, RecheckDownloadExpectation? recheck = null)
     {
         var key = JobKey(mediaType, id);
         // Serialize admission through URL parsing and reservation. Requests cannot both pass
@@ -90,9 +93,9 @@ public class DownloadService(
         {
             if (_jobs.TryGetValue(key, out var existing) && existing.InProgress
                 && existing.StartedAtUtc > DateTime.UtcNow - (DownloadTimeout + WatchdogGrace))
-                return false;
+                return new(false, null);
 
-            if (recheck != null && !db.IsRecheckCurrent(id, mediaType, recheck.HistoryId)) return false;
+            if (recheck != null && !db.IsRecheckCurrent(id, mediaType, recheck.HistoryId)) return new(false, null);
             url = NormaliseYoutubeUrl(youtubeUrl.Trim());
             var logs = new ConcurrentQueue<string>();
             _jobLogs[key] = logs;
@@ -103,7 +106,7 @@ public class DownloadService(
             _jobs[key] = attempt;
         }
         _ = Task.Run(() => RunAsync(id, url, mediaType, pickedBy, matchScore, attempt, recheck));
-        return true;
+        return new(true, attempt.Generation);
     }
 
     // Admission and final publication already share this lock. Deletion must join it,
@@ -215,17 +218,28 @@ public class DownloadService(
 
     public object GetStatus(string id, string mediaType = "movie")
     {
+        var status = GetAttemptStatus(id, mediaType, null);
+        // Existing in-process callers reflect these lowercase anonymous properties.
+        return new { inProgress = status.InProgress, finished = status.Finished, error = status.Error,
+            logs = status.Logs, attemptId = status.AttemptId, known = status.Known,
+            state = status.State, currentAttemptId = status.CurrentAttemptId };
+    }
+
+    public DownloadStatusDto GetAttemptStatus(string id, string mediaType, Guid? requestedAttempt)
+    {
         lock (_admissionLock)
         {
             var key = JobKey(mediaType, id);
             if (!_jobs.TryGetValue(key, out var state))
-                return new { inProgress = false, finished = false, error = (string?)null, logs = Array.Empty<string>() };
+                return new(false, false, null, [], null, false, "unknown");
+            if (requestedAttempt is { } requested && requested != state.Generation)
+                return new(false, false, null, [], requested, true, "superseded", state.Generation);
 
             _jobLogs.TryGetValue(key, out var logQueue);
             var lines = logQueue?.ToArray() ?? [];
             if (lines.Length > 50) lines = lines[^50..];
-
-            return new { inProgress = state.InProgress, finished = state.Finished, error = state.Error, logs = lines };
+            return new(state.InProgress, state.Finished, state.Error, lines, state.Generation, true,
+                state.Finished ? (state.Error == null ? "succeeded" : "failed") : state.Phase);
         }
     }
 
@@ -246,7 +260,15 @@ public class DownloadService(
     {
         var key = JobKey(mediaType, id);
         void Progress(string message) => AddLog(key, message, attempt);
-        void Complete(string? error) => _jobs.TryUpdate(key, attempt with { InProgress = false, Finished = true, Error = error }, attempt);
+        void Complete(string? error)
+        {
+            lock (_admissionLock)
+            {
+                // Running changes the record snapshot; generation remains its ownership token.
+                if (_jobs.TryGetValue(key, out var active) && active.Generation == attempt.Generation)
+                    _jobs[key] = active with { InProgress = false, Finished = true, Error = error };
+            }
+        }
         try
         {
             var item = (mediaType == "show" ? db.GetShow(id) : db.GetMovie(id))
@@ -313,6 +335,8 @@ public class DownloadService(
             {
                 lock (_admissionLock)
                 {
+                    if (!_jobs.TryGetValue(key, out var active) || active.Generation != attempt.Generation) return;
+                    _jobs[key] = active with { Phase = "running" };
                     if (!OwnsFolderRevision(attempt, folder))
                     {
                         Complete("Download cancelled because the theme was deleted after this attempt started.");
