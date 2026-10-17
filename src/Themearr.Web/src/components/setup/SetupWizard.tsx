@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { radarrApi, setupApi, settingsApi } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
+import { boundedRequest } from '@/lib/boundedRequest'
 import type { PlexLibrary, PlexServer } from '@/lib/types'
 import { Button, Input, Spinner } from '@/components/ui'
 
@@ -31,6 +32,11 @@ export function SetupWizard() {
   const [testingRadarr, setTestingRadarr]       = useState(false)
   const [radarrTestResult, setRadarrTestResult] = useState<{ ok: boolean; detail: string } | null>(null)
   const [savingRadarr, setSavingRadarr]         = useState(false)
+  const radarrSeq = useRef(0)
+  const verifiedRadarr = useRef<{ url: string; apiKey: string; generation: number } | null>(null)
+  const radarrSaving = useRef(false)
+
+  useEffect(() => () => { radarrSeq.current++ }, [])
 
   // Path config
   const [libraryPaths, setLibraryPaths]         = useState<string[]>([''])
@@ -108,33 +114,56 @@ export function SetupWizard() {
 
   // ── Radarr connect ────────────────────────────────────────────────────────
 
+  function invalidateRadarrVerification() {
+    radarrSeq.current++
+    verifiedRadarr.current = null
+    setRadarrTestResult(null)
+    setTestingRadarr(false)
+    setError('')
+  }
+
   async function testRadarrConnection() {
+    if (radarrSaving.current || testingRadarr) return
+    const generation = ++radarrSeq.current
+    const url = radarrUrl.trim()
+    const apiKey = radarrApiKey.trim()
+    verifiedRadarr.current = null
     setTestingRadarr(true)
     setError('')
     setRadarrTestResult(null)
     try {
-      const result = await radarrApi.test(radarrUrl.trim(), radarrApiKey.trim())
+      const result = await radarrApi.test(url, apiKey)
+      if (generation !== radarrSeq.current) return
+      if (result.ok) verifiedRadarr.current = { url, apiKey, generation }
       setRadarrTestResult(result)
     } catch (e) {
-      setError((e as Error).message)
+      if (generation === radarrSeq.current) setError((e as Error).message)
     } finally {
-      setTestingRadarr(false)
+      if (generation === radarrSeq.current) setTestingRadarr(false)
     }
   }
 
   async function confirmRadarr() {
-    // A wrong key discovered at first sync is far worse than one discovered
-    // here, so advancing requires a successful test of these exact values.
-    if (!radarrTestResult?.ok) { setError('Test the connection before continuing'); return }
+    if (radarrSaving.current) return
+    // A successful response only authorizes the exact values it tested. An edit or
+    // leaving this step invalidates that authorization even if a request lands late.
+    const verified = verifiedRadarr.current
+    if (!verified || verified.generation !== radarrSeq.current
+      || verified.url !== radarrUrl.trim() || verified.apiKey !== radarrApiKey.trim()) {
+      setError('Test the connection before continuing')
+      return
+    }
+    radarrSaving.current = true
     setSavingRadarr(true)
     setError('')
     try {
-      await radarrApi.save('radarr', radarrUrl.trim(), radarrApiKey.trim())
-      setStep('path-config')
+      await boundedRequest(() => radarrApi.save('radarr', verified.url, verified.apiKey), 30000)
+      if (verified.generation === radarrSeq.current) setStep('path-config')
     } catch (e) {
-      setError((e as Error).message)
+      if (verified.generation === radarrSeq.current) setError((e as Error).message)
     } finally {
-      setSavingRadarr(false)
+      radarrSaving.current = false
+      if (verified.generation === radarrSeq.current) setSavingRadarr(false)
     }
   }
 
@@ -334,14 +363,16 @@ export function SetupWizard() {
             label="Radarr URL"
             placeholder="http://localhost:7878"
             value={radarrUrl}
-            onChange={e => { setRadarrUrl(e.target.value); setRadarrTestResult(null) }}
+            disabled={savingRadarr}
+            onChange={e => { invalidateRadarrVerification(); setRadarrUrl(e.target.value) }}
           />
           <Input
             label="API key"
             type="password"
             placeholder="Radarr API key…"
             value={radarrApiKey}
-            onChange={e => { setRadarrApiKey(e.target.value); setRadarrTestResult(null) }}
+            disabled={savingRadarr}
+            onChange={e => { invalidateRadarrVerification(); setRadarrApiKey(e.target.value) }}
             className="font-mono text-xs"
           />
 
@@ -356,19 +387,19 @@ export function SetupWizard() {
           )}
 
           <div className="flex gap-2 pt-2">
-            <Button variant="ghost" size="sm" onClick={() => setStep('source-select')}>Back</Button>
+            <Button variant="ghost" size="sm" disabled={savingRadarr} onClick={() => { invalidateRadarrVerification(); setStep('source-select') }}>Back</Button>
             <Button
               variant="secondary"
               onClick={testRadarrConnection}
               loading={testingRadarr}
-              disabled={!radarrUrl.trim() || !radarrApiKey.trim()}
+              disabled={testingRadarr || savingRadarr || !radarrUrl.trim() || !radarrApiKey.trim()}
             >
               Test connection
             </Button>
             <Button
               onClick={confirmRadarr}
               loading={savingRadarr}
-              disabled={!radarrTestResult?.ok}
+              disabled={savingRadarr || testingRadarr || !radarrTestResult?.ok}
               className="flex-1"
             >
               Continue
