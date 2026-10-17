@@ -85,7 +85,15 @@ export interface SetupStatus {
   libraryPaths: string[]
 }
 
+export interface AudioProcessingOptions {
+  enabled: boolean
+  trimSeconds: number | null
+  normalize: boolean
+  bitrateKbps: 128 | 192 | 256 | 320
+}
+
 export interface Settings {
+  audioProcessing?: AudioProcessingOptions
   selectedServers: PlexServer[]
   selectedLibraries: Record<string, string[]>
   /** Optional: absent on a response from a server older than 1d. */

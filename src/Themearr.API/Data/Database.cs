@@ -355,6 +355,22 @@ public class Database(string dbPath)
         return result;
     }
 
+    public AudioProcessingOptions GetAudioProcessingOptions()
+    {
+        var raw = GetSetting("audio_processing");
+        if (string.IsNullOrEmpty(raw)) return AudioProcessingOptions.Default;
+        var options = JsonSerializer.Deserialize<AudioProcessingOptions>(raw, AudioProcessingOptions.Json)
+            ?? throw new InvalidOperationException("Invalid stored audio processing settings.");
+        if (options.ValidationError() is { } error) throw new InvalidOperationException(error);
+        return options;
+    }
+
+    public void SetAudioProcessingOptions(AudioProcessingOptions options)
+    {
+        if (options.ValidationError() is { } error) throw new ArgumentException(error);
+        SetSetting("audio_processing", JsonSerializer.Serialize(options, AudioProcessingOptions.Json));
+    }
+
     public void SetSetting(string key, string value)
     {
         using var conn = Open();

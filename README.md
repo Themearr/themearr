@@ -36,11 +36,19 @@ It reads your library from **either Plex or Radarr**. Radarr is a first-class so
 
 ### Disk usage
 
-Themes are stored full-length as received — there is no trimming or re-encoding — which works out to roughly **3.7 GB of theme audio per 1,000 films** (measured on one production install: 1,438 films, 5.28 GB). Plan for that growth on the volume holding your media folders. Plex users: Plex also imports a copy of each theme into its own metadata bundle, so the space is used twice on the volume holding Plex's metadata directory.
+By default themes are stored full-length as received — which works out to roughly **3.7 GB of theme audio per 1,000 films** (measured on one production install: 1,438 films, 5.28 GB). Plan for that growth on the volume holding your media folders. Plex users: Plex also imports a copy of each theme into its own metadata bundle, so the space is used twice on the volume holding Plex's metadata directory.
 
 ## Downloads require a RapidAPI key
 
-Theme audio is fetched through the [youtube-mp36](https://rapidapi.com/ytjar/api/youtube-mp36) API on RapidAPI — Themearr does **not** bundle or shell out to `yt-dlp` or `ffmpeg`. **Downloads will not work until you add your RapidAPI key and username** in **Settings → RapidAPI**. Signing in and browsing your library work without it — only downloading a `theme.mp3` needs it. The free RapidAPI tier is quota-limited, so Themearr backs off automatically when the quota is exhausted.
+Theme audio is fetched through the [youtube-mp36](https://rapidapi.com/ytjar/api/youtube-mp36) API on RapidAPI — Themearr does **not** use `yt-dlp`. Optional audio processing uses local `ffmpeg`/`ffprobe`; unprocessed downloads need neither. **Downloads will not work until you add your RapidAPI key and username** in **Settings → RapidAPI**. Signing in and browsing your library work without it — only downloading a `theme.mp3` needs it. The free RapidAPI tier is quota-limited, so Themearr backs off automatically when the quota is exhausted.
+
+## Optional audio processing
+
+Processing is **disabled by default** ([defaults](src/Themearr.API/Services/AudioProcessingOptions.cs#L6)). In Settings, choose trimming (empty keeps full length), optional loudness normalization, and MP3 bitrate, then explicitly enable processing and save. The Plex preset chooses a 30-second opening; it does not enable processing by itself. Trimming also affects full-length playback in Jellyfin, Emby and Kodi when players share those folders. New downloads alone use these settings.
+
+Docker images include ffmpeg and ffprobe for both supported architectures. For native and Proxmox installations, install them before enabling processing (`apt-get install ffmpeg` on Debian/Ubuntu). Unprocessed downloads remain available without them. System health reports missing tools when processing is enabled. Custom executable locations can be set with `Themearr__FfmpegPath` and `Themearr__FfprobePath`.
+
+Normalization measures the selected segment, then encodes at -16 LUFS, -1.5 dBTP and LRA 11, using 44.1 kHz stereo ([processor settings](src/Themearr.API/Services/FfmpegThemeAudioProcessor.cs#L61)). Processing failure preserves an existing theme and reports a download error.
 
 ## Install
 

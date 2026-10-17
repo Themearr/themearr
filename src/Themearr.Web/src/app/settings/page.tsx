@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiKeyApi, plexApi, radarrApi, rapidApiApi, settingsApi, setupApi, syncApi, systemApi, versionApi } from '@/lib/api'
-import type { PlexLibrary, Settings, VersionInfo } from '@/lib/types'
+import type { AudioProcessingOptions, PlexLibrary, Settings, VersionInfo } from '@/lib/types'
 import { AppShell } from '@/components/layout/AppShell'
 import { Button, EmptyState, ErrorIcon, Input, Spinner } from '@/components/ui'
 import { useResource } from '@/lib/useResource'
@@ -731,6 +731,11 @@ export default function SettingsPage() {
   const setPaths = (fn: (p: string[]) => string[]) =>
     setSettings(s => s ? { ...s, libraryPaths: fn(s.libraryPaths.length ? s.libraryPaths : ['']) } : s)
 
+  const audio = settings.audioProcessing ?? { enabled: false, trimSeconds: null, normalize: false, bitrateKbps: 192 }
+  function setAudio(change: Partial<AudioProcessingOptions>) {
+    setSettings(s => s ? { ...s, audioProcessing: { ...(s.audioProcessing ?? { enabled: false, trimSeconds: null, normalize: false, bitrateKbps: 192 }), ...change } } : s)
+  }
+
   const radarrUrlMissing = librarySource === 'radarr' && !radarrUrl.trim()
   const webhookUrl = `${window.location.origin}/api/webhook/radarr`
 
@@ -1079,6 +1084,25 @@ export default function SettingsPage() {
               onChange={() => setSettings(s => s ? { ...s, autoSync: !s.autoSync } : s)}
             />
           </div>
+        </Section>
+
+        <Section title="Audio processing" hint="Optional processing for new downloads. Existing files require a repair preview.">
+          <button type="button" role="switch" aria-checked={audio.enabled} aria-label="Process new theme downloads" onClick={() => setAudio({ enabled: !audio.enabled })} className="text-sm text-[#D0D5DD]">
+            Process new theme downloads: {audio.enabled ? 'On' : 'Off'}
+          </button>
+          <p className="text-xs text-[#667085]">Requires ffmpeg and ffprobe. Trimming removes full-length background playback for Jellyfin, Emby and Kodi, including folders shared with Plex.</p>
+          <Button variant="secondary" size="sm" onClick={() => setAudio({ trimSeconds: 30 })}>Plex: 30-second preset</Button>
+          <div className="grid grid-cols-2 gap-3">
+            <label className="text-xs text-[#D0D5DD]">Trim duration (seconds; empty keeps full length)
+              <Input type="number" min={5} max={900} step={1} value={audio.trimSeconds ?? ''} onChange={e => setAudio({ trimSeconds: e.target.value === '' ? null : Number(e.target.value) })} />
+            </label>
+            <label className="text-xs text-[#D0D5DD]">MP3 bitrate
+              <select value={audio.bitrateKbps} onChange={e => setAudio({ bitrateKbps: Number(e.target.value) as AudioProcessingOptions['bitrateKbps'] })} className="block w-full rounded border border-[#344054] bg-[#101828] p-2">
+                {[128, 192, 256, 320].map(rate => <option key={rate} value={rate}>{rate} kbps</option>)}
+              </select>
+            </label>
+          </div>
+          <label className="flex items-center gap-2 text-xs text-[#D0D5DD]"><input type="checkbox" checked={audio.normalize} onChange={e => setAudio({ normalize: e.target.checked })} />Normalize loudness (-16 LUFS)</label>
         </Section>
 
         {/* RapidAPI key */}

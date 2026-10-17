@@ -56,6 +56,8 @@ builder.Services.AddHttpClient("no-redirect")
 // Theme-audio download backend behind an interface so the provider can be swapped
 // without touching DownloadService (stateless — reads its config from the DB per call).
 builder.Services.AddSingleton<IThemeAudioProvider, RapidApiThemeAudioProvider>();
+builder.Services.AddSingleton<FfmpegThemeAudioProcessor>();
+builder.Services.AddSingleton<IThemeAudioProcessor>(sp => sp.GetRequiredService<FfmpegThemeAudioProcessor>());
 builder.Services.AddSingleton<DownloadService>();
 // Signs short-lived poster URLs so the Plex token never appears in a client-visible URL.
 builder.Services.AddSingleton<PosterUrlSigner>();
@@ -95,6 +97,7 @@ builder.Services.AddHealthChecks()
     .AddCheck<Themearr.API.Services.Health.LibraryPathsCheck>("libraryPaths")
     .AddCheck<Themearr.API.Services.Health.LibrarySourceCheck>("librarySource")
     .AddCheck<Themearr.API.Services.Health.RapidApiCheck>("rapidapi")
+    .AddCheck<Themearr.API.Services.Health.AudioProcessingCheck>("audioProcessing")
     .AddCheck<Themearr.API.Services.Health.DownloadWorkerCheck>("autoDownload");
 
 // CORS for dev (Vite dev server on :3000) — only in Development

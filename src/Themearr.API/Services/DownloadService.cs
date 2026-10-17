@@ -9,7 +9,7 @@ public class DownloadService(
     // Optional so the existing five-argument test constructions keep compiling, and
     // null-safe because the refresh is best-effort anyway. DI supplies the real
     // PlexService (registered in Program.cs) without a registration change.
-    PlexService? plex = null) : Health.IQuotaStatus
+    PlexService? plex = null, IThemeAudioProcessor? audioProcessor = null) : Health.IQuotaStatus
 {
     private sealed record JobState(bool InProgress, bool Finished, string? Error, DateTime StartedAtUtc = default, Guid Generation = default, string? Folder = null, long FolderRevision = 0, string Phase = "pending");
     private readonly ConcurrentDictionary<string, JobState>          _jobs    = new();
@@ -295,13 +295,13 @@ public class DownloadService(
 
             // The download lands under a neutral in-flight name and is promoted to its
             // container-correct final name in ONE atomic move — see PromoteThemePart
-            // (issue #48). The bytes are stored as received — no transcode — and the
-            // "mp3" provider demonstrably delivers AAC/MP4 in production
-            // (format_name=mov,mp4,m4a probed inside a theme.mp3), so the name cannot be
-            // fixed until the bytes are in hand. DownloadService owns the promotion for
+            // (issue #48). Opt-in processing is staged before this same publication;
+            // the default keeps the provider's original bytes and container. This service owns promotion for
             // BOTH branches so there is exactly one namer and the cleanup below always
             // knows the real landed name.
             var partPath = ThemeFiles.ThemePartPath(folder);
+            var processedPath = Path.Combine(folder, ".themearr-audio-" + Guid.NewGuid().ToString("N") + ".mp3");
+            var processing = db.GetAudioProcessingOptions();
 
             // Fail fast with an actionable message if the folder isn't writable — the
             // common Proxmox/LXC case where the themearr service user lacks permission
@@ -373,6 +373,20 @@ public class DownloadService(
                         await dlResp.Content.ReadAsStreamAsync(token), partPath, StreamLimits.MaxThemeBytes, token);
                 }
 
+                if (processing.Enabled)
+                {
+                    if (audioProcessor == null) throw new InvalidOperationException("Audio processing is unavailable. Install ffmpeg and ffprobe before enabling it.");
+                    await audioProcessor.ProcessAsync(partPath, processedPath, processing, Progress, token);
+                    var bytes = new FileInfo(processedPath).Length;
+                    using (var staged = File.OpenRead(processedPath))
+                    {
+                        var header = new byte[16]; var read = staged.Read(header);
+                        if (bytes is <= 0 or > StreamLimits.MaxThemeBytes || ThemeFiles.SniffedThemeExtension(header.AsSpan(0, read)) != ".mp3")
+                            throw new InvalidOperationException("Processor did not produce valid MP3 audio.");
+                    }
+                    File.Move(processedPath, partPath, overwrite: true);
+                }
+
                 lock (_admissionLock)
                 {
                     // Some providers ignore cancellation. Their late bytes must never
@@ -422,6 +436,7 @@ public class DownloadService(
             finally
             {
                 try { File.Delete(partPath); } catch { /* best effort */ }
+                try { File.Delete(processedPath); } catch { /* best effort */ }
                 gate.Release();
             }
 
