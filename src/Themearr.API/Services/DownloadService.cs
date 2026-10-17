@@ -11,7 +11,7 @@ public class DownloadService(
     // PlexService (registered in Program.cs) without a registration change.
     PlexService? plex = null) : Health.IQuotaStatus
 {
-    private sealed record JobState(bool InProgress, bool Finished, string? Error, DateTime StartedAtUtc = default, Guid Generation = default);
+    private sealed record JobState(bool InProgress, bool Finished, string? Error, DateTime StartedAtUtc = default, Guid Generation = default, string? Folder = null, long FolderRevision = 0);
     private readonly ConcurrentDictionary<string, JobState>          _jobs    = new();
     private readonly ConcurrentDictionary<string, ConcurrentQueue<string>> _jobLogs = new();
 
@@ -27,6 +27,8 @@ public class DownloadService(
 
     private const int MaxLogLines = 300;
     private readonly object _admissionLock = new();
+    private readonly Dictionary<string, long> _folderRevisions = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _dirtyFolders = new(StringComparer.Ordinal);
 
     // After a provider quota-exhaustion (HTTP 429) we pause downloads until this time
     // so the auto-download loop stops hammering the API. Volatile single-writer state.
@@ -94,12 +96,85 @@ public class DownloadService(
             url = NormaliseYoutubeUrl(youtubeUrl.Trim());
             var logs = new ConcurrentQueue<string>();
             _jobLogs[key] = logs;
-            attempt = new JobState(true, false, null, DateTime.UtcNow, Guid.NewGuid());
+            var rawFolder = db.GetThemeFolder(id, mediaType);
+            var folder = string.IsNullOrEmpty(rawFolder) ? null : ThemeFiles.CanonicalFolder(rawFolder);
+            attempt = new JobState(true, false, null, DateTime.UtcNow, Guid.NewGuid(), folder,
+                folder == null ? 0 : _folderRevisions.GetValueOrDefault(folder));
             _jobs[key] = attempt;
         }
         _ = Task.Run(() => RunAsync(id, url, mediaType, pickedBy, matchScore, attempt, recheck));
         return true;
     }
+
+    // Admission and final publication already share this lock. Deletion must join it,
+    // and invalidate jobs admitted before deletion even while their provider is parked.
+    public bool DeleteTheme(string id, string mediaType)
+    {
+        lock (_admissionLock)
+        {
+            var rawFolder = db.GetThemeFolder(id, mediaType);
+            if (string.IsNullOrEmpty(rawFolder)) return false;
+            var folder = ThemeFiles.CanonicalFolder(rawFolder);
+            ValidateFolderRoots(folder);
+            _folderRevisions[folder] = _folderRevisions.GetValueOrDefault(folder) + 1;
+            try
+            {
+                var deleted = db.DeleteThemesInFolder(folder, () => Directory.Exists(folder) && ThemeFiles.DeleteThemes(folder));
+                _dirtyFolders.Remove(folder);
+                return deleted;
+            }
+            catch
+            {
+                // SQLite cannot roll back a file deletion. Keep invalidation and retry
+                // status reconciliation instead of allowing older bytes to resurrect it.
+                _dirtyFolders.Add(folder);
+                throw;
+            }
+        }
+    }
+
+    public bool ReconcileTheme(string id, string mediaType)
+    {
+        lock (_admissionLock)
+        {
+            var rawFolder = db.GetThemeFolder(id, mediaType);
+            if (string.IsNullOrEmpty(rawFolder)) return false;
+            var folder = ThemeFiles.CanonicalFolder(rawFolder);
+            ValidateFolderRoots(folder);
+            return db.ReconcileThemeStatus(id, mediaType, () => ThemeFiles.HasUsableTheme(folder));
+        }
+    }
+
+    public void ReconcileDirtyFolders()
+    {
+        lock (_admissionLock)
+        {
+            foreach (var folder in _dirtyFolders.ToArray())
+            {
+                try
+                {
+                    ValidateFolderRoots(folder);
+                    db.ReconcileThemeFolder(folder, () => ThemeFiles.HasUsableTheme(folder));
+                    _dirtyFolders.Remove(folder);
+                }
+                catch (Exception ex)
+                {
+                    log.LogWarning("Theme status reconciliation failed for {Folder}: {Detail}",
+                        LogSanitizer.Clean(folder), LogSanitizer.Clean(ex.Message));
+                }
+            }
+        }
+    }
+
+    private void ValidateFolderRoots(string folder)
+    {
+        var roots = db.GetLibraryPaths();
+        if (roots.Count > 0 && !ThemeFiles.IsWithinRoots(folder, roots))
+            throw new UnauthorizedAccessException("Refusing to mutate a theme outside the configured library roots.");
+    }
+
+    private bool OwnsFolderRevision(JobState attempt, string folder) =>
+        attempt.Folder == folder && attempt.FolderRevision == _folderRevisions.GetValueOrDefault(folder);
 
     // Defense-in-depth beyond the per-job timeout: if a job somehow stays "in progress"
     // past the timeout plus a grace margin (e.g. a backend that ignores cancellation),
@@ -178,8 +253,8 @@ public class DownloadService(
             var item = (mediaType == "show" ? db.GetShow(id) : db.GetMovie(id))
                 ?? throw new KeyNotFoundException($"{mediaType} not found: {id}");
 
-            var folder = item["folderName"]?.ToString()
-                ?? throw new InvalidOperationException($"{mediaType} has no folder path");
+            var folder = ThemeFiles.CanonicalFolder(item["folderName"]?.ToString()
+                ?? throw new InvalidOperationException($"{mediaType} has no folder path"));
 
             if (!url.StartsWith("http://") && !url.StartsWith("https://"))
                 throw new ArgumentException("Invalid URL");
@@ -237,6 +312,14 @@ public class DownloadService(
             }
             try
             {
+                lock (_admissionLock)
+                {
+                    if (!OwnsFolderRevision(attempt, folder))
+                    {
+                        Complete("Download cancelled because the theme was deleted after this attempt started.");
+                        return;
+                    }
+                }
                 if (recheck != null && !db.IsRecheckCurrent(id, mediaType, recheck.HistoryId))
                 {
                     Complete("Replacement cancelled because the theme or its re-check decision changed.");
@@ -273,6 +356,12 @@ public class DownloadService(
                     // replace the old theme, or commit history for an expired generation.
                     token.ThrowIfCancellationRequested();
                     if (!_jobs.TryGetValue(key, out var active) || active.Generation != attempt.Generation) return;
+                    if (!OwnsFolderRevision(attempt, folder))
+                    {
+                        Complete("Download cancelled because the theme was deleted after this attempt started.");
+                        return;
+                    }
+                    ValidateFolderRoots(folder);
                     void PublishFiles()
                     {
                         token.ThrowIfCancellationRequested();
@@ -299,18 +388,17 @@ public class DownloadService(
                     }
                     else
                     {
-                        PublishFiles();
-                        if (mediaType == "show") db.SetShowStatus(id, "downloaded");
-                        else                     db.SetMovieStatus(id, "downloaded");
-                        db.AddThemeHistory(id, title, year, themeTitle, url, mediaType, pickedBy, matchScore);
-                        db.ClearRecheck(id, mediaType);
+                        try
+                        {
+                            db.CommitDownloadedTheme(id, mediaType, title, year, themeTitle, url, pickedBy, matchScore, PublishFiles);
+                        }
+                        catch { _dirtyFolders.Add(folder); throw; }
                     }
                 }
             }
             finally
             {
-                if (recheck != null)
-                    try { File.Delete(partPath); } catch { /* best effort */ }
+                try { File.Delete(partPath); } catch { /* best effort */ }
                 gate.Release();
             }
 

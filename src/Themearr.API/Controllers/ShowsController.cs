@@ -222,7 +222,9 @@ public class ShowsController(
         if (roots.Count > 0 && !ThemeFiles.IsWithinRoots(folder, roots))
             return BadRequest(new { detail = "Refusing to delete outside the configured library roots." });
 
-        var deleted = db.DeleteThemeAndReset(showId, "show", () => ThemeFiles.DeleteThemes(folder));
+        bool deleted;
+        try { deleted = download.DeleteTheme(showId, "show"); }
+        catch (UnauthorizedAccessException ex) { return BadRequest(new { detail = ex.Message }); }
 
         // The transaction resets pending/re-check state with deletion so a concurrent
         // automatic replacement cannot recreate a theme after this action completes.

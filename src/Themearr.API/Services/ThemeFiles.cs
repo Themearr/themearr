@@ -8,6 +8,11 @@ namespace Themearr.API.Services;
 /// </summary>
 public static class ThemeFiles
 {
+    // The landing gate, deletion revision and database reconciliation must identify
+    // aliases of the same resolved local folder with one key.
+    public static string CanonicalFolder(string folder) =>
+        Path.TrimEndingDirectorySeparator(Path.GetFullPath(folder));
+
     // Working extensions that are NOT a finished theme: in-flight download (.part)
     // and yt-dlp's sidecar (.ytdl). Mirrors the read-time status filter.
     private static readonly string[] NonThemeExtensions = [".part", ".ytdl"];
@@ -240,7 +245,7 @@ public static class ThemeFiles
         var deleted = false;
         foreach (var f in Directory.EnumerateFiles(folder, "theme.*"))
         {
-            if (IsNonTheme(f)) continue;
+            if (IsNonTheme(f) || !File.Exists(f)) continue;
             File.Delete(f);
             deleted = true;
         }
