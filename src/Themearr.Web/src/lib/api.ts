@@ -362,3 +362,14 @@ export const recheckApi = {
   keep: (id: string, media: RecheckMediaType) => request<{ state: string }>(`/api/${media === 'show' ? 'shows' : 'movies'}/${encodeURIComponent(id)}/recheck/keep`, { method: 'POST' }),
   replace: (id: string, media: RecheckMediaType) => request<{ state: string }>(`/api/${media === 'show' ? 'shows' : 'movies'}/${encodeURIComponent(id)}/recheck/replace`, { method: 'POST' }),
 }
+
+export const audioRepairApi = {
+  preview: (body: { mediaType: 'movie' | 'show' | 'all'; options: import('./types').AudioProcessingOptions; includeIgnored: boolean }, signal?: AbortSignal) =>
+    request<import('./types').AudioRepairPreview>('/api/audio-repair/preview', { method: 'POST', body: JSON.stringify(body), signal }),
+  apply: (previewId: string, itemIds: string[], signal?: AbortSignal) =>
+    request<{ started: boolean; runId: string }>('/api/audio-repair/apply', { method: 'POST', body: JSON.stringify({ previewId, itemIds }), signal }),
+  status: (runId?: string, signal?: AbortSignal) =>
+    request<import('./types').AudioRepairStatus>(`/api/audio-repair/status${runId ? `?runId=${encodeURIComponent(runId)}` : ''}`, { signal }),
+  cancel: (runId: string, signal?: AbortSignal) =>
+    request<{ cancelled: boolean }>('/api/audio-repair/cancel', { method: 'POST', body: JSON.stringify({ runId }), signal }),
+}

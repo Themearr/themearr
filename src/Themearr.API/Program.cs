@@ -59,6 +59,8 @@ builder.Services.AddSingleton<IThemeAudioProvider, RapidApiThemeAudioProvider>()
 builder.Services.AddSingleton<FfmpegThemeAudioProcessor>();
 builder.Services.AddSingleton<IThemeAudioProcessor>(sp => sp.GetRequiredService<FfmpegThemeAudioProcessor>());
 builder.Services.AddSingleton<DownloadService>();
+builder.Services.AddSingleton<AudioRepairService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<AudioRepairService>());
 // Signs short-lived poster URLs so the Plex token never appears in a client-visible URL.
 builder.Services.AddSingleton<PosterUrlSigner>();
 builder.Services.AddSingleton<IApiKeyStore, ApiKeyStore>();

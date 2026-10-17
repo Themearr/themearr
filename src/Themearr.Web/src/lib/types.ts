@@ -233,3 +233,21 @@ export interface DownloadStatus {
   state?: 'unknown' | 'pending' | 'running' | 'succeeded' | 'failed' | 'superseded'
   currentAttemptId?: string | null
 }
+
+export interface AudioRepairAlias { mediaType: 'movie' | 'show'; id: string; title: string }
+export interface AudioRepairPreviewItem {
+  id: string; title: string; aliases: AudioRepairAlias[]; beforeBytes: number
+  estimatedAfterBytes: number | null; inputFingerprint: string; requiresExplicitSelection: boolean
+}
+export interface AudioRepairPreview {
+  previewId: string; expiresAt: string; options: AudioProcessingOptions; optionsFingerprint: string
+  items: AudioRepairPreviewItem[]; exclusions: { aliases: AudioRepairAlias[]; reason: string }[]
+  beforeBytes: number; estimatedAfterBytes: number | null
+}
+export interface AudioRepairStatus {
+  runId: string | null; state: string; encoderAvailable: boolean; total: number; processed: number
+  succeeded: number; failed: number; stale: number; cancelled: number
+  beforeBytes: number; afterBytes: number; backupBytes: number; sourceBytesSaved: number; error?: string | null
+  items: { id: string; title: string; aliases: AudioRepairAlias[]; state: string; beforeBytes: number
+    afterBytes: number | null; backupBytes: number; error: string | null; warnings: string[] }[]
+}

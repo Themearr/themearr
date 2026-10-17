@@ -37,6 +37,7 @@ export function makeApiMock() {
     statsApi: group('get'),
     versionApi: group('get', 'refresh', 'update', 'updateStatus'),
     systemApi: group('health', 'tasks', 'runTask'),
+    audioRepairApi: { preview: vi.fn(), apply: vi.fn(), cancel: vi.fn(), status: vi.fn().mockResolvedValue({ runId: null, state: 'idle', encoderAvailable: true, items: [] }) },
     radarrApi: group('get', 'save', 'test'),
     plexApi: group('test', 'saveUrl'),
     apiKeyApi: group('get', 'regenerate'),

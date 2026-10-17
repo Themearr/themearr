@@ -138,6 +138,9 @@ jobs:
         working-directory: tests/e2e
         run: npx playwright install-deps chromium
 
+      - name: Install audio repair test tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+
       - name: Run E2E
         working-directory: tests/e2e
         run: npm test

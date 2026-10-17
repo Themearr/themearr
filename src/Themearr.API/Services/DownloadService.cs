@@ -3,7 +3,7 @@ using Themearr.API.Data;
 
 namespace Themearr.API.Services;
 
-public class DownloadService(
+public partial class DownloadService(
     IThemeAudioProvider provider, Database db, IHttpClientFactory httpClientFactory,
     IConfiguration config, ILogger<DownloadService> log,
     // Optional so the existing five-argument test constructions keep compiling, and
@@ -25,6 +25,7 @@ public class DownloadService(
     // singleton (Program.cs), so every download in the process crosses this map.
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _folderGates = new(StringComparer.Ordinal);
 
+    private Database ThemeDatabase => db;
     private const int MaxLogLines = 300;
     private readonly object _admissionLock = new();
     private readonly Dictionary<string, long> _folderRevisions = new(StringComparer.Ordinal);
@@ -120,6 +121,7 @@ public class DownloadService(
             var folder = ThemeFiles.CanonicalFolder(rawFolder);
             ValidateFolderRoots(folder);
             _folderRevisions[folder] = _folderRevisions.GetValueOrDefault(folder) + 1;
+            _contentRevisions[folder] = _contentRevisions.GetValueOrDefault(folder) + 1;
             try
             {
                 var deleted = db.DeleteThemesInFolder(folder, () => Directory.Exists(folder) && ThemeFiles.DeleteThemes(folder));
@@ -339,7 +341,7 @@ public class DownloadService(
                     _jobs[key] = active with { Phase = "running" };
                     if (!OwnsFolderRevision(attempt, folder))
                     {
-                        Complete("Download cancelled because the theme was deleted after this attempt started.");
+                        Complete("Download cancelled because the theme was deleted or repaired after this attempt started.");
                         return;
                     }
                 }
@@ -395,7 +397,7 @@ public class DownloadService(
                     if (!_jobs.TryGetValue(key, out var active) || active.Generation != attempt.Generation) return;
                     if (!OwnsFolderRevision(attempt, folder))
                     {
-                        Complete("Download cancelled because the theme was deleted after this attempt started.");
+                        Complete("Download cancelled because the theme was deleted or repaired after this attempt started.");
                         return;
                     }
                     ValidateFolderRoots(folder);
@@ -403,6 +405,7 @@ public class DownloadService(
                     {
                         token.ThrowIfCancellationRequested();
                         var outputPath = ThemeFiles.PromoteThemePart(folder);
+                        _contentRevisions[folder] = _contentRevisions.GetValueOrDefault(folder) + 1;
 
                         // Remove stale alternate-extension theme files (e.g. an old theme.m4a) now
                         // that the new theme file is safely in place — never before the download.

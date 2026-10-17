@@ -4,7 +4,7 @@ using Themearr.API.Services;
 
 namespace Themearr.API.Data;
 
-public class Database(string dbPath)
+public partial class Database(string dbPath)
 {
     private SqliteConnection Open()
     {
@@ -84,6 +84,7 @@ public class Database(string dbPath)
         MigrateHistoryTableV3(conn);
         MigrateRecheckColumns(conn);
         PruneDeadSettings(conn);
+        InitAudioRepairTables(conn);
     }
 
     // These keys were written on every server save but read by nothing -- the live
@@ -1361,7 +1362,7 @@ public class Database(string dbPath)
 
 // ── Extension helpers ─────────────────────────────────────────────────────────
 
-file static class SqliteExtensions
+internal static class SqliteExtensions
 {
     public static void Execute(this SqliteConnection conn, string sql, params (string name, object? value)[] parameters)
     {

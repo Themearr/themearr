@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
 import { systemApi } from '@/lib/api'
 import type { HealthResponse, SystemTask } from '@/lib/types'
+import { AudioRepairPanel } from '@/components/system/AudioRepairPanel'
 import { AppShell } from '@/components/layout/AppShell'
 import { Button, EmptyState, Spinner } from '@/components/ui'
 
-type Tab = 'health' | 'tasks'
+type Tab = 'health' | 'tasks' | 'audio-repair'
 
 const TYPE_STYLES: Record<string, { dot: string; text: string; label: string }> = {
   error:   { dot: '#F04438', text: '#FDA29B', label: 'Error' },
@@ -55,7 +56,7 @@ function formatInterval(interval: string): string {
 }
 
 export default function SystemPage() {
-  const [tab,         setTab]         = useState<Tab>('health')
+  const [tab,         setTab]         = useState<Tab>(window.location.hash === '#audio-repair' ? 'audio-repair' : 'health')
   const [health,      setHealth]      = useState<HealthResponse | null>(null)
   const [healthError, setHealthError] = useState(false)
   const [tasks,       setTasks]       = useState<SystemTask[] | null>(null)
@@ -108,7 +109,7 @@ export default function SystemPage() {
   return (
     <AppShell title="System">
       <div role="tablist" className="mb-5 flex gap-1 border-b border-[#1D2939]">
-        {(['health', 'tasks'] as Tab[]).map(t => (
+        {(['health', 'tasks', 'audio-repair'] as Tab[]).map(t => (
           <button
             key={t}
             type="button"
@@ -123,7 +124,7 @@ export default function SystemPage() {
                 : 'text-[#667085] hover:text-[#D0D5DD]'
             }`}
           >
-            {t}
+            {t === 'audio-repair' ? 'Audio repair' : t}
           </button>
         ))}
       </div>
@@ -131,6 +132,8 @@ export default function SystemPage() {
       {error && (
         <p className="mb-4 rounded-lg bg-[#F04438]/10 px-3 py-2 text-sm text-[#FDA29B]">{error}</p>
       )}
+
+      {tab === 'audio-repair' && <div id="system-panel-audio-repair" role="tabpanel" aria-labelledby="system-tab-audio-repair"><AudioRepairPanel /></div>}
 
       {tab === 'health' && (
         <div id="system-panel-health" role="tabpanel" aria-labelledby="system-tab-health">
