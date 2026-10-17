@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { settingsApi } from '@/lib/api'
+import { advanceCursor, queueKey, rebaseCursor, selectCursor, type QueueCursor } from '@/lib/media/queueCursor'
 import { ThemeRecheck } from '@/components/queue/ThemeRecheck'
 import type { MediaItem, YoutubeResult } from '@/lib/types'
 import { AppShell } from '@/components/layout/AppShell'
@@ -42,7 +43,10 @@ export default function QueuePage() {
   const [media, setMedia] = useState<'movies' | 'shows'>('movies')
   const adapter = media === 'movies' ? moviesAdapter : showsAdapter
 
-  const [currentIdx,   setCurrentIdx]   = useState(0)
+  const [queue, setQueue] = useState<{ items: MediaItem[] | null; listFor: 'movies' | 'shows'; cursor: QueueCursor }>({
+    items: null, listFor: 'movies', cursor: { media: 'movies', currentKey: null, visitedKeys: new Set() },
+  })
+  const { items: movies, listFor, cursor } = queue
   const [results,      setResults]      = useState<YoutubeResult[]>([])
   const [searching,    setSearching]    = useState(false)
   const [searchQuery,  setSearchQuery]  = useState('')
@@ -107,14 +111,18 @@ export default function QueuePage() {
   // shows-adapter call with a movie's id hits a nonexistent -- or worse, a
   // colliding -- show). Tagged in the fetcher, gated by its own latest-stamp
   // so an abandoned fetch settling late cannot mislabel a newer list.
-  const [listFor, setListFor] = useState<'movies' | 'shows'>('movies')
   const listFetchSeq = useRef(0)
   // The initial load. Routed through useResource so a failed request surfaces
   // as an error screen instead of "every movie already has a theme".
-  const { data: movies, error: moviesError, retry: retryMovies } = useResource(useCallback(() => {
+  const { error: moviesError, retry: retryMovies } = useResource(useCallback(() => {
     const mine = ++listFetchSeq.current
     return adapter.list().then(list => {
-      if (mine === listFetchSeq.current) setListFor(media)
+      if (mine === listFetchSeq.current) setQueue(previous => {
+        if (previous.cursor.media !== media) return previous
+        const previousKeys = (previous.items ?? []).filter(item => item.status === 'pending').map(item => queueKey(media, item.id))
+        const nextKeys = list.filter(item => item.status === 'pending').map(item => queueKey(media, item.id))
+        return { items: list, listFor: media, cursor: rebaseCursor(previous.cursor, previousKeys, nextKeys) }
+      })
       return list
     })
   }, [adapter, media]))
@@ -133,7 +141,11 @@ export default function QueuePage() {
     // passive, so a poll tick due in the commit-to-effect gap would still read
     // the old media and could act on the wrong list's index.
     mediaRef.current = next
-    setCurrentIdx(0)
+    setQueue(previous => {
+      const keys = previous.listFor === next
+        ? (previous.items ?? []).filter(item => item.status === 'pending').map(item => queueKey(next, item.id)) : []
+      return { ...previous, cursor: rebaseCursor({ media: next, currentKey: null, visitedKeys: new Set() }, [], keys) }
+    })
     setResults([])
     setError('')
     setManualUrl('')
@@ -149,8 +161,11 @@ export default function QueuePage() {
     retryMovies()
   }
 
-  const current   = pending?.[currentIdx] ?? null
-  const remaining = pending ? Math.max(0, pending.length - currentIdx) : 0
+  const eligible = (pending ?? []).filter(item => !cursor.visitedKeys.has(queueKey(media, item.id)))
+  const current = eligible.find(item => queueKey(media, item.id) === cursor.currentKey) ?? null
+  const remaining = eligible.length
+  const selectedIndex = eligible.findIndex(item => item === current)
+  const upNext = current ? [...eligible.slice(selectedIndex + 1), ...eligible.slice(0, selectedIndex)] : []
 
   // What the card is showing right now, for the download catch handlers below:
   // the "Up next" rows and the media toggle deliberately stay clickable while a
@@ -273,9 +288,13 @@ export default function QueuePage() {
   // this function is referenced from the poll effect, and the compiler lint
   // (react-hooks/immutability) forbids effect-reachable functions mutating a
   // ref an effect also writes.
-  function advanceQueue(forMovieId?: string) {
+  function advanceQueue(forMovieId?: string, actedKey?: string | null) {
     if (forMovieId !== undefined && downloadingMovieId.current !== forMovieId) return
-    setCurrentIdx((i: number) => i + 1)
+    if (actedKey) setQueue(previous => ({
+      ...previous,
+      cursor: advanceCursor(previous.cursor,
+        (previous.items ?? []).filter(item => item.status === 'pending').map(item => queueKey(previous.cursor.media, item.id)), actedKey),
+    }))
     setResults([])
     setError('')
     setManualUrl('')
@@ -321,7 +340,7 @@ export default function QueuePage() {
   function skipCurrent() {
     // eslint-disable-next-line react-hooks/immutability
     onScreenKeyRef.current = null
-    advanceQueue()
+    advanceQueue(undefined, cursor.currentKey)
   }
 
   // The ignore round-trip has the same shape as a download request: the queue
@@ -347,7 +366,7 @@ export default function QueuePage() {
     // the request ran, the +1 would push them off an item that was never
     // triaged. The ignore is recorded server-side either way; the item leaves
     // the list on the next load.
-    if (onScreenKeyRef.current === forKey) advanceQueue()
+    if (onScreenKeyRef.current === forKey) advanceQueue(undefined, forKey)
   }
 
   // ── Auto-download in auto mode ─────────────────────────────────────────────
@@ -470,18 +489,17 @@ export default function QueuePage() {
               // the commit-to-effect gap would read the pre-advance key,
               // match, and advance a second time.
               onScreenKeyRef.current = null
-              advanceQueue()
+              advanceQueue(undefined, forKey)
             }, 3000)
           }
         } else if (downloadAttempt.current === attempt && onScreenKeyRef.current === forKey) {
-          advanceQueue(movieId)
+          advanceQueue(movieId, forKey)
         } else if (downloadAttempt.current === attempt) {
           // Finished, but the downloaded item is no longer the card: advancing
           // would silently skip whatever IS -- the historical queue-race bug
           // class. The id gate inside advanceQueue can't catch this on its own,
-          // because a switch-away-and-back re-bases currentIdx onto a refetched
-          // list that may already exclude the finished item, leaving the +1 to
-          // land on the new head. So: end the tracking here and let list
+          // because a switch-away-and-back may select a new key from a refetched
+          // list that already excludes the finished item. So: end the tracking here and let list
           // reloads converge -- the completed item stops being pending on the
           // next load, which switching back already triggers
           // (switchMedia -> retryMovies).
@@ -705,15 +723,15 @@ export default function QueuePage() {
         </div>
 
         {/* Up next */}
-        {pending && pending.length > currentIdx + 1 && (
+        {upNext.length > 0 && (
           <div className="rounded-xl border border-[#1D2939] bg-[#101828] overflow-hidden">
             <div className="px-4 py-3 border-b border-[#1D2939]">
               <p className="text-xs font-semibold text-[#667085] uppercase tracking-wider">
-                Up next · {pending.length - currentIdx - 1} {adapter.labels.singular}{pending.length - currentIdx - 1 !== 1 ? 's' : ''}
+                Up next · {upNext.length} {adapter.labels.singular}{upNext.length !== 1 ? 's' : ''}
               </p>
             </div>
             <div className="divide-y divide-[#1D2939] max-h-72 overflow-y-auto">
-              {pending.slice(currentIdx + 1, currentIdx + 11).map((movie: MediaItem, i: number) => (
+              {upNext.slice(0, 10).map((movie: MediaItem, i: number) => (
                 <button
                   key={movie.id}
                   onClick={() => {
@@ -723,7 +741,11 @@ export default function QueuePage() {
                     // the item just clicked. Here the next key IS knowable:
                     // it's this row's.
                     onScreenKeyRef.current = `${media}:${movie.id}`
-                    setCurrentIdx(currentIdx + 1 + i)
+                    setQueue(previous => ({
+                      ...previous,
+                      cursor: selectCursor(previous.cursor,
+                        (previous.items ?? []).filter(item => item.status === 'pending').map(item => queueKey(media, item.id)), queueKey(media, movie.id)),
+                    }))
                   }}
                   className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-[#1D2939]/60 transition-colors text-left"
                 >
