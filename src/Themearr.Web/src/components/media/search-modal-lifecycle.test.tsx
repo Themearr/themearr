@@ -5,7 +5,7 @@ import { moviesAdapter } from '@/lib/media/adapter'
 const item = { id: 'a', source: 'plex', sourceRef: 'a', title: 'Arrival', year: 2016, sourcePath: null, folderName: '/movies/Arrival', status: 'downloaded' as const, posterUrl: null }
 const finished = { inProgress: false, finished: true, error: null, logs: [] }
 function pending<T>() { let resolve!: (v: T) => void; let reject!: (e: Error) => void; const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej }); return { promise, resolve, reject } }
-function start() { fireEvent.change(screen.getByPlaceholderText(/https:\/\/www.youtube.com/), { target: { value: 'https://example.com/theme.mp3' } }); fireEvent.click(screen.getByRole('button', { name: 'Download' })) }
+function start() { fireEvent.change(screen.getByPlaceholderText('https://www.youtube.com/watch?v=…'), { target: { value: 'https://example.com/theme.mp3' } }); fireEvent.click(screen.getByRole('button', { name: 'Download' })) }
 afterEach(() => vi.useRealTimers())
 describe('search modal download ownership', () => {
   it('waits for start before accepting the previous job completion', async () => {
