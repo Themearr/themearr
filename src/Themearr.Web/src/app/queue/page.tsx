@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { settingsApi } from '@/lib/api'
+import { ThemeRecheck } from '@/components/queue/ThemeRecheck'
 import type { MediaItem, YoutubeResult } from '@/lib/types'
 import { AppShell } from '@/components/layout/AppShell'
 import { Button, EmptyState, ErrorIcon, Input, Spinner } from '@/components/ui'
@@ -604,6 +605,7 @@ export default function QueuePage() {
     return (
       <AppShell title="Queue">
         {mediaToggle}
+        <ThemeRecheck />
         {moviesError ? (
           <EmptyState
             icon={<ErrorIcon />}
@@ -625,6 +627,7 @@ export default function QueuePage() {
     return (
       <AppShell title="Queue">
         {mediaToggle}
+        <ThemeRecheck />
         {moviesError && (
           <div className="mb-5 rounded-lg border border-[#B42318]/40 bg-[#FEF3F2]/5 px-4 py-3">
             <p className="text-sm text-[#FDA29B]">Couldn&apos;t refresh the queue: {moviesError}</p>
@@ -681,6 +684,7 @@ export default function QueuePage() {
     >
       <div className="max-w-2xl space-y-5">
         {mediaToggle}
+        <ThemeRecheck />
 
         {moviesError && (
           <div className="rounded-lg border border-[#B42318]/40 bg-[#FEF3F2]/5 px-4 py-3">

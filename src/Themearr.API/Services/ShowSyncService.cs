@@ -15,7 +15,7 @@ public class ShowSyncService(Database db, PlexService plex, ILogger<ShowSyncServ
         if (db.GetSelectedShowLibraries().Values.Sum(v => v.Count) == 0)
             return 0;   // opt-in: nothing selected
 
-        var shows = await plex.FetchShowsAsync(msg => log.LogInformation("{Msg}", msg));
+        var shows = await plex.FetchShowsAsync(msg => log.LogInformation("{Msg}", LogSanitizer.Clean(msg)));
         db.UpsertShows(shows);
 
         var unresolved = int.TryParse(db.GetSetting("last_show_sync_unresolved_count", "0"), out var n) ? n : 0;

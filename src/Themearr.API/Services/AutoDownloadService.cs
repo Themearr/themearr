@@ -205,7 +205,8 @@ public class AutoDownloadService(
         log.LogInformation("AutoDownload: starting '{Title}' ({Year}) → {VideoId}", LogSanitizer.Clean(title), year, LogSanitizer.Clean(videoId));
         // The matcher picked this candidate, not a person — "auto" — carrying its score
         // along so the re-check can weigh a later match against the one that shipped.
-        if (!download.Start(movieId, url, "movie", "auto", best["score"] as int?))
+        var recheck = isRecheck ? new RecheckDownloadExpectation(candidate.GetValueOrDefault("historyId") as long?) : null;
+        if (!download.Start(movieId, url, "movie", "auto", best["score"] as int?, recheck))
         {
             // Raced with another starter — try again next tick.
             _cooldownUntil[movieId] = DateTime.UtcNow + ErrorCooldown;

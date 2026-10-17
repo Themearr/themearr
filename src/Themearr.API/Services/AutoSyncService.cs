@@ -34,13 +34,11 @@ public class AutoSyncService(
         registry.Register(SyncTaskId, "Sync Library", SyncInterval, () => sync.InProgress);
         SeedLastRunFromDatabase();
 
-        // Delay startup by 2 minutes so the API is fully warmed up first
-        await Task.Delay(TimeSpan.FromMinutes(2), ct);
+        // Delay scheduled work until warmup finishes; an explicit Run now can wake it early.
+        var forced = await WaitForNextAsync(ct, TimeSpan.FromMinutes(2));
 
         // A manual trigger forces a sync even when auto-sync is off or the 24h
         // interval has not elapsed — that is the entire point of "Run now".
-        var forced = false;
-
         while (!ct.IsCancellationRequested)
         {
             // The interval is a property of the active source, which the user can change
@@ -81,7 +79,7 @@ public class AutoSyncService(
     /// The loser of the race is cancelled and awaited, so an abandoned reader can
     /// never sit on the trigger channel and swallow a later "Run now".
     /// </summary>
-    private async Task<bool> WaitForNextAsync(CancellationToken ct)
+    private async Task<bool> WaitForNextAsync(CancellationToken ct, TimeSpan? initialWait = null)
     {
         var jitter = TimeSpan.FromMilliseconds(Random.Shared.Next(
             (int)-JitterMax.TotalMilliseconds,
@@ -98,7 +96,7 @@ public class AutoSyncService(
 
         using var raceCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         var trigger = registry.WaitForTriggerAsync(SyncTaskId, raceCts.Token);
-        var delay   = Task.Delay(baseWait + jitter, raceCts.Token);
+        var delay   = Task.Delay(initialWait ?? baseWait + jitter, raceCts.Token);
 
         await Task.WhenAny(trigger, delay);
 
@@ -131,6 +129,7 @@ public class AutoSyncService(
         if (!db.IsSetupComplete())
         {
             if (forced) log.LogInformation("AutoSync: 'Run now' ignored — setup not complete");
+            if (forced) registry.RecordFailure(SyncTaskId, "setup not complete");
             return;
         }
 
@@ -175,6 +174,7 @@ public class AutoSyncService(
                 // IsRunning is read straight from SyncService via TaskRegistry's probe,
                 // so there is nothing here that needs to be cleared either.
                 log.LogInformation("AutoSync: sync already in progress, skipping");
+                if (forced) registry.RecordFailure(SyncTaskId, "sync already in progress");
             }
         }
         catch

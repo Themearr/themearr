@@ -72,6 +72,12 @@ export default function DashboardPage() {
           </div>
         </div>
 
+        {(stats.needsAttention ?? 0) > 0 && (
+          <Link to="/queue#needs-attention" className="block text-sm text-[#F79009] hover:underline">
+            {stats.needsAttention} movie themes need attention
+          </Link>
+        )}
+
         {/* ── Stat cards ──────────────────────────────────────────────── */}
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           {[
@@ -221,6 +227,12 @@ export default function DashboardPage() {
                 />
               </div>
             </div>
+
+            {(showStats.needsAttention ?? 0) > 0 && (
+              <Link to="/queue#needs-attention" className="block text-sm text-[#F79009] hover:underline">
+                {showStats.needsAttention} show themes need attention
+              </Link>
+            )}
 
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
               {[

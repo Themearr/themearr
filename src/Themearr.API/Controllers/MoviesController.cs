@@ -77,24 +77,12 @@ public class MoviesController(
         if (roots.Count > 0 && !ThemeFiles.IsWithinRoots(folder, roots))
             return BadRequest(new { detail = "Refusing to delete outside the configured library roots." });
 
-        var deleted = ThemeFiles.DeleteThemes(folder);
+        var deleted = db.DeleteThemeAndReset(movieId, "movie", () => ThemeFiles.DeleteThemes(folder));
 
-        // Reset the stored status so the column stays honest (this movie no longer has a
-        // theme) and the auto-download worker's cheap stored-status pre-filter re-adopts
-        // it. Without this, a movie deleted while auto-download is on would keep its stale
-        // 'downloaded' status and never be re-fetched once the worker stops disk-scanning
-        // every movie every tick.
+        // The transaction resets pending/re-check state with deletion so a concurrent
+        // automatic replacement cannot recreate a theme after this action completes.
         if (deleted)
         {
-            db.SetMovieStatus(movieId, "pending");
-
-            // The 'kept' escape hatch depends on this: deleting the theme is the
-            // documented way back from a permanent 'kept' verdict, so leaving the flag in
-            // place would make that verdict un-undoable. It also stops the item being
-            // double-counted (pending in the queue AND still "needs attention") and stops
-            // recheck_reason describing a file that no longer exists.
-            db.ClearRecheck(movieId, "movie");
-
             // Plex keeps playing its cached theme until the item is refreshed — the same
             // staleness issue #45 fixed for downloads, in the delete direction. Fire and
             // forget: this action's signature is pinned synchronous, and a DELETE must
@@ -210,7 +198,8 @@ public class MoviesController(
         var url     = $"https://www.youtube.com/watch?v={videoId}";
         // A person clicked the button, but the matcher picked the video — "auto" is
         // about who chose the result, not who triggered the request.
-        download.Start(movieId, url, "movie", "auto", best["score"] as int?);
+        if (!download.Start(movieId, url, "movie", "auto", best["score"] as int?))
+            return Conflict(new { detail = "A download is already running for this item. Wait for it to finish before starting another." });
 
         return Accepted(new { started = true, movieId, videoId, videoTitle = best["title"] });
     }
@@ -230,7 +219,8 @@ public class MoviesController(
 
         var url = $"https://www.youtube.com/watch?v={req.VideoId}";
         // A human picked this specific video from the search results — "manual".
-        download.Start(req.MovieId, url, "movie", "manual");
+        if (!download.Start(req.MovieId, url, "movie", "manual"))
+            return Conflict(new { detail = "A download is already running for this item. Wait for it to finish before starting another." });
         return Accepted(new { started = true, movieId = req.MovieId });
     }
 
@@ -260,7 +250,8 @@ public class MoviesController(
         }
 
         // A human pasted this URL directly — "manual".
-        download.Start(req.MovieId, req.Url, "movie", "manual");
+        if (!download.Start(req.MovieId, req.Url, "movie", "manual"))
+            return Conflict(new { detail = "A download is already running for this item. Wait for it to finish before starting another." });
         return Accepted(new { started = true, movieId = req.MovieId });
     }
 

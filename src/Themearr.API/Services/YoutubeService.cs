@@ -6,7 +6,7 @@ public class YoutubeService
 {
     private readonly YoutubeClient _yt = new();
 
-    public async Task<List<Dictionary<string, object?>>> SearchAsync(
+    public virtual async Task<List<Dictionary<string, object?>>> SearchAsync(
         string query, int maxResults = 8, string? title = null, int? year = null)
     {
         var raw = new List<(Dictionary<string, object?> result, int score, string videoTitle, TimeSpan? duration)>();

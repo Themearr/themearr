@@ -229,10 +229,10 @@ export default function SystemPage() {
                           size="sm"
                           variant="secondary"
                           loading={running === t.id}
-                          disabled={t.isRunning || running === t.id}
+                          disabled={t.isRunning || t.isPending || running === t.id}
                           onClick={() => runTask(t.id)}
                         >
-                          {t.isRunning ? 'Running' : 'Run now'}
+                          {t.isRunning ? 'Running' : t.isPending ? 'Queued' : 'Run now'}
                         </Button>
                       </td>
                     </tr>

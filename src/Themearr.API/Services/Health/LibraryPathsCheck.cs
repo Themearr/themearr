@@ -34,14 +34,18 @@ public sealed class LibraryPathsCheck(Database db) : IHealthCheck
                     "Check the mount is not read-only and that the themearr user can write to it."));
         }
 
-        var unresolved = int.TryParse(db.GetSetting("last_sync_unresolved_count", "0"), out var n) ? n : 0;
-        if (unresolved > 0)
+        var warnings = new List<string>();
+        foreach (var (prefix, media) in new[] { ("last_sync", "movies"), ("last_show_sync", "shows") })
         {
-            var sample  = db.GetSetting("last_sync_unresolved_sample", "");
-            var message = $"{unresolved} movies could not be resolved to a local path — check Path Mappings.";
+            var unresolved = int.TryParse(db.GetSetting($"{prefix}_unresolved_count", "0"), out var n) ? n : 0;
+            if (unresolved <= 0) continue;
+            var sample = db.GetSetting($"{prefix}_unresolved_sample", "");
+            var message = $"{unresolved} {media} could not be resolved to a local path — check Path Mappings.";
             if (!string.IsNullOrEmpty(sample)) message += $" Example: {sample}";
-            return Task.FromResult(HealthCheckResult.Degraded(message));
+            warnings.Add(message);
         }
+        if (warnings.Count > 0)
+            return Task.FromResult(HealthCheckResult.Degraded(string.Join(" ", warnings)));
 
         return Task.FromResult(HealthCheckResult.Healthy(
             $"{paths.Count} library path(s) present and writable"));

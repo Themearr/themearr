@@ -19,6 +19,11 @@ on:
       - 'tests/e2e/**'
   workflow_dispatch:
 
+# Tag allocation and both native/GHCR publication jobs share one release lock.
+concurrency:
+  group: themearr-release
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
@@ -33,6 +38,9 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Test native deployment
+        run: python3 -m unittest discover -s tests/deployment -v
+
       # ── Determine next semver tag ────────────────────────────────────────────
       - name: Determine bump and next version
         id: semver
@@ -42,19 +50,15 @@ jobs:
           git fetch --tags --force
 
           latest_tag="$(git tag --list 'v*' --sort=-v:refname | head -n1)"
-          [[ -z "${latest_tag}" ]] && latest_tag="v0.0.0"
-
-          range=""
-          if [[ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]]; then
-            range="${{ github.event.before }}..${{ github.sha }}"
-          fi
-
-          commit_messages=""
-          if [[ -n "${range}" ]]; then
-            commit_messages="$(git log --format=%s "${range}")"
+          # Pending workflow runs can be superseded. Include every commit since
+          # the published tag so a later fix push cannot hide an unpublished feature.
+          if [[ -n "${latest_tag}" ]]; then
+            range="${latest_tag}..${{ github.sha }}"
           else
-            commit_messages="$(git log --format=%s -n 1 "${{ github.sha }}")"
+            latest_tag="v0.0.0"
+            range="${{ github.sha }}"
           fi
+          commit_messages="$(git log --format=%s "${range}")"
 
           bump="patch"
           if echo "${commit_messages}" | grep -Eqi '(^major:)|(#major)|BREAKING CHANGE|!:'; then
