@@ -85,7 +85,8 @@ public class ShowsController(
         }
 
         // A human picked this specific video from the search results — "manual".
-        download.Start(showId, $"https://www.youtube.com/watch?v={req.VideoId}", "show", "manual");
+        if (!download.Start(showId, $"https://www.youtube.com/watch?v={req.VideoId}", "show", "manual"))
+            return Conflict(new { detail = "A download is already running for this item. Wait for it to finish before starting another." });
         return Accepted(new { started = true, showId });
     }
 
@@ -113,7 +114,8 @@ public class ShowsController(
         }
 
         // A human pasted this URL directly — "manual".
-        download.Start(showId, req.Url, "show", "manual");
+        if (!download.Start(showId, req.Url, "show", "manual"))
+            return Conflict(new { detail = "A download is already running for this item. Wait for it to finish before starting another." });
         return Accepted(new { started = true, showId });
     }
 
@@ -200,7 +202,8 @@ public class ShowsController(
         // A person clicked the button, but the matcher picked the video — "auto" is
         // about who chose the result, not who triggered the request (mirrors
         // MoviesController.AutoDownload's identical comment, MoviesController.cs:161-163).
-        download.Start(showId, url, "show", "auto", best["score"] as int?);
+        if (!download.Start(showId, url, "show", "auto", best["score"] as int?))
+            return Conflict(new { detail = "A download is already running for this item. Wait for it to finish before starting another." });
 
         return Accepted(new { started = true, showId, videoId, videoTitle = best["title"] });
     }
@@ -219,19 +222,12 @@ public class ShowsController(
         if (roots.Count > 0 && !ThemeFiles.IsWithinRoots(folder, roots))
             return BadRequest(new { detail = "Refusing to delete outside the configured library roots." });
 
-        var deleted = ThemeFiles.DeleteThemes(folder);
+        var deleted = db.DeleteThemeAndReset(showId, "show", () => ThemeFiles.DeleteThemes(folder));
 
-        // Reset the stored status so the column stays honest and the auto-download worker's
-        // stored-status pre-filter re-adopts this show — same contract as the movie endpoint.
+        // The transaction resets pending/re-check state with deletion so a concurrent
+        // automatic replacement cannot recreate a theme after this action completes.
         if (deleted)
         {
-            db.SetShowStatus(showId, "pending");
-
-            // Same fix as the movie endpoint: without this, the 'kept' escape hatch has no
-            // way back, the show is double-counted, and recheck_reason describes a file
-            // that no longer exists.
-            db.ClearRecheck(showId, "show");
-
             // Plex keeps playing its cached theme until the item is refreshed — the same
             // staleness issue #45 fixed for downloads, in the delete direction. Fire and
             // forget: this action's signature is pinned synchronous, and a DELETE must

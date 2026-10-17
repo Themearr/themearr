@@ -1,7 +1,7 @@
 import type {
   Movie, YoutubeResult, PlexServer, PlexLibrary,
   SetupStatus, Settings, SyncStatus, VersionInfo, HistoryEntry, DashboardStats,
-  HealthResponse, SystemTask, RadarrSettings, ApiKey, Show, ShowStats,
+  HealthResponse, SystemTask, RadarrSettings, ApiKey, Show, ShowStats, RecheckItem, RecheckMediaType, RecheckStatus,
 } from './types'
 
 const BASE = (import.meta.env.VITE_API_URL ?? '').replace(/\/$/, '')
@@ -352,4 +352,13 @@ export const apiKeyApi = {
   get: () => request<ApiKey>('/api/settings/apikey'),
   regenerate: () =>
     request<ApiKey>('/api/settings/apikey/regenerate', { method: 'POST' }),
+}
+
+// Recheck judgements never remove the existing theme; workers replace it atomically.
+export const recheckApi = {
+  start: () => request<{ started: boolean; detail?: string }>('/api/themes/recheck', { method: 'POST' }),
+  status: (init?: RequestInit) => request<RecheckStatus>('/api/themes/recheck/status', init),
+  flagged: (init?: RequestInit) => request<RecheckItem[]>('/api/themes/recheck/flagged', init),
+  keep: (id: string, media: RecheckMediaType) => request<{ state: string }>(`/api/${media === 'show' ? 'shows' : 'movies'}/${encodeURIComponent(id)}/recheck/keep`, { method: 'POST' }),
+  replace: (id: string, media: RecheckMediaType) => request<{ state: string }>(`/api/${media === 'show' ? 'shows' : 'movies'}/${encodeURIComponent(id)}/recheck/replace`, { method: 'POST' }),
 }

@@ -55,6 +55,7 @@ export interface Show extends MediaItem {
 }
 
 export interface ShowStats {
+  needsAttention?: number
   total: number
   downloaded: number
   plexTheme: number
@@ -124,6 +125,7 @@ export interface HistoryEntry {
 }
 
 export interface DashboardStats {
+  needsAttention?: number
   total: number
   downloaded: number
   pending: number
@@ -159,6 +161,7 @@ export interface HealthResponse {
 }
 
 export interface SystemTask {
+  isPending?: boolean
   id: string
   name: string
   /**
@@ -183,4 +186,22 @@ export interface RadarrSettings {
 
 export interface ApiKey {
   key: string
+}
+
+export type RecheckMediaType = 'movie' | 'show'
+export interface RecheckItem {
+  id: string
+  mediaType: RecheckMediaType
+  title: string
+  year: number | null
+  themeTitle: string | null
+  state: 'queued' | 'review'
+  reason: string | null
+}
+export interface RecheckStatus {
+  inProgress: boolean
+  finished: boolean
+  scanned: number
+  flagged: number
+  error: string
 }

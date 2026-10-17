@@ -67,7 +67,7 @@ export default function ShowsPage() {
       await new Promise(r => setTimeout(r, 2000))
       try {
         const row = (await systemApi.tasks()).find(t => t.id === 'syncShows')
-        if (row && !row.isRunning) return row.lastResult ?? 'Sync finished'
+        if (row && !row.isRunning && !row.isPending) return row.lastResult ?? 'Sync finished'
       } catch { /* keep waiting */ }
     }
     return null

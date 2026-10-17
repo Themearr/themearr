@@ -60,8 +60,10 @@ builder.Services.AddSingleton<DownloadService>();
 // Signs short-lived poster URLs so the Plex token never appears in a client-visible URL.
 builder.Services.AddSingleton<PosterUrlSigner>();
 builder.Services.AddSingleton<IApiKeyStore, ApiKeyStore>();
+builder.Services.AddHostedService<NativePermissionRepairService>();
 builder.Services.AddHostedService<AutoSyncService>();
 builder.Services.AddHostedService<ShowAutoSyncService>();
+builder.Services.AddHostedService<AutoRecheckService>();
 // Register AutoDownloadService as a singleton AND wire its hosted-service lifecycle
 // off the same instance so a controller can ask it for diagnostics.
 builder.Services.AddSingleton<AutoDownloadService>();

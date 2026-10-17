@@ -11,7 +11,7 @@ public class DownloadService(
     // PlexService (registered in Program.cs) without a registration change.
     PlexService? plex = null) : Health.IQuotaStatus
 {
-    private sealed record JobState(bool InProgress, bool Finished, string? Error, DateTime StartedAtUtc = default);
+    private sealed record JobState(bool InProgress, bool Finished, string? Error, DateTime StartedAtUtc = default, Guid Generation = default);
     private readonly ConcurrentDictionary<string, JobState>          _jobs    = new();
     private readonly ConcurrentDictionary<string, ConcurrentQueue<string>> _jobLogs = new();
 
@@ -26,6 +26,7 @@ public class DownloadService(
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _folderGates = new(StringComparer.Ordinal);
 
     private const int MaxLogLines = 300;
+    private readonly object _admissionLock = new();
 
     // After a provider quota-exhaustion (HTTP 429) we pause downloads until this time
     // so the auto-download loop stops hammering the API. Volatile single-writer state.
@@ -76,18 +77,27 @@ public class DownloadService(
     // site compile and silently record the value that permits automatic replacement — the
     // one value it must never get by accident. matchScore stays optional; "no score" is a
     // legitimate state for a manual pick, not an oversight.
-    public bool Start(string id, string youtubeUrl, string mediaType, string pickedBy, int? matchScore = null)
+    public bool Start(string id, string youtubeUrl, string mediaType, string pickedBy, int? matchScore = null, RecheckDownloadExpectation? recheck = null)
     {
         var key = JobKey(mediaType, id);
-        if (_jobs.TryGetValue(key, out var existing) && existing.InProgress)
-            return false;
+        // Serialize admission through URL parsing and reservation. Requests cannot both pass
+        // the admission check and spend provider quota on the same item.
+        JobState attempt;
+        string url;
+        lock (_admissionLock)
+        {
+            if (_jobs.TryGetValue(key, out var existing) && existing.InProgress
+                && existing.StartedAtUtc > DateTime.UtcNow - (DownloadTimeout + WatchdogGrace))
+                return false;
 
-        var url  = NormaliseYoutubeUrl(youtubeUrl.Trim());
-        var logs = _jobLogs.GetOrAdd(key, _ => new ConcurrentQueue<string>());
-        while (logs.TryDequeue(out _)) { }   // clear previous run's logs
-
-        _jobs[key] = new JobState(true, false, null, DateTime.UtcNow);
-        _ = Task.Run(() => RunAsync(id, url, mediaType, pickedBy, matchScore));
+            if (recheck != null && !db.IsRecheckCurrent(id, mediaType, recheck.HistoryId)) return false;
+            url = NormaliseYoutubeUrl(youtubeUrl.Trim());
+            var logs = new ConcurrentQueue<string>();
+            _jobLogs[key] = logs;
+            attempt = new JobState(true, false, null, DateTime.UtcNow, Guid.NewGuid());
+            _jobs[key] = attempt;
+        }
+        _ = Task.Run(() => RunAsync(id, url, mediaType, pickedBy, matchScore, attempt, recheck));
         return true;
     }
 
@@ -131,29 +141,38 @@ public class DownloadService(
 
     public object GetStatus(string id, string mediaType = "movie")
     {
-        var key = JobKey(mediaType, id);
-        if (!_jobs.TryGetValue(key, out var state))
-            return new { inProgress = false, finished = false, error = (string?)null, logs = Array.Empty<string>() };
+        lock (_admissionLock)
+        {
+            var key = JobKey(mediaType, id);
+            if (!_jobs.TryGetValue(key, out var state))
+                return new { inProgress = false, finished = false, error = (string?)null, logs = Array.Empty<string>() };
 
-        _jobLogs.TryGetValue(key, out var logQueue);
-        var lines = logQueue?.ToArray() ?? [];
-        if (lines.Length > 50) lines = lines[^50..];
+            _jobLogs.TryGetValue(key, out var logQueue);
+            var lines = logQueue?.ToArray() ?? [];
+            if (lines.Length > 50) lines = lines[^50..];
 
-        return new { inProgress = state.InProgress, finished = state.Finished, error = state.Error, logs = lines };
+            return new { inProgress = state.InProgress, finished = state.Finished, error = state.Error, logs = lines };
+        }
     }
 
     // Takes the namespaced job key (see JobKey), not a bare media id.
-    private void AddLog(string jobKey, string message)
+    private void AddLog(string jobKey, string message, JobState? attempt = null)
     {
-        if (!_jobLogs.TryGetValue(jobKey, out var logQueue)) return;
-        logQueue.Enqueue(message);
-        while (logQueue.Count > MaxLogLines)
-            logQueue.TryDequeue(out _);
+        lock (_admissionLock)
+        {
+            if (attempt != null && (!_jobs.TryGetValue(jobKey, out var active) || active.Generation != attempt.Generation)) return;
+            if (!_jobLogs.TryGetValue(jobKey, out var logQueue)) return;
+            logQueue.Enqueue(message);
+            while (logQueue.Count > MaxLogLines)
+                logQueue.TryDequeue(out _);
+        }
     }
 
-    private async Task RunAsync(string id, string url, string mediaType, string pickedBy, int? matchScore)
+    private async Task RunAsync(string id, string url, string mediaType, string pickedBy, int? matchScore, JobState attempt, RecheckDownloadExpectation? recheck)
     {
         var key = JobKey(mediaType, id);
+        void Progress(string message) => AddLog(key, message, attempt);
+        void Complete(string? error) => _jobs.TryUpdate(key, attempt with { InProgress = false, Finished = true, Error = error }, attempt);
         try
         {
             var item = (mediaType == "show" ? db.GetShow(id) : db.GetMovie(id))
@@ -213,20 +232,25 @@ public class DownloadService(
                 _ => new SemaphoreSlim(1, 1));
             if (!gate.Wait(0))
             {
-                AddLog(key, "[themearr] Another download is writing to this folder — waiting for it to finish.");
+                Progress("[themearr] Another download is writing to this folder — waiting for it to finish.");
                 await gate.WaitAsync(token);
             }
             try
             {
+                if (recheck != null && !db.IsRecheckCurrent(id, mediaType, recheck.HistoryId))
+                {
+                    Complete("Replacement cancelled because the theme or its re-check decision changed.");
+                    return;
+                }
                 if (videoId != null)
                 {
                     // YouTube URL — delegate to the configured theme-audio provider.
-                    themeTitle = await provider.DownloadAsync(videoId, partPath, msg => AddLog(key, msg), token);
+                    themeTitle = await provider.DownloadAsync(videoId, partPath, Progress, token);
                 }
                 else
                 {
                     // Non-YouTube URL — download directly
-                    AddLog(key, "[themearr] Downloading from URL…");
+                    Progress("[themearr] Downloading from URL…");
 
                     using var dlResp = await FetchFollowingSafeRedirectsAsync(url, token);
 
@@ -243,37 +267,62 @@ public class DownloadService(
                         await dlResp.Content.ReadAsStreamAsync(token), partPath, StreamLimits.MaxThemeBytes, token);
                 }
 
-                var outputPath = ThemeFiles.PromoteThemePart(folder);
+                lock (_admissionLock)
+                {
+                    // Some providers ignore cancellation. Their late bytes must never
+                    // replace the old theme, or commit history for an expired generation.
+                    token.ThrowIfCancellationRequested();
+                    if (!_jobs.TryGetValue(key, out var active) || active.Generation != attempt.Generation) return;
+                    void PublishFiles()
+                    {
+                        token.ThrowIfCancellationRequested();
+                        var outputPath = ThemeFiles.PromoteThemePart(folder);
 
-                // Remove stale alternate-extension theme files (e.g. an old theme.m4a) now
-                // that the new theme file is safely in place — never before the download.
-                foreach (var f in Directory.EnumerateFiles(folder, "theme.*"))
-                    if (!string.Equals(f, outputPath, StringComparison.Ordinal)
-                        && Path.GetExtension(f) is not (".part" or ".ytdl"))
-                        try { File.Delete(f); } catch { /* best effort */ }
+                        // Remove stale alternate-extension theme files (e.g. an old theme.m4a) now
+                        // that the new theme file is safely in place — never before the download.
+                        foreach (var f in Directory.EnumerateFiles(folder, "theme.*"))
+                            if (!string.Equals(f, outputPath, StringComparison.Ordinal)
+                                && Path.GetExtension(f) is not (".part" or ".ytdl"))
+                                try { File.Delete(f); } catch { /* best effort */ }
+                    }
+
+                    var title = item["title"]?.ToString() ?? "";
+                    var year  = item["year"] is int y ? y : (int?)null;
+                    if (recheck != null)
+                    {
+                        if (!db.TryCommitRecheckReplacement(id, mediaType, recheck.HistoryId,
+                                title, year, themeTitle, url, pickedBy, matchScore, PublishFiles))
+                        {
+                            Complete("Replacement cancelled because the theme or its re-check decision changed.");
+                            return;
+                        }
+                    }
+                    else
+                    {
+                        PublishFiles();
+                        if (mediaType == "show") db.SetShowStatus(id, "downloaded");
+                        else                     db.SetMovieStatus(id, "downloaded");
+                        db.AddThemeHistory(id, title, year, themeTitle, url, mediaType, pickedBy, matchScore);
+                        db.ClearRecheck(id, mediaType);
+                    }
+                }
             }
-            finally { gate.Release(); }
+            finally
+            {
+                if (recheck != null)
+                    try { File.Delete(partPath); } catch { /* best effort */ }
+                gate.Release();
+            }
 
-            AddLog(key, "[themearr] Download complete.");
-
-            var title = item["title"]?.ToString() ?? "";
-            var year  = item["year"] is int y ? y : (int?)null;
-            if (mediaType == "show") db.SetShowStatus(id, "downloaded");
-            else                     db.SetMovieStatus(id, "downloaded");
-            db.AddThemeHistory(id, title, year, themeTitle, url, mediaType, pickedBy, matchScore);
-
-            // A replacement that lands clears the flag that asked for it. Doing this here
-            // rather than in the auto-download worker means a manual replacement from the
-            // movies page clears it too — the flag cannot outlive the problem.
-            db.ClearRecheck(id, mediaType);
+            Progress("[themearr] Download complete.");
 
             // Ask Plex to refresh this item so the theme starts playing without a manual
             // "Refresh Metadata" (issue #45) — partial scan catches movie folders on most
             // installs, but a show's theme stays invisible until the show is refreshed.
             // Runs before the job flips to finished so the outcome lands in this job's log.
-            await TryPlexRefreshAsync(item, key);
+            await TryPlexRefreshAsync(item, key, attempt);
 
-            _jobs[key] = new JobState(false, true, null);
+            Complete(null);
         }
         catch (QuotaExceededException ex)
         {
@@ -281,27 +330,27 @@ public class DownloadService(
             _quotaCooldownUntilUnix = (int)until.ToUnixTimeSeconds();
             log.LogWarning("RapidAPI quota exhausted — pausing downloads until {Until:o}. {Detail}",
                 until.UtcDateTime, ex.Message);
-            AddLog(key, $"[themearr] RapidAPI quota exhausted — pausing downloads until {until.UtcDateTime:HH:mm} UTC.");
-            _jobs[key] = new JobState(false, true, ex.Message);
+            Progress($"[themearr] RapidAPI quota exhausted — pausing downloads until {until.UtcDateTime:HH:mm} UTC.");
+            Complete(ex.Message);
         }
         catch (OperationCanceledException)
         {
             var msg = $"Download timed out after {DownloadTimeout.TotalSeconds:0}s and was aborted.";
             log.LogWarning("Download for {JobKey} timed out after {Timeout}", LogSanitizer.Clean(key), DownloadTimeout);
-            AddLog(key, $"[themearr] {msg}");
-            _jobs[key] = new JobState(false, true, msg);
+            Progress($"[themearr] {msg}");
+            Complete(msg);
         }
         catch (Exception ex)
         {
             log.LogError(ex, "Download failed for {JobKey}", LogSanitizer.Clean(key));
-            _jobs[key] = new JobState(false, true, ex.Message);
+            Complete(ex.Message);
         }
     }
 
     // Never throws. The theme is already on disk when this runs, so a refresh failure
     // must stay a logged warning — if it escaped, RunAsync's outer catch would report a
     // successfully landed theme as a failed download.
-    private async Task TryPlexRefreshAsync(Dictionary<string, object?> item, string jobKey)
+    private async Task TryPlexRefreshAsync(Dictionary<string, object?> item, string jobKey, JobState attempt)
     {
         if (plex == null) return;
         try
@@ -309,14 +358,14 @@ public class DownloadService(
             var refreshed = await plex.RefreshItemMetadataAsync(
                 item.GetValueOrDefault("source")?.ToString(),
                 item.GetValueOrDefault("sourceRef")?.ToString(),
-                msg => AddLog(jobKey, msg));
+                msg => AddLog(jobKey, msg, attempt));
             if (refreshed)
-                AddLog(jobKey, "[themearr] Asked Plex to refresh the item's metadata.");
+                AddLog(jobKey, "[themearr] Asked Plex to refresh the item's metadata.", attempt);
         }
         catch (Exception ex)
         {
             log.LogWarning(ex, "Plex metadata refresh failed for {JobKey}", LogSanitizer.Clean(jobKey));
-            AddLog(jobKey, "[themearr] Plex metadata refresh failed — refresh the item in Plex manually if the theme doesn't play.");
+            AddLog(jobKey, "[themearr] Plex metadata refresh failed — refresh the item in Plex manually if the theme doesn't play.", attempt);
         }
     }
 

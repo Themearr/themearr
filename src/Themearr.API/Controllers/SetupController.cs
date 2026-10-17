@@ -68,7 +68,10 @@ public class SetupController(Database db, PlexService plex) : ControllerBase
         try
         {
             var servers = await plex.DiscoverServersAsync(token);
-            return Ok(new { servers });
+            db.SetDiscoveredPlexServers(servers.Select(s =>
+                s.ToDictionary(kv => kv.Key, kv => (object?)kv.Value)).ToList());
+            var redacted = servers.Select(s => new Dictionary<string, object>(s) { ["token"] = "" });
+            return Ok(new { servers = redacted });
         }
         catch (Exception ex)
         {
@@ -81,13 +84,14 @@ public class SetupController(Database db, PlexService plex) : ControllerBase
     public async Task<IActionResult> PlexLibraries([FromBody] PlexLibrariesRequest req)
     {
         var payload = new Dictionary<string, object>();
-        foreach (var server in req.Servers)
+        foreach (var server in db.ResolvePlexServers(req.Servers, preferDiscovered: true))
         {
             var serverId  = server.GetValueOrDefault("id", "")?.ToString()?.Trim() ?? "";
             var serverUrl = server.GetValueOrDefault("url", "")?.ToString()?.Trim() ?? "";
             var urls      = server.GetValueOrDefault("urls") is System.Text.Json.JsonElement je
+                            && je.ValueKind == System.Text.Json.JsonValueKind.Array
                 ? je.EnumerateArray().Select(u => u.GetString() ?? "").Where(u => !string.IsNullOrEmpty(u)).ToList()
-                : new List<string>();
+                : server.GetValueOrDefault("urls") as List<string> ?? [];
             var token     = server.GetValueOrDefault("token", "")?.ToString()?.Trim() ?? "";
 
             if (string.IsNullOrEmpty(serverId) || string.IsNullOrEmpty(serverUrl) || string.IsNullOrEmpty(token))
@@ -120,7 +124,7 @@ public class SetupController(Database db, PlexService plex) : ControllerBase
             return BadRequest(new { detail = "Select at least one movie library" });
 
         // Merge so a re-save that omits the redacted token keeps the stored one.
-        db.SetPlexServersMergingTokens(req.Servers);
+        db.SetPlexServersMergingTokens(req.Servers, preferDiscovered: true);
         db.SetSelectedLibraries(req.SelectedLibraries ?? []);
         db.SetLibraryPaths(req.LibraryPaths ?? []);
 

@@ -104,7 +104,9 @@ public class RadarrLibrarySource(Database db, LocalFolderResolver folders, IHttp
                 {
                     // Monitored but not downloaded: a folder may exist, but there is no
                     // film for a theme to accompany yet.
-                    if (!item.TryGetProperty("hasFile", out var hasFile) || !hasFile.GetBoolean()) continue;
+                    if (!item.TryGetProperty("hasFile", out var hasFile))
+                        throw new InvalidOperationException("Missing hasFile");
+                    if (!hasFile.GetBoolean()) continue;
 
                     var reported = item.TryGetProperty("path", out var p) ? p.GetString() ?? "" : "";
                     // Trim a trailing separator before it's used for anything below: left
@@ -114,7 +116,8 @@ public class RadarrLibrarySource(Database db, LocalFolderResolver folders, IHttp
                     // trailing slash baked in — splitting this movie's identity from the
                     // same directory resolved without the slash.
                     reported = reported.TrimEnd('/', '\\');
-                    if (string.IsNullOrEmpty(reported)) continue;
+                    if (string.IsNullOrEmpty(reported))
+                        throw new InvalidOperationException("Missing path");
 
                     var title = item.TryGetProperty("title", out var t) ? t.GetString() ?? "" : "";
                     var year  = item.TryGetProperty("year", out var y) && y.TryGetInt32(out var yr) && yr > 0
@@ -145,7 +148,12 @@ public class RadarrLibrarySource(Database db, LocalFolderResolver folders, IHttp
                     // rather than a wrong URL, since the response as a whole did parse as
                     // the expected array. Skip just this movie so one bad entry doesn't
                     // cost every other movie in the library its theme.
-                    log("Skipping a movie entry from Radarr — one of its fields had an unexpected type.");
+                    // Missing/malformed entries are incomplete input, not proof of a
+                    // removal. Count them in the existing incomplete-sync guard so a
+                    // valid sibling cannot cause SyncService to prune retained movies.
+                    unresolvedCount++;
+                    if (unresolvedSample.Length == 0) unresolvedSample = "Incomplete Radarr movie entry";
+                    log("Skipping a movie entry from Radarr — one of its fields was missing or had an unexpected type.");
                 }
             }
 

@@ -40,5 +40,9 @@ export function makeApiMock() {
     radarrApi: group('get', 'save', 'test'),
     plexApi: group('test', 'saveUrl'),
     apiKeyApi: group('get', 'regenerate'),
+    recheckApi: {
+      start: vi.fn(), status: vi.fn().mockResolvedValue({ inProgress: false, finished: false, scanned: 0, flagged: 0, error: '' }),
+      flagged: vi.fn().mockResolvedValue([]), keep: vi.fn(), replace: vi.fn(),
+    },
   }
 }
