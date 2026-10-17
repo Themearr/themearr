@@ -3,6 +3,7 @@ import { apiKeyApi, plexApi, radarrApi, rapidApiApi, settingsApi, setupApi, sync
 import type { PlexLibrary, Settings, VersionInfo } from '@/lib/types'
 import { AppShell } from '@/components/layout/AppShell'
 import { Button, EmptyState, ErrorIcon, Input, Spinner } from '@/components/ui'
+import { useRapidApiReconciliation } from '@/lib/useRapidApiReconciliation'
 import { useResource } from '@/lib/useResource'
 
 const LIBRARY_SOURCE_OPTIONS: { value: 'plex' | 'radarr'; label: string }[] = [
@@ -71,11 +72,8 @@ export default function SettingsPage() {
   const plexUrlSeq = useRef<Record<string, number>>({})
   const claimPlexSeq = (serverId: string) =>
     (plexUrlSeq.current[serverId] = (plexUrlSeq.current[serverId] ?? 0) + 1)
-  const [rapidApiOk,       setRapidApiOk]       = useState<boolean | null>(null)
-  // Set when checking whether a RapidAPI key is stored fails. Supplementary
-  // like versionLoadError: it leaves rapidApiOk at null (unknown) rather
-  // than guessing, and surfaces only inside the RapidAPI section.
-  const [rapidApiCheckError, setRapidApiCheckError] = useState('')
+  const { rapidApiOk, setRapidApiOk, rapidApiCheckError, rapidPhase, rapidOrderChanged,
+    rapidMutSeq, beginRapidMutation, waitRapidMutation, checkRapidApiStatus } = useRapidApiReconciliation()
   const [rapidApiKey,      setRapidApiKey]      = useState('')
   const [rapidApiUsername, setRapidApiUsername] = useState('')
   const [rapidApiSaving,   setRapidApiSaving]   = useState(false)
@@ -87,10 +85,8 @@ export default function SettingsPage() {
   // so the slower response can't decide whether a key is configured. A
   // *keystroke* owns only the boxes: rapidEditSeq gates the input clears, so a
   // late response can't eat the typing -- but it must NOT block the mutation's
-  // outcome, because a Remove the server completed has deleted the key whether
-  // or not the user was mid-keystroke, and nothing re-checks the status until
-  // the next mount.
-  const rapidMutSeq  = useRef(0)
+  // outcome. These stamps own immediate feedback; the shared status read
+  // converges to server truth after all local mutation waits settle.
   const rapidEditSeq = useRef(0)
   const editRapidApiKey      = (v: string) => { rapidEditSeq.current++; setRapidApiKey(v) }
   const editRapidApiUsername = (v: string) => { rapidEditSeq.current++; setRapidApiUsername(v) }
@@ -171,12 +167,6 @@ export default function SettingsPage() {
       setVersionLoadError('')
     }).catch(e => {
       setVersionLoadError((e as Error)?.message || 'Failed to load version info.')
-    })
-    rapidApiApi.status().then(s => {
-      setRapidApiOk(s.configured)
-      setRapidApiCheckError('')
-    }).catch(e => {
-      setRapidApiCheckError((e as Error)?.message || 'Failed to check RapidAPI status.')
     })
     // Through loadLibrarySource rather than an inline duplicate: the mount GET
     // can be slow, and only the shared path's stamp check stops it flipping
@@ -437,12 +427,12 @@ export default function SettingsPage() {
 
   async function saveRapidApiKey() {
     if (!rapidApiKey.trim() || !rapidApiUsername.trim()) return
-    const mut  = ++rapidMutSeq.current
+    const mut  = beginRapidMutation(true)
     const edit = rapidEditSeq.current
     setRapidApiSaving(true)
     setRapidApiError('')
     try {
-      await rapidApiApi.save(rapidApiKey.trim(), rapidApiUsername.trim())
+      await waitRapidMutation(mut, () => rapidApiApi.save(rapidApiKey.trim(), rapidApiUsername.trim()))
       // The panel's state belongs to the newest *mutation* only -- a keystroke
       // must not stop this landing: the key IS stored now.
       if (mut === rapidMutSeq.current) setRapidApiOk(true)
@@ -464,12 +454,12 @@ export default function SettingsPage() {
   // saying the removal failed.
   async function removeRapidApiKey() {
     if (rapidApiRemoving) return
-    const mut  = ++rapidMutSeq.current
+    const mut  = beginRapidMutation(false)
     const edit = rapidEditSeq.current
     setRapidApiRemoving(true)
     setRapidApiError('')
     try {
-      await rapidApiApi.remove()
+      await waitRapidMutation(mut, () => rapidApiApi.remove())
       // Mirror of saveRapidApiKey: the server deleted the key, and a keystroke
       // typed while the DELETE was in flight may not keep the panel claiming
       // "configured" for a key that is gone.
@@ -535,17 +525,6 @@ export default function SettingsPage() {
       setVersionLoadError('')
     } catch (e) {
       setVersionLoadError((e as Error)?.message || 'Failed to load version info.')
-    }
-  }
-
-  // Retry action for the supplementary RapidAPI status check above.
-  async function checkRapidApiStatus() {
-    try {
-      const s = await rapidApiApi.status()
-      setRapidApiOk(s.configured)
-      setRapidApiCheckError('')
-    } catch (e) {
-      setRapidApiCheckError((e as Error)?.message || 'Failed to check RapidAPI status.')
     }
   }
 
@@ -1131,6 +1110,15 @@ export default function SettingsPage() {
               </div>
             </div>
           )}
+          {rapidPhase === 'checking' && <p className="text-xs text-[#667085]">Checking saved configuration…</p>}
+          {rapidPhase === 'unconfirmed' && rapidApiOk !== null && (
+            <div className="space-y-2">
+              <p className="text-xs text-[#FDA29B]">Configuration is unconfirmed and may still change; retry status.</p>
+              {rapidApiCheckError && <p className="text-xs text-[#FDA29B]">{rapidApiCheckError}</p>}
+              <Button variant="secondary" size="sm" onClick={checkRapidApiStatus}>Retry</Button>
+            </div>
+          )}
+          {rapidOrderChanged && <p className="text-xs text-[#667085]">Server configuration differs from your last action because overlapping requests may finish in a different order.</p>}
           {rapidApiError && <p className="text-xs text-[#FDA29B]">{rapidApiError}</p>}
         </Section>
 

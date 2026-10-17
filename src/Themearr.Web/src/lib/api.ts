@@ -278,7 +278,7 @@ export const historyApi = {
 // ── RapidAPI key ──────────────────────────────────────────────────────────────
 
 export const rapidApiApi = {
-  status: () => request<{ configured: boolean }>('/api/settings/rapidapi'),
+  status: (init?: RequestInit) => request<{ configured: boolean }>('/api/settings/rapidapi', init),
 
   save: (key: string, username: string) =>
     request<{ configured: boolean }>('/api/settings/rapidapi', {
