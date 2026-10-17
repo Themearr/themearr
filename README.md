@@ -36,7 +36,9 @@ It reads your library from **either Plex or Radarr**. Radarr is a first-class so
 
 ### Disk usage
 
-Themes are stored full-length as received — there is no trimming or re-encoding — which works out to roughly **3.7 GB of theme audio per 1,000 films** (measured on one production install: 1,438 films, 5.28 GB). Plan for that growth on the volume holding your media folders. Plex users: Plex also imports a copy of each theme into its own metadata bundle, so the space is used twice on the volume holding Plex's metadata directory.
+Themes are stored full-length as received. [Issue #49](https://github.com/Themearr/themearr/issues/49) reports **5.28 GB across 1,438 films** in one production installation, approximately **3.7 GB per 1,000 films**. This is one observation; usage varies with track duration and bitrate.
+
+Inspect the volume holding your media-folder `theme.*` files separately from the volume holding Plex metadata. The reported installation also had Plex-imported theme copies in metadata bundles. Changing or removing the media-folder copy does not demonstrate that Plex has reclaimed its imported copy. See Plex's [metadata refresh guidance](https://support.plex.tv/articles/200289306-scanning-vs-refreshing-a-library/) and [Clean Bundles documentation](https://support.plex.tv/articles/226836308-help/); actual metadata reclamation must be measured on your server.
 
 ## Downloads require a RapidAPI key
 
