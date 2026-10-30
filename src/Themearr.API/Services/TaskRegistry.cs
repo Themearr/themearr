@@ -12,7 +12,8 @@ public sealed record TaskState(
     long?     LastDurationMs,
     string?   LastResult,
     DateTime? NextRunUtc,
-    bool      IsRunning);
+    bool      IsRunning,
+    bool      IsPending = false);
 
 /// <summary>
 /// Decouples the System controller from the background workers. Workers push run
@@ -35,6 +36,11 @@ public sealed class TaskRegistry
     private sealed class Entry
     {
         public required string     Name       { get; init; }
+        public readonly object Gate = new();
+        // Include a consumed trigger until its outcome is published. Channel.Count
+        // alone becomes zero before the worker has announced that it started.
+        public int PendingRequests;
+        public int ConsumedRequests;
 
         // Optional probe supplied at Register() time, e.g. backed by SyncService.InProgress.
         // When present it is the source of truth for IsRunning: it reflects reality even
@@ -101,8 +107,16 @@ public sealed class TaskRegistry
     public bool Exists(string id) => _tasks.ContainsKey(id);
 
     /// <summary>True if a wake-up was queued; false for an unknown id or when one is already pending.</summary>
-    public bool Trigger(string id) =>
-        _tasks.TryGetValue(id, out var e) && e.Trigger.Writer.TryWrite(0);
+    public bool Trigger(string id)
+    {
+        if (!_tasks.TryGetValue(id, out var e)) return false;
+        lock (e.Gate)
+        {
+            if (!e.Trigger.Writer.TryWrite(0)) return false;
+            e.PendingRequests++;
+            return true;
+        }
+    }
 
     /// <summary>Completes when someone triggers this task. An unknown id waits forever (until cancelled).</summary>
     public async Task WaitForTriggerAsync(string id, CancellationToken ct)
@@ -113,17 +127,24 @@ public sealed class TaskRegistry
             return;
         }
         await e.Trigger.Reader.ReadAsync(ct);
+        lock (e.Gate) e.ConsumedRequests++;
     }
 
     public void MarkRunning(string id, bool running)
     {
-        if (_tasks.TryGetValue(id, out var e)) e.State = e.State with { IsRunning = running };
+        if (_tasks.TryGetValue(id, out var e))
+            lock (e.Gate) e.State = e.State with { IsRunning = running };
     }
 
     public void RecordRun(string id, DateTime startedUtc, TimeSpan duration, string result)
     {
         if (!_tasks.TryGetValue(id, out var e)) return;
-        e.State = new RunState(startedUtc, (long)duration.TotalMilliseconds, result, false);
+        lock (e.Gate)
+        {
+            e.State = new RunState(startedUtc, (long)duration.TotalMilliseconds, result, false);
+            e.PendingRequests -= e.ConsumedRequests;
+            e.ConsumedRequests = 0;
+        }
     }
 
     /// <summary>
@@ -135,27 +156,35 @@ public sealed class TaskRegistry
     public void RecordFailure(string id, string result)
     {
         if (!_tasks.TryGetValue(id, out var e)) return;
-        e.State = e.State with { LastResult = result, IsRunning = false, LastDurationMs = null };
+        lock (e.Gate)
+        {
+            e.State = e.State with { LastResult = result, IsRunning = false, LastDurationMs = null };
+            e.PendingRequests -= e.ConsumedRequests;
+            e.ConsumedRequests = 0;
+        }
     }
 
     public IReadOnlyList<TaskState> Snapshot() =>
         _tasks
             .Select(kv =>
             {
-                var state = kv.Value.State;
-                // Prefer the probe when one is supplied — it reflects the worker's actual
-                // in-progress flag, unlike State.IsRunning which a fire-and-forget worker's
-                // RecordRun can clear before anyone observes it.
-                var isRunning = kv.Value.IsRunningProbe?.Invoke() ?? state.IsRunning;
-                return new TaskState(
-                    kv.Key,
-                    kv.Value.Name,
-                    kv.Value.Interval,
-                    state.LastRunUtc,
-                    state.LastDurationMs,
-                    state.LastResult,
-                    state.LastRunUtc is { } last ? last + kv.Value.Interval : null,
-                    isRunning);
+                lock (kv.Value.Gate)
+                {
+                    var state = kv.Value.State;
+                    // Prefer the probe when one is supplied — it reflects the worker's actual
+                    // in-progress flag, unlike State.IsRunning which a fire-and-forget worker's
+                    // RecordRun can clear before anyone observes it.
+                    var isRunning = kv.Value.IsRunningProbe?.Invoke() ?? state.IsRunning;
+                    return new TaskState(
+                        kv.Key,
+                        kv.Value.Name,
+                        kv.Value.Interval,
+                        state.LastRunUtc,
+                        state.LastDurationMs,
+                        state.LastResult,
+                        state.LastRunUtc is { } last ? last + kv.Value.Interval : null,
+                        isRunning, kv.Value.PendingRequests > 0);
+                }
             })
             .OrderBy(t => t.Name, StringComparer.Ordinal)
             .ToList();

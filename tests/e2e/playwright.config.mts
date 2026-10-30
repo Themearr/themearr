@@ -1,5 +1,5 @@
 import { defineConfig, devices } from '@playwright/test'
-import { rmSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath, URL } from 'node:url'
@@ -8,11 +8,10 @@ import { fileURLToPath, URL } from 'node:url'
 const PORT = 5099
 const baseURL = `http://localhost:${PORT}`
 
-// A throwaway DB, removed before each run: the smoke suite asserts first-run behaviour
-// (nothing configured yet), so a DB left over from a previous run would change what the
-// app renders and the failure would look like a regression.
-const dbPath = join(tmpdir(), 'themearr-e2e.db')
-for (const f of [dbPath, `${dbPath}-shm`, `${dbPath}-wal`]) rmSync(f, { force: true })
+// Workers also evaluate this config. Never delete a database here: doing so after
+// the server starts unlinks its live SQLite file and makes writes fail read-only.
+// Each launch instead gets an independent database that cannot collide with a prior run.
+const dbPath = join(tmpdir(), `themearr-e2e-${randomUUID()}.db`)
 
 // Production serves the built SPA out of the .NET wwwroot — release.yml and the
 // Dockerfile both copy Vite's out/ there. Pointing ASPNETCORE_WEBROOT at out/
@@ -40,7 +39,7 @@ export default defineConfig({
     // Probe /login, not an /api route: every guarded /api path answers 401 until a
     // token is presented, and Playwright reads a non-2xx probe as "not ready yet".
     url: `${baseURL}/login`,
-    reuseExistingServer: !process.env.CI,
+    reuseExistingServer: false,
     timeout: 180_000,
     stdout: 'pipe',
     stderr: 'pipe',

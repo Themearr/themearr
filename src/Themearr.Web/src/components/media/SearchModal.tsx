@@ -1,4 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { serverAttemptId, lostDownloadAttempt, LOST_DOWNLOAD_TRACKING } from '@/lib/downloadAttempt'
+import { boundedRequest } from '@/lib/boundedRequest'
 import type { MediaItem, YoutubeResult } from '@/lib/types'
 import type { MediaAdapter } from '@/lib/media/adapter'
 import { Button, Modal, Spinner, Input } from '@/components/ui'
@@ -19,15 +21,39 @@ export function SearchModal({ item, adapter, onClose, onDownloaded }: SearchModa
   const [error, setError] = useState('')
   const [searched, setSearched] = useState(false)
 
-  // Poll download status while a download is in progress
+  const binding = useRef<{ ready: boolean; serverAttemptId?: string } | null>(null)
+  const mounted = useRef(true)
+  useEffect(() => {
+    mounted.current = true
+    return () => { mounted.current = false; binding.current = null }
+  }, [item.id, adapter])
+
+  // Status belongs to this start only after its POST has replaced the previous job.
   useEffect(() => {
     if (!downloading) return
+    const active = binding.current
+    let stale = false
+    let inFlight = false
+    let failures = 0
     const id = setInterval(async () => {
+      if (!active?.ready || stale || inFlight || binding.current !== active) return
+      inFlight = true
       try {
-        const st = await adapter.downloadStatus(item.id)
+        const st = await boundedRequest(signal => adapter.downloadStatus(item.id, { signal }, active.serverAttemptId))
+        if (stale || binding.current !== active) return
+        failures = 0
+        if (lostDownloadAttempt(active.serverAttemptId, st)) {
+          clearInterval(id)
+          binding.current = null
+          setDownloading(null)
+          setDownloadLogs([])
+          setError(LOST_DOWNLOAD_TRACKING)
+          return
+        }
         if (st.logs?.length) setDownloadLogs(st.logs)
         if (!st.finished) return
         clearInterval(id)
+        binding.current = null
         if (st.error) {
           setError(st.error)
           setDownloading(null)
@@ -35,12 +61,39 @@ export function SearchModal({ item, adapter, onClose, onDownloaded }: SearchModa
           onDownloaded(item.id)
           onClose()
         }
-      } catch { /* ignore */ }
+      } catch {
+        if (stale || binding.current !== active) return
+        if (++failures >= 3) {
+          clearInterval(id)
+          binding.current = null
+          setDownloading(null)
+          setError('Lost contact with the download. Check its status before trying again.')
+        }
+      } finally { inFlight = false }
     }, 1000)
-    return () => clearInterval(id)
-    // `adapter` is a module-level constant (moviesAdapter / showsAdapter), so listing it
-    // is referentially stable — it can't tear down and recreate the interval each render.
+    return () => { stale = true; clearInterval(id) }
   }, [downloading, item.id, adapter, onDownloaded, onClose])
+
+  async function beginDownload(choice: string, start: () => Promise<unknown>) {
+    if (binding.current) return
+    const active: { ready: boolean; serverAttemptId?: string } = { ready: false }
+    binding.current = active
+    setDownloading(choice)
+    setDownloadLogs([])
+    setError('')
+    try {
+      const result = await boundedRequest(start, 30000)
+      if (mounted.current && binding.current === active) {
+        active.serverAttemptId = serverAttemptId(result)
+        active.ready = true
+      }
+    } catch (e) {
+      if (!mounted.current || binding.current !== active) return
+      binding.current = null
+      setError((e as Error).message)
+      setDownloading(null)
+    }
+  }
 
   async function doSearch() {
     setSearching(true)
@@ -57,26 +110,12 @@ export function SearchModal({ item, adapter, onClose, onDownloaded }: SearchModa
   }
 
   async function doDownload(videoId: string) {
-    setDownloading(videoId)
-    setError('')
-    try {
-      await adapter.download(item.id, videoId)
-    } catch (e) {
-      setError((e as Error).message)
-      setDownloading(null)
-    }
+    await beginDownload(videoId, () => adapter.download(item.id, videoId))
   }
 
   async function doDownloadUrl() {
     if (!manualUrl.trim()) return
-    setDownloading('url')
-    setError('')
-    try {
-      await adapter.downloadUrl(item.id, manualUrl.trim())
-    } catch (e) {
-      setError((e as Error).message)
-      setDownloading(null)
-    }
+    await beginDownload('url', () => adapter.downloadUrl(item.id, manualUrl.trim()))
   }
 
   return (

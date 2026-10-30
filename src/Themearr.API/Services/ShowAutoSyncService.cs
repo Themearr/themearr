@@ -37,14 +37,12 @@ public class ShowAutoSyncService(
         registry.Register(SyncTaskId, "Sync Shows", SyncInterval);
         SeedLastRunFromDatabase();
 
-        // Delay startup so the API is fully warmed up first. Offset from the movie
-        // sync's 2 minutes so the two don't hit Plex simultaneously on boot.
-        await Task.Delay(TimeSpan.FromMinutes(3), ct);
+        // Offset scheduled work from the movie sync to avoid hitting Plex together on
+        // boot. An explicit Run now still wakes the worker during warmup.
+        var forced = await WaitForNextAsync(ct, TimeSpan.FromMinutes(3));
 
         // A manual trigger forces a sync even when auto-sync is off or the interval has
         // not elapsed — that is the entire point of "Run now".
-        var forced = false;
-
         while (!ct.IsCancellationRequested)
         {
             registry.UpdateInterval(SyncTaskId, SyncInterval);
@@ -82,7 +80,7 @@ public class ShowAutoSyncService(
     /// <see cref="AutoSyncService"/>'s race handling, including cancelling and awaiting
     /// the loser so an abandoned reader can never swallow a later "Run now".
     /// </summary>
-    private async Task<bool> WaitForNextAsync(CancellationToken ct)
+    private async Task<bool> WaitForNextAsync(CancellationToken ct, TimeSpan? initialWait = null)
     {
         var jitter = TimeSpan.FromMilliseconds(Random.Shared.Next(
             (int)-JitterMax.TotalMilliseconds,
@@ -92,7 +90,7 @@ public class ShowAutoSyncService(
 
         using var raceCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         var trigger = registry.WaitForTriggerAsync(SyncTaskId, raceCts.Token);
-        var delay   = Task.Delay(baseWait + jitter, raceCts.Token);
+        var delay   = Task.Delay(initialWait ?? baseWait + jitter, raceCts.Token);
 
         await Task.WhenAny(trigger, delay);
 
@@ -126,6 +124,7 @@ public class ShowAutoSyncService(
         if (!db.IsSetupComplete())
         {
             if (forced) log.LogInformation("Show auto-sync: 'Run now' ignored — setup not complete");
+            if (forced) registry.RecordFailure(SyncTaskId, "setup not complete");
             return;
         }
 
@@ -144,6 +143,7 @@ public class ShowAutoSyncService(
 
         var startedAt = DateTime.UtcNow;
         var sw = Stopwatch.StartNew();
+        registry.MarkRunning(SyncTaskId, true);
         try
         {
             // RunOnceAsync has no internal try/catch, so an unreachable Plex would take

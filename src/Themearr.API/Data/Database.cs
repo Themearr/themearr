@@ -4,7 +4,7 @@ using Themearr.API.Services;
 
 namespace Themearr.API.Data;
 
-public class Database(string dbPath)
+public partial class Database(string dbPath)
 {
     private SqliteConnection Open()
     {
@@ -84,6 +84,7 @@ public class Database(string dbPath)
         MigrateHistoryTableV3(conn);
         MigrateRecheckColumns(conn);
         PruneDeadSettings(conn);
+        InitAudioRepairTables(conn);
     }
 
     // These keys were written on every server save but read by nothing -- the live
@@ -355,6 +356,22 @@ public class Database(string dbPath)
         return result;
     }
 
+    public AudioProcessingOptions GetAudioProcessingOptions()
+    {
+        var raw = GetSetting("audio_processing");
+        if (string.IsNullOrEmpty(raw)) return AudioProcessingOptions.Default;
+        var options = JsonSerializer.Deserialize<AudioProcessingOptions>(raw, AudioProcessingOptions.Json)
+            ?? throw new InvalidOperationException("Invalid stored audio processing settings.");
+        if (options.ValidationError() is { } error) throw new InvalidOperationException(error);
+        return options;
+    }
+
+    public void SetAudioProcessingOptions(AudioProcessingOptions options)
+    {
+        if (options.ValidationError() is { } error) throw new ArgumentException(error);
+        SetSetting("audio_processing", JsonSerializer.Serialize(options, AudioProcessingOptions.Json));
+    }
+
     public void SetSetting(string key, string value)
     {
         using var conn = Open();
@@ -406,38 +423,40 @@ public class Database(string dbPath)
             })
             .ToList();
 
-    // Persists an incoming server list while preserving any stored token for a server
-    // whose incoming token is blank. Lets the UI load redacted servers and save them
-    // back without wiping the token it was never shown.
-    //
-    // The stored token is only ever carried forward when the incoming url matches the
-    // url it was stored against for that id. Matching on id alone would let a caller
-    // POST { id: <existing id>, url: <attacker host>, token: "" } and have the real
-    // token re-attached to a URL the server never issued it to — PlexLibrarySource.CheckAsync
-    // (reachable from the unauthenticated /health endpoint) would then hand the real
-    // token to that host. If the url doesn't match and no token was supplied, the server
-    // ends up with no token; the existing health check already reports that Plex
-    // rejected the credential and the user should sign in again, which is the correct,
-    // safe outcome here too.
-    public void SetPlexServersMergingTokens(List<Dictionary<string, object?>> incoming)
+    // Discovery is separate from selection: browsing Plex must not replace a working
+    // installation's servers, but its redacted response still needs credentials on save.
+    public void SetDiscoveredPlexServers(List<Dictionary<string, object?>> servers) =>
+        SetJsonSetting("plex_discovered_servers", servers);
+
+    public List<Dictionary<string, object?>> ResolvePlexServers(List<Dictionary<string, object?>> incoming, bool preferDiscovered = false)
     {
-        var storedTokens = GetPlexServersDict();
-        var merged = incoming.Select(srv =>
+        var selected = GetPlexServers();
+        var discovered = GetJsonSetting("plex_discovered_servers", new List<Dictionary<string, object?>>());
+        // A new wizard sign-in refreshes expired tokens. Ordinary settings saves must
+        // keep their selected credential rather than resurrecting an older discovery.
+        var records = (preferDiscovered ? discovered.Concat(selected) : selected.Concat(discovered)).ToList();
+        return incoming.Select(srv =>
         {
             var copy = new Dictionary<string, object?>(srv);
-            var token = copy.GetValueOrDefault("token")?.ToString() ?? "";
-            if (string.IsNullOrEmpty(token))
-            {
-                var id  = copy.GetValueOrDefault("id")?.ToString() ?? "";
-                var url = copy.GetValueOrDefault("url")?.ToString() ?? "";
-                if (!string.IsNullOrEmpty(id) && storedTokens.TryGetValue(id, out var s) &&
-                    !string.IsNullOrEmpty(s.Token) && UrlsMatch(url, s.Url))
-                    copy["token"] = s.Token;
-            }
-            return copy;
+            if (!string.IsNullOrWhiteSpace(copy.GetValueOrDefault("token")?.ToString()))
+                return copy; // Older clients supply the credential and destination together.
+
+            var id = copy.GetValueOrDefault("id")?.ToString()?.Trim() ?? "";
+            var url = copy.GetValueOrDefault("url")?.ToString()?.Trim() ?? "";
+            var stored = records.FirstOrDefault(s =>
+                !string.IsNullOrEmpty(id) && s.GetValueOrDefault("id")?.ToString() == id &&
+                !string.IsNullOrWhiteSpace(s.GetValueOrDefault("token")?.ToString()) &&
+                UrlsMatch(url, s.GetValueOrDefault("url")?.ToString() ?? ""));
+
+            // Binding just the primary URL is insufficient: a failed first connection
+            // would send the hidden credential to a caller-supplied fallback. Reuse the
+            // complete trusted record, including every alternate destination.
+            return stored is null ? copy : new Dictionary<string, object?>(stored);
         }).ToList();
-        SetPlexServers(merged);
     }
+
+    public void SetPlexServersMergingTokens(List<Dictionary<string, object?>> incoming, bool preferDiscovered = false) =>
+        SetPlexServers(ResolvePlexServers(incoming, preferDiscovered));
 
     /// <summary>
     /// Points a stored Plex server at <paramref name="url"/> from an authenticated operator
@@ -878,6 +897,12 @@ public class Database(string dbPath)
         string? pickedBy = null, int? matchScore = null)
     {
         using var conn = Open();
+        AddThemeHistory(conn, movieId, movieTitle, movieYear, themeTitle, sourceUrl, mediaType, pickedBy, matchScore);
+    }
+
+    private static void AddThemeHistory(SqliteConnection conn, string movieId, string movieTitle, int? movieYear,
+        string? themeTitle, string? sourceUrl, string mediaType, string? pickedBy, int? matchScore)
+    {
         conn.Execute(
             "INSERT INTO theme_history (movie_id, movie_title, movie_year, theme_title, source_url, downloaded_at, media_type, picked_by, match_score) VALUES (@mid, @t, @y, @tt, @url, @dt, @mt, @pb, @ms)",
             ("@mid", movieId), ("@t", movieTitle),
@@ -902,7 +927,7 @@ public class Database(string dbPath)
         using var conn = Open();
         ThemeProvenance? result = null;
         conn.Query(
-            "SELECT theme_title, source_url, picked_by, match_score FROM theme_history WHERE movie_id = @id AND media_type = @mt ORDER BY id DESC LIMIT 1",
+            "SELECT theme_title, source_url, picked_by, match_score, id FROM theme_history WHERE movie_id = @id AND media_type = @mt ORDER BY id DESC LIMIT 1",
             r =>
             {
                 if (r.Read())
@@ -910,7 +935,7 @@ public class Database(string dbPath)
                         r.IsDBNull(0) ? null : r.GetString(0),
                         r.IsDBNull(1) ? null : r.GetString(1),
                         r.IsDBNull(2) ? null : r.GetString(2),
-                        r.IsDBNull(3) ? null : r.GetInt32(3));
+                        r.IsDBNull(3) ? null : r.GetInt32(3), r.GetInt64(4));
             }, ("@id", mediaId), ("@mt", mediaType));
         return result;
     }
@@ -954,8 +979,11 @@ public class Database(string dbPath)
         var table = TableFor(mediaType);
         var result = new List<Dictionary<string, object?>>();
         conn.Query($"""
-            SELECT id, folderName, source, source_ref, title, year, sourcePath, recheck_state
-            FROM {table}
+            SELECT m.id, m.folderName, m.source, m.source_ref, m.title, m.year, m.sourcePath, m.recheck_state,
+                   h.theme_title, h.source_url, h.picked_by, h.match_score, h.id
+            FROM {table} m
+            LEFT JOIN theme_history h ON h.id = (
+                SELECT id FROM theme_history WHERE movie_id = m.id AND media_type = @mt ORDER BY id DESC LIMIT 1)
             WHERE status = 'downloaded' AND ignored = 0
             ORDER BY title
             """,
@@ -972,8 +1000,11 @@ public class Database(string dbPath)
                         ["year"]         = r.IsDBNull(5) ? null : r.GetInt32(5),
                         ["sourcePath"]   = r.IsDBNull(6) ? null : r.GetString(6),
                         ["recheckState"] = r.IsDBNull(7) ? null : r.GetString(7),
+                        ["provenance"] = r.IsDBNull(12) ? null : new ThemeProvenance(
+                            r.IsDBNull(8) ? null : r.GetString(8), r.IsDBNull(9) ? null : r.GetString(9),
+                            r.IsDBNull(10) ? null : r.GetString(10), r.IsDBNull(11) ? null : r.GetInt32(11), r.GetInt64(12)),
                     });
-            });
+            }, ("@mt", mediaType));
         return result;
     }
 
@@ -988,8 +1019,9 @@ public class Database(string dbPath)
         var table = TableFor(mediaType);
         var result = new List<Dictionary<string, object?>>();
         conn.Query($"""
-            SELECT id, folderName, source, source_ref, title, year, sourcePath
-            FROM {table}
+            SELECT m.id, m.folderName, m.source, m.source_ref, m.title, m.year, m.sourcePath,
+                   (SELECT id FROM theme_history WHERE movie_id = m.id AND media_type = @mt ORDER BY id DESC LIMIT 1)
+            FROM {table} m
             WHERE recheck_state = 'queued'
             ORDER BY title
             """,
@@ -1005,8 +1037,9 @@ public class Database(string dbPath)
                         ["title"]      = r.GetString(4),
                         ["year"]       = r.IsDBNull(5) ? null : r.GetInt32(5),
                         ["sourcePath"] = r.IsDBNull(6) ? null : r.GetString(6),
+                        ["historyId"]  = r.IsDBNull(7) ? null : r.GetInt64(7),
                     });
-            });
+            }, ("@mt", mediaType));
         return result;
     }
 
@@ -1090,6 +1123,149 @@ public class Database(string dbPath)
             ("@id", id),
             ("@expected", (object?)expectedState ?? DBNull.Value));
         return changed == 1;
+    }
+
+    private static bool IsRecheckCurrent(SqliteConnection conn, string id, string mediaType, long? historyId)
+    {
+        var current = false;
+        var table = TableFor(mediaType);
+        conn.Query($"""
+            SELECT 1 FROM {table} WHERE id = @id AND recheck_state = 'queued'
+                AND status = 'downloaded' AND ignored = 0
+                AND (SELECT id FROM theme_history WHERE movie_id = @id AND media_type = @mt
+                     ORDER BY id DESC LIMIT 1) IS @historyId
+            """, r => current = r.Read(), ("@id", id), ("@mt", mediaType), ("@historyId", historyId));
+        return current;
+    }
+
+    public bool IsRecheckCurrent(string id, string mediaType, long? historyId)
+    {
+        using var conn = Open();
+        return IsRecheckCurrent(conn, id, mediaType, historyId);
+    }
+
+    // The write reservation spans validation, file promotion and database publication.
+    // Keep/Ignore/delete/history writes on any connection cannot slip between them.
+    // publishFiles is synchronous local I/O only: never hold SQLite across a download.
+    public bool TryCommitRecheckReplacement(string id, string mediaType, long? historyId,
+        string title, int? year, string? themeTitle, string url, string pickedBy, int? matchScore,
+        Action publishFiles)
+    {
+        using var conn = Open();
+        using var transaction = conn.BeginTransaction(deferred: false);
+        if (!IsRecheckCurrent(conn, id, mediaType, historyId)) return false;
+        publishFiles();
+        var table = TableFor(mediaType);
+        conn.Execute($"UPDATE {table} SET status = 'downloaded', recheck_state = NULL, recheck_reason = NULL WHERE id = @id", ("@id", id));
+        AddThemeHistory(conn, id, title, year, themeTitle, url, mediaType, pickedBy, matchScore);
+        transaction.Commit();
+        return true;
+    }
+
+    public string? GetThemeFolder(string id, string mediaType)
+    {
+        using var conn = Open();
+        string? folder = null;
+        conn.Query($"SELECT folderName FROM {TableFor(mediaType)} WHERE id = @id",
+            reader => { if (reader.Read()) folder = reader.GetString(0); }, ("@id", id));
+        return folder;
+    }
+
+    public void CommitDownloadedTheme(string id, string mediaType, string title, int? year,
+        string? themeTitle, string url, string pickedBy, int? matchScore, Action publishFiles)
+    {
+        using var conn = Open();
+        using var transaction = conn.BeginTransaction(deferred: false);
+        publishFiles();
+        conn.Execute($"UPDATE {TableFor(mediaType)} SET status = 'downloaded', recheck_state = NULL, recheck_reason = NULL WHERE id = @id", ("@id", id));
+        AddThemeHistory(conn, id, title, year, themeTitle, url, mediaType, pickedBy, matchScore);
+        transaction.Commit();
+    }
+
+    public bool DeleteThemesInFolder(string folder, Func<bool> deleteFiles)
+    {
+        using var conn = Open();
+        using var transaction = conn.BeginTransaction(deferred: false);
+        var deleted = deleteFiles();
+        UpdateFolderThemeStatus(conn, folder, false);
+        transaction.Commit();
+        return deleted;
+    }
+
+    public bool ReconcileThemeStatus(string id, string mediaType, Func<bool> hasTheme)
+    {
+        using var conn = Open();
+        using var transaction = conn.BeginTransaction(deferred: false);
+        var usable = hasTheme();
+        if (usable) conn.Execute($"UPDATE {TableFor(mediaType)} SET status = 'downloaded' WHERE id = @id", ("@id", id));
+        transaction.Commit();
+        return usable;
+    }
+
+    public void ReconcileThemeFolder(string folder, Func<bool> hasTheme)
+    {
+        using var conn = Open();
+        using var transaction = conn.BeginTransaction(deferred: false);
+        UpdateFolderThemeStatus(conn, folder, hasTheme());
+        transaction.Commit();
+    }
+
+    private static void UpdateFolderThemeStatus(SqliteConnection conn, string folder, bool usable)
+    {
+        foreach (var table in new[] { "movies", "shows" })
+        {
+            var matchingIds = new List<string>();
+            conn.Query($"SELECT id, folderName FROM {table}", reader =>
+            {
+                while (reader.Read())
+                {
+                    var candidate = reader.GetString(1);
+                    // An unrelated legacy row must not abort a valid folder's deletion
+                    // after its files have already been removed.
+                    try
+                    {
+                        if (ThemeFiles.CanonicalFolder(candidate) == folder) matchingIds.Add(reader.GetString(0));
+                    }
+                    catch (ArgumentException) { }
+                    catch (NotSupportedException) { }
+                }
+            });
+            foreach (var id in matchingIds)
+                conn.Execute($"UPDATE {table} SET status = @status, recheck_state = CASE WHEN @usable = 0 THEN NULL ELSE recheck_state END, recheck_reason = CASE WHEN @usable = 0 THEN NULL ELSE recheck_reason END WHERE id = @id",
+                    ("@status", usable ? "downloaded" : "pending"), ("@usable", usable ? 1 : 0), ("@id", id));
+        }
+    }
+
+    // Deletion must reserve the same writer before touching the filesystem; otherwise
+    // it can delete the old file, wait on a replacement's transaction, then leave the
+    // newly promoted theme behind despite reporting a successful delete.
+    public bool DeleteThemeAndReset(string id, string mediaType, Func<bool> deleteFiles)
+    {
+        using var conn = Open();
+        using var transaction = conn.BeginTransaction(deferred: false);
+        var table = TableFor(mediaType);
+        var deleted = deleteFiles();
+        if (deleted)
+            conn.Execute($"UPDATE {table} SET status = 'pending', recheck_state = NULL, recheck_reason = NULL WHERE id = @id", ("@id", id));
+        transaction.Commit();
+        return deleted;
+    }
+
+    // A scan judges a snapshot, not whichever theme happens to be current when it
+    // finishes. History identity also catches replacements with identical metadata.
+    public bool TryApplyRecheck(string id, string mediaType, string state, string reason,
+        string? expectedState, long historyId)
+    {
+        using var conn = Open();
+        var table = TableFor(mediaType);
+        return conn.ExecuteAffected($"""
+            UPDATE {table} SET recheck_state = @state, recheck_reason = @reason
+            WHERE id = @id AND status = 'downloaded' AND ignored = 0
+              AND recheck_state IS @expected
+              AND (SELECT id FROM theme_history WHERE movie_id = @id AND media_type = @mt
+                   ORDER BY id DESC LIMIT 1) = @historyId
+            """, ("@state", state), ("@reason", reason), ("@id", id),
+            ("@expected", (object?)expectedState ?? DBNull.Value), ("@mt", mediaType), ("@historyId", historyId)) == 1;
     }
 
     /// <summary>
@@ -1186,7 +1362,7 @@ public class Database(string dbPath)
 
 // ── Extension helpers ─────────────────────────────────────────────────────────
 
-file static class SqliteExtensions
+internal static class SqliteExtensions
 {
     public static void Execute(this SqliteConnection conn, string sql, params (string name, object? value)[] parameters)
     {
@@ -1249,7 +1425,9 @@ public record StatsResult(
 /// shipped — see AddThemeHistory and ThemeRecheckService.ResolveProvenance for how a
 /// null PickedBy is inferred from SourceUrl instead.
 /// </summary>
-public record ThemeProvenance(string? ThemeTitle, string? SourceUrl, string? PickedBy, int? MatchScore);
+public record ThemeProvenance(string? ThemeTitle, string? SourceUrl, string? PickedBy, int? MatchScore, long? HistoryId = null);
+
+public sealed record RecheckDownloadExpectation(long? HistoryId);
 
 /// <summary>One row of the re-check "needs attention" list — a movie or show whose
 /// current theme was flagged, with enough to render and to act on it.</summary>

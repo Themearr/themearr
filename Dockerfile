@@ -23,8 +23,10 @@ RUN dotnet publish -c Release -o /app/publish --no-restore
 # ── Stage 3: Runtime ──────────────────────────────────────────────────────────
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 
-# No extra system packages: theme audio is fetched over HTTP from the
-# youtube-mp36 RapidAPI (see DownloadService), so yt-dlp/ffmpeg are not needed.
+# Debian supplies matching native amd64/arm64 tools. Downloads keep their original
+# bytes unless the operator explicitly enables local audio processing.
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 

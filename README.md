@@ -36,11 +36,32 @@ It reads your library from **either Plex or Radarr**. Radarr is a first-class so
 
 ### Disk usage
 
-Themes are stored full-length as received — there is no trimming or re-encoding — which works out to roughly **3.7 GB of theme audio per 1,000 films** (measured on one production install: 1,438 films, 5.28 GB). Plan for that growth on the volume holding your media folders. Plex users: Plex also imports a copy of each theme into its own metadata bundle, so the space is used twice on the volume holding Plex's metadata directory.
+By default, themes are stored full-length as received. [Issue #49](https://github.com/Themearr/themearr/issues/49) reports **5.28 GB across 1,438 films** in one production installation, approximately **3.7 GB per 1,000 films**. This is one observation; usage varies with track duration and bitrate.
+
+Inspect the volume holding your media-folder `theme.*` files separately from the volume holding Plex metadata. The reported installation also had Plex-imported theme copies in metadata bundles. Changing or removing the media-folder copy does not demonstrate that Plex has reclaimed its imported copy. See Plex's [metadata refresh guidance](https://support.plex.tv/articles/200289306-scanning-vs-refreshing-a-library/) and [Clean Bundles documentation](https://support.plex.tv/articles/226836308-help/); actual metadata reclamation must be measured on your server.
+
 
 ## Downloads require a RapidAPI key
 
-Theme audio is fetched through the [youtube-mp36](https://rapidapi.com/ytjar/api/youtube-mp36) API on RapidAPI — Themearr does **not** bundle or shell out to `yt-dlp` or `ffmpeg`. **Downloads will not work until you add your RapidAPI key and username** in **Settings → RapidAPI**. Signing in and browsing your library work without it — only downloading a `theme.mp3` needs it. The free RapidAPI tier is quota-limited, so Themearr backs off automatically when the quota is exhausted.
+Theme audio is fetched through the [youtube-mp36](https://rapidapi.com/ytjar/api/youtube-mp36) API on RapidAPI — Themearr does **not** use `yt-dlp`. Optional audio processing uses local `ffmpeg`/`ffprobe`; unprocessed downloads need neither. **Downloads will not work until you add your RapidAPI key and username** in **Settings → RapidAPI**. Signing in and browsing your library work without it — only downloading a `theme.mp3` needs it. The free RapidAPI tier is quota-limited, so Themearr backs off automatically when the quota is exhausted.
+
+## Optional audio processing
+
+Processing is **disabled by default** ([defaults](src/Themearr.API/Services/AudioProcessingOptions.cs#L8)). In Settings, choose trimming (empty keeps full length), optional loudness normalization, and MP3 bitrate, then explicitly enable processing and save. The Plex preset chooses a 30-second opening; it does not enable processing by itself. Trimming also affects full-length playback in Jellyfin, Emby and Kodi when players share those folders. New downloads alone use these settings.
+
+Docker images include ffmpeg and ffprobe for both supported architectures. For native and Proxmox installations, install them before enabling processing (`apt-get install ffmpeg` on Debian/Ubuntu). Unprocessed downloads remain available without them. System health reports missing tools when processing is enabled. Custom executable locations can be set with `Themearr__FfmpegPath` and `Themearr__FfprobePath`.
+
+Normalization measures the selected segment, then encodes at -16 LUFS, -1.5 dBTP and LRA 11, using 44.1 kHz stereo ([processor settings](src/Themearr.API/Services/FfmpegThemeAudioProcessor.cs#L62)). Processing failure preserves an existing theme and reports a download error.
+
+### Repair existing files
+
+In **System → Audio repair**, choose movies, shows, or both and the processing options for this run. **Preview files** reads the current source files without changing them or using RapidAPI quota. Check the selected files, then explicitly choose **Apply**. Manual, kept and included ignored choices start unchecked. A [preview expires after 15 minutes](src/Themearr.API/Services/AudioRepairService.cs#L90); changing its options requires another preview. Repair works independently of the new-download processing switch.
+
+Each shared movie/show folder is processed once. A changed or deleted input, changed library roots or changed saved processing settings makes an item stale instead of overwriting it. Multiple final theme files and symbolic links inside configured roots require operator cleanup first. As with ordinary theme writes, pathname checks do not provide isolation from a hostile process continuously replacing ancestor directories; library mounts must be trusted.
+
+Repair retains each original beside its theme as `.themearr-audio-backup-<run>-<item>`, outside the theme discovery pattern. Backups are **not automatically removed**: inspect the repaired audio and report, then remove only backups you intentionally no longer need using your file manager or shell. Free space is required for the backup, output and rollback. Cancelling or an encoder failure preserves the original; interrupted jobs require a fresh preview. Startup verifies prepared output hashes and updates the report only, without restoring files or restarting conversion.
+
+The report distinguishes actual source-file savings from retained backup bytes. Total disk use may increase until you remove backups. Repair preserves download history and matching decisions; History links to the separate repair report. A successful repair requests a best-effort Plex metadata refresh; a refresh failure appears as a warning. **Plex metadata savings remain unknown**. Consult [Plex Clean Bundles](https://support.plex.tv/articles/200194077-clean-bundles/) and [Empty Trash](https://support.plex.tv/articles/200289326-emptying-library-trash/) for server maintenance; Themearr never edits Plex metadata storage.
 
 ## Install
 

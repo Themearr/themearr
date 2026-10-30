@@ -185,7 +185,8 @@ public class ShowAutoDownloadService(
             LogSanitizer.Clean(title), LogSanitizer.Clean(videoId));
         // The matcher picked this candidate, not a person — "auto" — carrying its score
         // along so the re-check can weigh a later match against the one that shipped.
-        if (!download.Start(showId, url, "show", "auto", best["score"] as int?))
+        var recheck = isRecheck ? new RecheckDownloadExpectation(candidate.GetValueOrDefault("historyId") as long?) : null;
+        if (!download.Start(showId, url, "show", "auto", best["score"] as int?, recheck))
         {
             // Raced with another starter — try again next tick.
             _cooldownUntil[showId] = DateTime.UtcNow + ErrorCooldown;
@@ -231,15 +232,16 @@ public class ShowAutoDownloadService(
     /// </summary>
     private List<Dictionary<string, object?>> GetVerifiedPending(Database db)
     {
+        download.ReconcileDirtyFolders();
         var storedPending = db.GetPendingShows();
         var pending = new List<Dictionary<string, object?>>();
         foreach (var s in storedPending)
         {
             var folder = s["folderName"]?.ToString() ?? "";
             if (string.IsNullOrEmpty(folder) || !Directory.Exists(folder)) continue;
-            if (ThemeFiles.HasUsableThemeInExistingFolder(folder))
+            if (download.ReconcileTheme(s["id"]?.ToString() ?? "", "show"))
             {
-                db.SetShowStatus(s["id"]?.ToString() ?? "", "downloaded");
+                log.LogDebug("Existing theme found for {ItemId}", LogSanitizer.Clean(s["id"]?.ToString() ?? ""));
                 continue;
             }
             pending.Add(s);

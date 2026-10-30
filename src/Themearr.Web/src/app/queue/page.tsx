@@ -1,5 +1,9 @@
+import { withoutAudioProcessing } from '@/lib/settingsWrite'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { serverAttemptId, lostDownloadAttempt, LOST_DOWNLOAD_TRACKING } from '@/lib/downloadAttempt'
 import { settingsApi } from '@/lib/api'
+import { advanceCursor, queueKey, rebaseCursor, selectCursor, type QueueCursor } from '@/lib/media/queueCursor'
+import { ThemeRecheck } from '@/components/queue/ThemeRecheck'
 import type { MediaItem, YoutubeResult } from '@/lib/types'
 import { AppShell } from '@/components/layout/AppShell'
 import { Button, EmptyState, ErrorIcon, Input, Spinner } from '@/components/ui'
@@ -41,7 +45,10 @@ export default function QueuePage() {
   const [media, setMedia] = useState<'movies' | 'shows'>('movies')
   const adapter = media === 'movies' ? moviesAdapter : showsAdapter
 
-  const [currentIdx,   setCurrentIdx]   = useState(0)
+  const [queue, setQueue] = useState<{ items: MediaItem[] | null; listFor: 'movies' | 'shows'; cursor: QueueCursor }>({
+    items: null, listFor: 'movies', cursor: { media: 'movies', currentKey: null, visitedKeys: new Set() },
+  })
+  const { items: movies, listFor, cursor } = queue
   const [results,      setResults]      = useState<YoutubeResult[]>([])
   const [searching,    setSearching]    = useState(false)
   const [searchQuery,  setSearchQuery]  = useState('')
@@ -88,7 +95,7 @@ export default function QueuePage() {
   // Start() only writes the fresh JobState right before returning
   // (DownloadService.cs:70) -- so the poll must not read status yet, or a
   // retry of a failed item is instantly re-settled by the failure it retries.
-  const downloadBinding    = useRef<{ adapter: MediaAdapter; media: 'movies' | 'shows'; attempt: number; key: string; startSettled: boolean } | null>(null)
+  const downloadBinding    = useRef<{ adapter: MediaAdapter; media: 'movies' | 'shows'; attempt: number; key: string; startSettled: boolean; serverAttemptId?: string } | null>(null)
   const searchedFor        = useRef<string | null>(null)
   // Tracks whether we've already triggered auto-download for the current movie
   const autoTriggeredFor   = useRef<string | null>(null)
@@ -106,14 +113,18 @@ export default function QueuePage() {
   // shows-adapter call with a movie's id hits a nonexistent -- or worse, a
   // colliding -- show). Tagged in the fetcher, gated by its own latest-stamp
   // so an abandoned fetch settling late cannot mislabel a newer list.
-  const [listFor, setListFor] = useState<'movies' | 'shows'>('movies')
   const listFetchSeq = useRef(0)
   // The initial load. Routed through useResource so a failed request surfaces
   // as an error screen instead of "every movie already has a theme".
-  const { data: movies, error: moviesError, retry: retryMovies } = useResource(useCallback(() => {
+  const { error: moviesError, retry: retryMovies } = useResource(useCallback(() => {
     const mine = ++listFetchSeq.current
     return adapter.list().then(list => {
-      if (mine === listFetchSeq.current) setListFor(media)
+      if (mine === listFetchSeq.current) setQueue(previous => {
+        if (previous.cursor.media !== media) return previous
+        const previousKeys = (previous.items ?? []).filter(item => item.status === 'pending').map(item => queueKey(media, item.id))
+        const nextKeys = list.filter(item => item.status === 'pending').map(item => queueKey(media, item.id))
+        return { items: list, listFor: media, cursor: rebaseCursor(previous.cursor, previousKeys, nextKeys) }
+      })
       return list
     })
   }, [adapter, media]))
@@ -132,7 +143,11 @@ export default function QueuePage() {
     // passive, so a poll tick due in the commit-to-effect gap would still read
     // the old media and could act on the wrong list's index.
     mediaRef.current = next
-    setCurrentIdx(0)
+    setQueue(previous => {
+      const keys = previous.listFor === next
+        ? (previous.items ?? []).filter(item => item.status === 'pending').map(item => queueKey(next, item.id)) : []
+      return { ...previous, cursor: rebaseCursor({ media: next, currentKey: null, visitedKeys: new Set() }, [], keys) }
+    })
     setResults([])
     setError('')
     setManualUrl('')
@@ -148,8 +163,11 @@ export default function QueuePage() {
     retryMovies()
   }
 
-  const current   = pending?.[currentIdx] ?? null
-  const remaining = pending ? Math.max(0, pending.length - currentIdx) : 0
+  const eligible = (pending ?? []).filter(item => !cursor.visitedKeys.has(queueKey(media, item.id)))
+  const current = eligible.find(item => queueKey(media, item.id) === cursor.currentKey) ?? null
+  const remaining = eligible.length
+  const selectedIndex = eligible.findIndex(item => item === current)
+  const upNext = current ? [...eligible.slice(selectedIndex + 1), ...eligible.slice(0, selectedIndex)] : []
 
   // What the card is showing right now, for the download catch handlers below:
   // the "Up next" rows and the media toggle deliberately stay clickable while a
@@ -210,7 +228,7 @@ export default function QueuePage() {
     setError('')
     try {
       const s = await settingsApi.get()
-      await settingsApi.save({ ...s, autoDownload: next })
+      await settingsApi.save(withoutAudioProcessing({ ...s, autoDownload: next }))
       setAutoMode(next)
     } catch (e) {
       setError(`Couldn't turn auto mode ${next ? 'on' : 'off'}: ${(e as Error)?.message || 'unknown error'}`)
@@ -272,9 +290,13 @@ export default function QueuePage() {
   // this function is referenced from the poll effect, and the compiler lint
   // (react-hooks/immutability) forbids effect-reachable functions mutating a
   // ref an effect also writes.
-  function advanceQueue(forMovieId?: string) {
+  function advanceQueue(forMovieId?: string, actedKey?: string | null) {
     if (forMovieId !== undefined && downloadingMovieId.current !== forMovieId) return
-    setCurrentIdx((i: number) => i + 1)
+    if (actedKey) setQueue(previous => ({
+      ...previous,
+      cursor: advanceCursor(previous.cursor,
+        (previous.items ?? []).filter(item => item.status === 'pending').map(item => queueKey(previous.cursor.media, item.id)), actedKey),
+    }))
     setResults([])
     setError('')
     setManualUrl('')
@@ -320,7 +342,7 @@ export default function QueuePage() {
   function skipCurrent() {
     // eslint-disable-next-line react-hooks/immutability
     onScreenKeyRef.current = null
-    advanceQueue()
+    advanceQueue(undefined, cursor.currentKey)
   }
 
   // The ignore round-trip has the same shape as a download request: the queue
@@ -346,7 +368,7 @@ export default function QueuePage() {
     // the request ran, the +1 would push them off an item that was never
     // triaged. The ignore is recorded server-side either way; the item leaves
     // the list on the next load.
-    if (onScreenKeyRef.current === forKey) advanceQueue()
+    if (onScreenKeyRef.current === forKey) advanceQueue(undefined, forKey)
   }
 
   // ── Auto-download in auto mode ─────────────────────────────────────────────
@@ -365,12 +387,12 @@ export default function QueuePage() {
     const attempt = ++downloadAttempt.current
     autoTriggeredFor.current = forId
     downloadingMovieId.current = forId
-    const binding = { adapter, media, attempt, key: forKey, startSettled: false }
+    const binding = { adapter, media, attempt, key: forKey, startSettled: false, serverAttemptId: undefined as string | undefined }
     downloadBinding.current = binding
     setDownloading(true)
     setError('')
     adapter.autoDownload(forId)
-      .then(() => { binding.startSettled = true })
+      .then(result => { binding.serverAttemptId = serverAttemptId(result); binding.startSettled = true })
       .catch((e: Error) => {
         settleDownloadFailure(attempt, forKey, e.message)
         // Deliberately NOT resetting autoTriggeredFor here. `downloading` flipping back
@@ -437,7 +459,12 @@ export default function QueuePage() {
       const timeoutId = setTimeout(() => controller.abort(), STATUS_TIMEOUT_MS)
 
       try {
-        const st = await boundAdapter.downloadStatus(movieId, { signal: controller.signal })
+        const st = await boundAdapter.downloadStatus(movieId, { signal: controller.signal }, binding.serverAttemptId)
+        if (lostDownloadAttempt(binding.serverAttemptId, st)) {
+          clearInterval(id)
+          settleDownloadFailure(attempt, forKey, LOST_DOWNLOAD_TRACKING)
+          return
+        }
         failures = 0 // a status came back -- we're still in contact with the server
         // Ownership-gated like every settle below: a stale tick surviving a
         // handback must not paint the old attempt's logs under a newer one.
@@ -469,18 +496,17 @@ export default function QueuePage() {
               // the commit-to-effect gap would read the pre-advance key,
               // match, and advance a second time.
               onScreenKeyRef.current = null
-              advanceQueue()
+              advanceQueue(undefined, forKey)
             }, 3000)
           }
         } else if (downloadAttempt.current === attempt && onScreenKeyRef.current === forKey) {
-          advanceQueue(movieId)
+          advanceQueue(movieId, forKey)
         } else if (downloadAttempt.current === attempt) {
           // Finished, but the downloaded item is no longer the card: advancing
           // would silently skip whatever IS -- the historical queue-race bug
           // class. The id gate inside advanceQueue can't catch this on its own,
-          // because a switch-away-and-back re-bases currentIdx onto a refetched
-          // list that may already exclude the finished item, leaving the +1 to
-          // land on the new head. So: end the tracking here and let list
+          // because a switch-away-and-back may select a new key from a refetched
+          // list that already excludes the finished item. So: end the tracking here and let list
           // reloads converge -- the completed item stops being pending on the
           // next load, which switching back already triggers
           // (switchMedia -> retryMovies).
@@ -526,12 +552,13 @@ export default function QueuePage() {
     const forKey  = `${media}:${forId}`
     const attempt = ++downloadAttempt.current
     downloadingMovieId.current = forId
-    const binding = { adapter, media, attempt, key: forKey, startSettled: false }
+    const binding = { adapter, media, attempt, key: forKey, startSettled: false, serverAttemptId: undefined as string | undefined }
     downloadBinding.current = binding
     setDownloading(true)
     setError('')
     try {
-      await adapter.download(forId, videoId)
+      const result = await adapter.download(forId, videoId)
+      binding.serverAttemptId = serverAttemptId(result)
       binding.startSettled = true
     } catch (e) {
       settleDownloadFailure(attempt, forKey, (e as Error).message)
@@ -545,12 +572,13 @@ export default function QueuePage() {
     const forKey  = `${media}:${forId}`
     const attempt = ++downloadAttempt.current
     downloadingMovieId.current = forId
-    const binding = { adapter, media, attempt, key: forKey, startSettled: false }
+    const binding = { adapter, media, attempt, key: forKey, startSettled: false, serverAttemptId: undefined as string | undefined }
     downloadBinding.current = binding
     setDownloading(true)
     setError('')
     try {
-      await adapter.downloadUrl(forId, manualUrl.trim())
+      const result = await adapter.downloadUrl(forId, manualUrl.trim())
+      binding.serverAttemptId = serverAttemptId(result)
       binding.startSettled = true
     } catch (e) {
       settleDownloadFailure(attempt, forKey, (e as Error).message)
@@ -564,12 +592,13 @@ export default function QueuePage() {
     const forKey  = `${media}:${forId}`
     const attempt = ++downloadAttempt.current
     downloadingMovieId.current = forId
-    const binding = { adapter, media, attempt, key: forKey, startSettled: false }
+    const binding = { adapter, media, attempt, key: forKey, startSettled: false, serverAttemptId: undefined as string | undefined }
     downloadBinding.current = binding
     setDownloading(true)
     setError('')
     try {
-      await adapter.autoDownload(forId)
+      const result = await adapter.autoDownload(forId)
+      binding.serverAttemptId = serverAttemptId(result)
       binding.startSettled = true
     } catch (e) {
       settleDownloadFailure(attempt, forKey, (e as Error).message)
@@ -604,6 +633,7 @@ export default function QueuePage() {
     return (
       <AppShell title="Queue">
         {mediaToggle}
+        <ThemeRecheck />
         {moviesError ? (
           <EmptyState
             icon={<ErrorIcon />}
@@ -625,6 +655,7 @@ export default function QueuePage() {
     return (
       <AppShell title="Queue">
         {mediaToggle}
+        <ThemeRecheck />
         {moviesError && (
           <div className="mb-5 rounded-lg border border-[#B42318]/40 bg-[#FEF3F2]/5 px-4 py-3">
             <p className="text-sm text-[#FDA29B]">Couldn&apos;t refresh the queue: {moviesError}</p>
@@ -681,6 +712,7 @@ export default function QueuePage() {
     >
       <div className="max-w-2xl space-y-5">
         {mediaToggle}
+        <ThemeRecheck />
 
         {moviesError && (
           <div className="rounded-lg border border-[#B42318]/40 bg-[#FEF3F2]/5 px-4 py-3">
@@ -701,15 +733,15 @@ export default function QueuePage() {
         </div>
 
         {/* Up next */}
-        {pending && pending.length > currentIdx + 1 && (
+        {upNext.length > 0 && (
           <div className="rounded-xl border border-[#1D2939] bg-[#101828] overflow-hidden">
             <div className="px-4 py-3 border-b border-[#1D2939]">
               <p className="text-xs font-semibold text-[#667085] uppercase tracking-wider">
-                Up next · {pending.length - currentIdx - 1} {adapter.labels.singular}{pending.length - currentIdx - 1 !== 1 ? 's' : ''}
+                Up next · {upNext.length} {adapter.labels.singular}{upNext.length !== 1 ? 's' : ''}
               </p>
             </div>
             <div className="divide-y divide-[#1D2939] max-h-72 overflow-y-auto">
-              {pending.slice(currentIdx + 1, currentIdx + 11).map((movie: MediaItem, i: number) => (
+              {upNext.slice(0, 10).map((movie: MediaItem, i: number) => (
                 <button
                   key={movie.id}
                   onClick={() => {
@@ -719,7 +751,11 @@ export default function QueuePage() {
                     // the item just clicked. Here the next key IS knowable:
                     // it's this row's.
                     onScreenKeyRef.current = `${media}:${movie.id}`
-                    setCurrentIdx(currentIdx + 1 + i)
+                    setQueue(previous => ({
+                      ...previous,
+                      cursor: selectCursor(previous.cursor,
+                        (previous.items ?? []).filter(item => item.status === 'pending').map(item => queueKey(media, item.id)), queueKey(media, movie.id)),
+                    }))
                   }}
                   className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-[#1D2939]/60 transition-colors text-left"
                 >

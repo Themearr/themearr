@@ -7,6 +7,7 @@ on:
   pull_request:
     branches:
       - main
+      - 'codex/**'
     paths-ignore:
       - '**.md'
       - '.gitignore'
@@ -25,6 +26,13 @@ permissions:
   contents: read
 
 jobs:
+  native-deployment:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Test native deployment
+        run: python3 -m unittest discover -s tests/deployment -v
+
   frontend:
     runs-on: ubuntu-latest
     defaults:
@@ -70,6 +78,9 @@ jobs:
 
       # Release config, matching how release.yml runs it — a Release-only failure
       # must not first surface during a release.
+      - name: Install audio test tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+
       - name: Test
         run: dotnet test tests/Themearr.API.Tests/Themearr.API.Tests.csproj -c Release --nologo
 
@@ -127,6 +138,9 @@ jobs:
         working-directory: tests/e2e
         run: npx playwright install-deps chromium
 
+      - name: Install audio repair test tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+
       - name: Run E2E
         working-directory: tests/e2e
         run: npm test
@@ -137,3 +151,28 @@ jobs:
           name: playwright-report
           path: tests/e2e/playwright-report/
           retention-days: 7
+
+  audio-image-smoke:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        architecture: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - name: Build native runtime image
+        run: docker buildx build --platform linux/${{ matrix.architecture }} --load -t themearr-audio-test .
+      - name: Verify tools and MP3 under runtime user
+        run: |
+          docker run --rm --platform linux/${{ matrix.architecture }} --entrypoint /bin/sh themearr-audio-test -c '
+            set -eu
+            test "$(id -u)" != 0
+            ffmpeg -version
+            ffprobe -version
+            ffmpeg -v error -nostdin -f lavfi -i sine=frequency=440:duration=35 -t 30 -ar 44100 -ac 2 -c:a libmp3lame -b:a 192k /tmp/theme.mp3
+            test "$(ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of default=nw=1:nk=1 /tmp/theme.mp3)" = mp3
+            test "$(ffprobe -v error -select_streams a:0 -show_entries stream=sample_rate -of default=nw=1:nk=1 /tmp/theme.mp3)" = 44100
+            test "$(ffprobe -v error -select_streams a:0 -show_entries stream=channels -of default=nw=1:nk=1 /tmp/theme.mp3)" = 2
+            case "$(ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 /tmp/theme.mp3)" in 30.*) ;; *) exit 1 ;; esac
+          '

@@ -23,6 +23,8 @@ export default defineConfig({
     },
   },
   test: {
+    // Keep Node's optional Web Storage globals from shadowing jsdom's browser storage.
+    execArgv: ['--no-experimental-webstorage'],
     environment: 'jsdom',
     globals: true,
     setupFiles: ['./src/test/setup.ts'],

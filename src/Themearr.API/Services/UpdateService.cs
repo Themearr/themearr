@@ -6,9 +6,10 @@ using Themearr.API.Data;
 
 namespace Themearr.API.Services;
 
-public class UpdateService(Database db, IConfiguration config)
+public class UpdateService(Database db, IConfiguration config, IHostApplicationLifetime? lifetime = null)
 {
     private readonly SemaphoreSlim _lock = new(1, 1);
+    private readonly object _stateLock = new();
     private readonly ConcurrentQueue<string> _logs = new();
     private volatile bool _inProgress;
     private volatile bool _finished;
@@ -112,23 +113,31 @@ public class UpdateService(Database db, IConfiguration config)
         if (_inProgress) return false;
         if (!await _lock.WaitAsync(0)) return false;
 
-        _inProgress = true;
-        _finished   = false;
-        _error      = "";
+        lock (_stateLock)
+        {
+            _inProgress = true;
+            _finished = false;
+            _error = "";
+        }
         while (_logs.TryDequeue(out _)) { }
         // Clear any previous persisted completion so stale state doesn't interfere
         db.SetSetting("last_update_completed_at", "");
         db.SetSetting("last_update_error", "");
 
-        _ = Task.Run(RunAsync).ContinueWith(_ => _lock.Release());
+        _ = Task.Run(RunAsync);
         return true;
     }
 
     public object GetStatus()
     {
-        var finished   = _finished;
-        var inProgress = _inProgress;
-        var error      = _error;
+        bool finished, inProgress;
+        string error;
+        lock (_stateLock)
+        {
+            finished = _finished;
+            inProgress = _inProgress;
+            error = _error;
+        }
 
         // The service restarts itself after an update, wiping in-memory state.
         // Check the database so the frontend can detect completion after restart.
@@ -151,26 +160,19 @@ public class UpdateService(Database db, IConfiguration config)
 
     private async Task RunAsync()
     {
-        var cmd = UpdaterCommand();
-        AddLog($"Starting update command: {cmd}");
         try
         {
-            var psi = new ProcessStartInfo("/bin/sh", $"-c \"{cmd}\"")
-            {
-                RedirectStandardOutput = true,
-                RedirectStandardError  = true,
-                UseShellExecute        = false,
-            };
-            using var proc = Process.Start(psi)!;
-            // Read fully async: `EndOfStream` blocks the calling thread while it waits
-            // for data, which can deadlock inside an async method (CA2024).
-            string? line;
-            while ((line = await proc.StandardOutput.ReadLineAsync()) != null)
-                AddLog(line);
-            await proc.WaitForExitAsync();
-            AddLog($"Update command exited with code {proc.ExitCode}");
-            if (proc.ExitCode != 0)
-                _error = $"Update command exited with code {proc.ExitCode}";
+            var cmd = UpdaterCommand();
+            AddLog($"Starting update command: {cmd}");
+            var psi = new ProcessStartInfo("/bin/sh");
+            psi.ArgumentList.Add("-c");
+            psi.ArgumentList.Add(cmd);
+            var seconds = Math.Clamp(config.GetValue("Themearr:UpdateTimeoutSeconds", 600), 1, 3600);
+            var exitCode = await UpdateProcessRunner.RunAsync(psi, AddLog, TimeSpan.FromSeconds(seconds),
+                lifetime?.ApplicationStopping ?? CancellationToken.None);
+            AddLog($"Update command exited with code {exitCode}");
+            if (exitCode != 0)
+                _error = $"Update command exited with code {exitCode}";
         }
         catch (Exception ex)
         {
@@ -179,12 +181,22 @@ public class UpdateService(Database db, IConfiguration config)
         }
         finally
         {
-            _finished   = true;
-            _inProgress = false;
             // Persist completion to DB so the frontend can detect it after the
             // service restarts (in-memory state is wiped on restart).
-            db.SetSetting("last_update_completed_at", DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString());
-            db.SetSetting("last_update_error", _error);
+            try
+            {
+                db.SetSetting("last_update_completed_at", DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString());
+                db.SetSetting("last_update_error", _error);
+            }
+            finally
+            {
+                lock (_stateLock)
+                {
+                    _inProgress = false;
+                    _finished = true;
+                    _lock.Release();
+                }
+            }
         }
     }
 
@@ -195,7 +207,7 @@ public class UpdateService(Database db, IConfiguration config)
 
         var helper = "/usr/local/bin/themearr-update";
         if (File.Exists(helper))
-            return IsRoot() ? helper : $"sudo {helper}";
+            return IsRoot() ? helper : $"sudo -n {helper}";
 
         // deploy.sh handles its own restart via systemd-run --no-block, so we
         // must NOT append "systemctl restart" here — that would kill this process
@@ -208,9 +220,10 @@ public class UpdateService(Database db, IConfiguration config)
         var deployRef = NormaliseSemver(CurrentVersion());
         if (!Regex.IsMatch(deployRef, @"^v\d+\.\d+\.\d+$")) deployRef = "main";
         var deployUrl = $"https://raw.githubusercontent.com/{GithubRepo}/{deployRef}/deploy.sh";
-        return IsRoot()
-            ? $"curl -fsSL {deployUrl} | bash"
-            : $"curl -fsSL {deployUrl} | sudo bash";
+        var run = IsRoot() ? "bash" : "sudo -n bash";
+        return $"tmp=$(mktemp) && trap 'rm -f \"$tmp\"' EXIT && "
+            + $"curl -fsSL --connect-timeout 15 --max-time 120 '{deployUrl}' -o \"$tmp\" && {run} \"$tmp\"";
+
     }
 
     private static bool IsRoot()
@@ -226,9 +239,12 @@ public class UpdateService(Database db, IConfiguration config)
                 UseShellExecute        = false,
             };
             using var p = Process.Start(psi)!;
-            var output = p.StandardOutput.ReadToEnd().Trim();
-            p.WaitForExit(3000);
-            return output == "0";
+            if (!p.WaitForExit(3000))
+            {
+                p.Kill(entireProcessTree: true);
+                return false;
+            }
+            return p.StandardOutput.ReadToEnd().Trim() == "0";
         }
         catch { return false; }
     }
@@ -260,5 +276,9 @@ public class UpdateService(Database db, IConfiguration config)
         return (int.Parse(m.Groups[1].Value), int.Parse(m.Groups[2].Value), int.Parse(m.Groups[3].Value));
     }
 
-    private void AddLog(string msg) => _logs.Enqueue(msg.TrimEnd());
+    private void AddLog(string msg)
+    {
+        _logs.Enqueue(LogSanitizer.Clean(msg.TrimEnd()));
+        while (_logs.Count > 2000) _logs.TryDequeue(out _);
+    }
 }

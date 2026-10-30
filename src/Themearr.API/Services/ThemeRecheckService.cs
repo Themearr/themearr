@@ -31,8 +31,9 @@ public class ThemeRecheckService(Database db, ILogger<ThemeRecheckService> log)
 
     public bool InProgress => _inProgress;
     public Task Current    => _current;
+    public bool Succeeded => _finished && string.IsNullOrEmpty(_error);
 
-    public async Task<bool> StartAsync()
+    public async Task<bool> StartAsync(CancellationToken ct = default)
     {
         if (_inProgress) return false;
         if (!await _lock.WaitAsync(0)) return false;
@@ -43,7 +44,11 @@ public class ThemeRecheckService(Database db, ILogger<ThemeRecheckService> log)
         _scanned    = 0;
         _flagged    = 0;
 
-        _current = Task.Run(RunAsync).ContinueWith(_ => _lock.Release());
+        _current = Task.Run(() =>
+        {
+            try { RunAsync(ct); }
+            finally { _lock.Release(); }
+        });
         return true;
     }
 
@@ -59,12 +64,13 @@ public class ThemeRecheckService(Database db, ILogger<ThemeRecheckService> log)
     // No I/O in the scan itself (see class summary), so unlike SyncService.RunAsync
     // there is nothing to await — Task.Run's Action overload runs this on a threadpool
     // thread without an async state machine.
-    private void RunAsync()
+    private void RunAsync(CancellationToken ct)
     {
         try
         {
-            ScanMediaType("movie");
-            ScanMediaType("show");
+            ScanMediaType("movie", ct);
+            ScanMediaType("show", ct);
+            ct.ThrowIfCancellationRequested();
         }
         catch (Exception ex)
         {
@@ -78,10 +84,11 @@ public class ThemeRecheckService(Database db, ILogger<ThemeRecheckService> log)
         }
     }
 
-    private void ScanMediaType(string mediaType)
+    private void ScanMediaType(string mediaType, CancellationToken ct)
     {
         foreach (var item in db.GetRecheckCandidates(mediaType))
         {
+            ct.ThrowIfCancellationRequested();
             var id     = item["id"]?.ToString() ?? "";
             var folder = item["folderName"]?.ToString() ?? "";
 
@@ -98,7 +105,7 @@ public class ThemeRecheckService(Database db, ILogger<ThemeRecheckService> log)
             // file was removed on disk out-of-band.
             if (string.IsNullOrEmpty(folder) || !ThemeFiles.HasUsableThemeInExistingFolder(folder)) continue;
 
-            var prov = db.GetLatestThemeProvenance(id, mediaType);
+            var prov = item["provenance"] as ThemeProvenance;
 
             // No recorded title means no evidence to judge — a direct-URL download never
             // gets one (DownloadService.cs:156 declares themeTitle null; the non-provider
@@ -116,7 +123,8 @@ public class ThemeRecheckService(Database db, ILogger<ThemeRecheckService> log)
             // rules more often than they should, because a real track's title often
             // carries no music word at all ("Blade Runner 2049 - Mesa").
             var state = ResolveProvenance(prov.PickedBy, prov.SourceUrl) == "manual" ? "review" : "queued";
-            db.SetRecheck(id, mediaType, state, reason);
+            if (prov.HistoryId is not { } historyId || !db.TryApplyRecheck(id, mediaType, state, reason,
+                    item["recheckState"]?.ToString(), historyId)) continue;
             _flagged++;
 
             log.LogInformation("Re-check flagged {MediaType} '{Title}' as {State}: {Reason}",

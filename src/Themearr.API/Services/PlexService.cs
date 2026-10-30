@@ -248,11 +248,12 @@ public class PlexService(HttpClient http, Database db, LocalFolderResolver folde
                 var serverToken = srv.GetValueOrDefault("token", "")?.ToString()?.Trim() ?? "";
 
                 if (string.IsNullOrEmpty(serverId) || string.IsNullOrEmpty(serverToken)) continue;
+                var selectedKeys = libMap.GetValueOrDefault(serverId, []);
+                if (selectedKeys.Count == 0) continue;
                 logFn?.Invoke($"Using Plex server: {serverName}");
 
                 var libs = await ListLibrariesAsync(urlList, serverToken);
-                var selectedKeys = libMap.GetValueOrDefault(serverId, []);
-                if (selectedKeys.Count > 0) libs = libs.Where(l => selectedKeys.Contains(l["key"]?.ToString() ?? "")).ToList();
+                libs = libs.Where(l => selectedKeys.Contains(l["key"]?.ToString() ?? "")).ToList();
 
                 logFn?.Invoke($"Found {libs.Count} selected movie libraries on {serverName}");
 
