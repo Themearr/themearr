@@ -33,7 +33,10 @@ public class FfmpegProcessTests
         if (normalize)
         {
             var measure = await AudioProcessRunner.RunAsync(Encoder,["-hide_banner","-i",output,"-af","loudnorm=I=-16:TP=-1.5:LRA=11:print_format=json","-f","null","-"],TimeSpan.FromSeconds(10),CancellationToken.None);
-            var start = measure.Stderr.LastIndexOf('{'); using var loudness = JsonDocument.Parse(measure.Stderr[start..]);
+            // FFmpeg can append output statistics after the loudnorm JSON report.
+            var start = measure.Stderr.LastIndexOf('{'); var end = measure.Stderr.LastIndexOf('}');
+            Assert.True(start >= 0 && end > start, measure.Stderr);
+            using var loudness = JsonDocument.Parse(measure.Stderr[start..(end + 1)]);
             Assert.InRange(double.Parse(loudness.RootElement.GetProperty("input_i").GetString()!,System.Globalization.CultureInfo.InvariantCulture),-17,-15);
         }
     }
